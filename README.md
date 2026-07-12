@@ -6,36 +6,50 @@
 
 ## 项目结构
 
-`
+```
 competition/
-├── app/                    # 主应用
-│   ├── main.py             # FastAPI 入口（B 负责）
-│   ├── config.py           # 全局配置
-│   ├── coordinator.py      # 总调度（B 负责）
-│   ├── models/
-│   │   └── schemas.py      # JSON 接口契约 ← 第0步，必须先定
-│   ├── agents/
-│   │   ├── base.py         # Agent 基类
-│   │   ├── planner.py      # Planner    ← 队友A 端到端负责
-│   │   ├── matcher.py      # Matcher    ← 队友C 端到端负责
-│   │   ├── timeline.py     # Timeline   ← 队友C 端到端负责
-│   │   ├── reporter.py     # Report 格式化
-│   │   └── interview_sim.py# 答辩模拟   ← B1，B 负责
-│   ├── llm/
-│   │   ├── client.py       # LLM 调用封装（A1）
-│   │   └── prompts.py      # 所有 Prompt 模板
-│   └── web/
-│       ├── routes.py       # FastAPI 路由
-│       ├── templates/      # 前端模板
-│       └── static/         # 静态资源
-├── tests/                  # 单元测试
-├── memory/                 # B2: 计划状态的保存/加载
-├── docs/                   # 项目文档
-├── notebooks/              # 实验/探索用
+├── .env.example              # 环境变量模板（复制为 .env 后编辑）
+├── .gitignore
+├── BRANCHES.md               # 分支策略说明
 ├── README.md
 ├── requirements.txt
-└── .gitignore
-`
+├── app/                      # 主应用
+│   ├── __init__.py
+│   ├── main.py               # FastAPI 入口（B 负责）
+│   ├── config.py             # 全局配置
+│   ├── coordinator.py        # 总调度：编排 A2 主链路（B 负责）
+│   ├── models/
+│   │   ├── __init__.py
+│   │   └── schemas.py        # JSON 接口契约 ← 第0步，必须先定
+│   ├── agents/
+│   │   ├── __init__.py
+│   │   ├── base.py           # Agent 基类
+│   │   ├── planner.py        # Planner    ← 队友A 端到端负责
+│   │   ├── matcher.py        # Matcher    ← 队友C 端到端负责
+│   │   ├── timeline.py       # Timeline   ← 队友C 端到端负责
+│   │   ├── reporter.py       # Report 格式化
+│   │   └── interview_sim.py  # 答辩模拟   ← B1，B 负责
+│   ├── llm/
+│   │   ├── __init__.py
+│   │   ├── client.py         # A1: LLM 调用封装
+│   │   └── prompts.py        # 所有 Prompt 模板
+│   └── web/
+│       ├── __init__.py
+│       ├── routes.py         # FastAPI 路由
+│       ├── templates/
+│       │   └── index.html    # 演示用前端
+│       └── static/
+│           └── style.css
+├── scripts/
+│   └── setup_git.sh          # Git 初始化脚本
+├── tests/                    # 单元测试
+│   ├── __init__.py
+│   ├── test_coordinator.py
+│   └── test_api.py
+├── memory/                   # B2: 计划状态的保存/加载
+├── docs/                     # 项目文档（docx + MVP 拆解方案）
+└── notebooks/                # 实验/探索用
+```
 
 ## 三人分工
 
@@ -45,17 +59,16 @@ competition/
 | **A** | Agent 设计 | **Planner Agent**：课程→子任务JSON | ~25% |
 | **C** | 知识增强 | **Timeline + QA矩阵**：倒排/关键路径 + 责任矩阵 + 可解释性 | ~25% |
 
-
 ## 分支策略
 
 团队协作分支说明见 [BRANCHES.md](BRANCHES.md)。简要原则：
 - 每人一个独享开发分支，互不干扰
-- **只有你（B）** 能合并到 main
+- **只有你（B）** 能合并到 `main`
 - 每天至少集成一次，避免最后一天爆炸
 
 ## 快速启动
 
-`ash
+```bash
 # 安装依赖
 pip install -r requirements.txt
 
@@ -64,7 +77,7 @@ cp .env.example .env
 
 # 启动服务
 python -m app.main
-`
+```
 
 ## MVP 节奏
 
@@ -79,4 +92,3 @@ python -m app.main
 A 类（必做）：A1~A5
 B 类（加做）：B1 优先，B4 落后即砍
 C 类：比赛阶段再扩展
-
