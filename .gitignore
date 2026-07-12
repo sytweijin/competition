@@ -1,0 +1,38 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+*.so
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Config & secrets
+.env
+.env.local
+config_local.py
+*.key
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+memory/*.json
+editor_sdk.log
+
+# Jupyter
+.ipynb_checkpoints/

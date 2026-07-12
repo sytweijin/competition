@@ -1,0 +1,155 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>小组合作智能体</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="app">
+        <header>
+            <h1>小组合作智能体</h1>
+            <p class="subtitle">输入课程与团队信息，自动生成分工计划与 QA 责任矩阵</p>
+        </header>
+
+        <main class="container">
+            <section class="input-panel">
+                <h2>输入</h2>
+                <form id="planForm">
+                    <div class="form-group">
+                        <label for="courseName">课程名称</label>
+                        <input type="text" id="courseName" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="courseDesc">课程描述/要求</label>
+                        <textarea id="courseDesc" rows="3"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="deadline">截止日期</label>
+                        <input type="date" id="deadline" required>
+                    </div>
+                    <div class="form-group">
+                        <label>团队成员</label>
+                        <div id="members">
+                            <div class="member-row">
+                                <input type="text" placeholder="姓名" class="member-name">
+                                <input type="text" placeholder="技能标签, 用逗号分隔" class="member-skills">
+                            </div>
+                        </div>
+                        <button type="button" id="addMember" class="btn-small">+ 添加成员</button>
+                    </div>
+                    <button type="submit" id="runBtn" class="btn-primary">生成计划</button>
+                </form>
+            </section>
+
+            <section class="result-panel" id="resultPanel" style="display:none;">
+                <h2>结果</h2>
+                <div id="resultLoading" style="display:none;">
+                    <p>正在生成计划，请稍候...</p>
+                </div>
+                <div id="resultContent"></div>
+            </section>
+        </main>
+    </div>
+
+    <script>
+        document.getElementById('addMember').addEventListener('click', function() {
+            const members = document.getElementById('members');
+            const row = document.createElement('div');
+            row.className = 'member-row';
+            row.innerHTML = '<input type="text" placeholder="姓名" class="member-name">' +
+                '<input type="text" placeholder="技能标签, 用逗号分隔" class="member-skills">';
+            members.appendChild(row);
+        });
+
+        document.getElementById('planForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            const loading = document.getElementById('resultLoading');
+            const content = document.getElementById('resultContent');
+            const panel = document.getElementById('resultPanel');
+
+            loading.style.display = 'block';
+            content.innerHTML = '';
+            panel.style.display = 'block';
+
+            const memberNames = document.querySelectorAll('.member-name');
+            const memberSkills = document.querySelectorAll('.member-skills');
+            const members = [];
+            for (let i = 0; i < memberNames.length; i++) {
+                if (memberNames[i].value.trim()) {
+                    members.push({
+                        name: memberNames[i].value.trim(),
+                        skill_tags: memberSkills[i].value.split(',').map(s => s.trim()).filter(Boolean)
+                    });
+                }
+            }
+
+            try {
+                const resp = await fetch('/api/run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        course: {
+                            name: document.getElementById('courseName').value,
+                            description: document.getElementById('courseDesc').value
+                        },
+                        members: members,
+                        deadline: document.getElementById('deadline').value,
+                        additional_requirements: ''
+                    })
+                });
+                const data = await resp.json();
+                loading.style.display = 'none';
+                content.innerHTML = renderResult(data);
+            } catch (err) {
+                loading.style.display = 'none';
+                content.innerHTML = '<p class="error">请求失败: ' + err.message + '</p>';
+            }
+        });
+
+        function renderResult(data) {
+            let html = '<div class="result-sections">';
+
+            // Plan
+            if (data.plan) {
+                html += '<div class="result-section"><h3>任务拆解</h3><p>' + data.plan.summary + '</p><ul>';
+                (data.plan.tasks || []).forEach(t => {
+                    html += '<li><strong>' + t.id + '</strong> ' + t.name +
+                        ' <span class="badge">' + t.estimated_hours + 'h</span>' +
+                        (t.dependencies.length ? ' <span class="dep">依赖: ' + t.dependencies.join(', ') + '</span>' : '') +
+                        '</li>';
+                });
+                html += '</ul></div>';
+            }
+
+            // Timeline
+            if (data.timeline) {
+                html += '<div class="result-section"><h3>时间线</h3><p>' + data.timeline.note + '</p><ul>';
+                (data.timeline.tasks || []).forEach(t => {
+                    html += '<li' + (t.is_critical ? ' class="critical"' : '') + '>' +
+                        '<strong>' + t.task_id + '</strong> ' + t.name +
+                        ' <span class="badge">' + t.start_date + ' → ' + t.end_date + '</span>' +
+                        (t.is_critical ? ' 🔴 关键路径' : '') +
+                        '</li>';
+                });
+                html += '</ul></div>';
+            }
+
+            // QA Matrix
+            if (data.qa_matrix) {
+                html += '<div class="result-section"><h3>QA 责任矩阵</h3><table><thead><tr>' +
+                    '<th>任务</th><th>主讲</th><th>主答</th><th>辅答</th></tr></thead><tbody>';
+                (data.qa_matrix.assignments || []).forEach(a => {
+                    html += '<tr><td>' + a.task_name + '</td><td>' + a.presenter +
+                        '</td><td>' + a.qa_primary + '</td><td>' + (a.qa_support || []).join(', ') + '</td></tr>';
+                });
+                html += '</tbody></table></div>';
+            }
+
+            html += '</div>';
+            return html;
+        }
+    </script>
+</body>
+</html>

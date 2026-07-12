@@ -1,0 +1,39 @@
+﻿"""Agent 基类，所有 Agent 继承此基类。"""
+
+import logging
+from typing import Generic, TypeVar
+
+from pydantic import BaseModel
+
+from app.llm.client import LLMClient
+from app.models.schemas import AgentError
+
+T = TypeVar("T", bound=BaseModel)
+
+logger = logging.getLogger(__name__)
+
+
+class BaseAgent(Generic[T]):
+    """所有 Agent 的基类。
+
+    子类只需定义：
+    - system_prompt: str
+    - response_model: type[T]
+    - 实现 run() 方法
+    """
+
+    system_prompt: str = ""
+    response_model: type[T] | None = None
+
+    def __init__(self, llm: LLMClient | None = None):
+        self.llm = llm or LLMClient()
+
+    def _call_llm(self, user_prompt: str) -> T | AgentError:
+        """调用 LLM 并校验输出格式"""
+        if not self.response_model:
+            raise NotImplementedError("Subclass must set response_model")
+        return self.llm.chat_structured(
+            system_prompt=self.system_prompt,
+            user_prompt=user_prompt,
+            response_model=self.response_model,
+        )
