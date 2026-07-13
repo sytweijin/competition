@@ -101,7 +101,7 @@ competition/
 
 | 人 | 角色 | 端到端负责 | 占提交比重 |
 |---|---|---|---|
-| **B（你）** | 软件工程 | 骨架 + LLM封装 + FastAPI/Web + Coordinator + 集成 + 答辩模拟(B1) + Memory(B2) | ~50%+ |
+| **B** | 软件工程 | 骨架 + LLM封装 + FastAPI/Web + Coordinator + 集成 + 答辩模拟(B1) + Memory(B2) | ~50%+ |
 | **A** | Agent 设计 | **Planner Agent**：课程→子任务JSON | ~25% |
 | **C** | 知识增强 | **Timeline + QA矩阵**：倒排/关键路径 + 责任矩阵 + 可解释性 | ~25% |
 
@@ -109,7 +109,7 @@ competition/
 
 团队协作分支说明见 [BRANCHES.md](BRANCHES.md)。简要原则：
 - 每人一个独享开发分支，互不干扰
-- **只有你（B）** 能合并到 `main`
+- **只有 B** 能合并到 `main`
 - 每天至少集成一次，避免最后一天爆炸
 
 ## 快速启动
@@ -126,6 +126,8 @@ python -m app.main
 ```
 
 ## MVP 节奏
+
+> 以下为最初规划，实际进度以「当前进度」表为准。
 
 - **D1**：定数据模型 + LLM封装 + FastAPI骨架 + Hello World + 最小垂直切片
 - **D2**：Planner + Matcher Prompt 迭代，主链路跑通
