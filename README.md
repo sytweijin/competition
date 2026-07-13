@@ -12,23 +12,29 @@
 | Step 0 | JSON 接口契约 (`schemas.py`) | done | B | 所有 Agent 输入输出已定义 |
 | A1 | LLM 调用封装 (`client.py`) | done | B | Structured Output + 重试 |
 | A2 | Coordinator 主链路 (`coordinator.py`) | done | B | Planner->Matcher->Timeline->Report |
-| A5 | FastAPI + 只读 Web (`main.py` / `routes.py` / `index.html`) | done | B | 前后端骨架已通 |
-| - | Agent 基类 + Reporter | done | B | Prompt 优化 + LLM 失败兜底 |
-| B1 | 答辩模拟 Agent | done | B | 骨架已写，Prompt 待迭代 |
+| A5 | FastAPI + 只读 Web (`main.py` / `routes.py` / `index.html`) | done | B | Gantt时间线+QA表格+报告展示 |
+| - | Agent 基类 + Reporter | done | B | Prompt 优化 + 兜底报告 |
+| B1 | 答辩模拟 Agent | done | B | Prompt 已优化，5 维度覆盖 |
 | - | 测试 (test_coordinator / test_api) | done | B | mock 测试已写 |
 | - | Planner Agent | **skeleton** | **A** | 骨架已搭，**Prompt 和校验逻辑待完成** |
 | - | Matcher Agent | **skeleton** | **C** | 骨架已搭，**QA 矩阵 + 可解释性待完成** |
 | - | Timeline Agent | done | B | CPM 算法关键路径计算已实现 |
-| B2 | Memory (保存/加载计划 JSON) | not started | B | |
+| B2 | Memory (保存/加载计划 JSON) | done | B | save/load/list API 已实现 |
 | B3 | 完整角色匹配 | not started | B | |
 | B4 | 协作图动态编辑 | not started | B | 落后即砍 |
 
 ## 近期变更
 
+- Web 前端重做：Gantt 式时间线可视化、QA 矩阵表格美化、报告展示区、加载动画
+- B2 Memory：实现了 save/load/list API，计划可保存到 memory 目录并重新加载
+- B1 答辩模拟：Prompt 优化为 5 维度（技术/分工/进度/风险/QA），带优先级标注
+- Planner Prompt：修复了 LLM 漏输出 summary 字段的问题
+- Timeline：修复了 BaseAgent 初始化 LLM 的 bug 和遍历 SubTask 对象的 bug
 - 分工调整：Timeline 和 Reporter 从 C 转到 B，C 只负责 Matcher（QA责任矩阵），减轻 C 的负担；分支名 `agent/timeline-qa` 改为 `agent/matcher`
 - Timeline Agent：实现了 CPM 关键路径算法（拓扑排序 + Forward/Backward pass），不依赖 LLM，纯算法
 - Reporter Agent：优化了 Prompt，增加了 LLM 失败时的纯文本兜底报告
 - `BRANCHES.md`: 将 `git add -A` 改为 `git add .`，提交前加了 `git status` 检查，避免误提交不相关文件
+- `config.py`: 移除了硬编码的 API Key 默认值
 
 ## 队友待办
 

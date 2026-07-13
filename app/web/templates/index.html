@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
@@ -10,47 +10,43 @@
     <div class="app">
         <header>
             <h1>小组合作智能体</h1>
-            <p class="subtitle">输入课程与团队信息，自动生成分工计划与 QA 责任矩阵</p>
+            <p class="subtitle">输入课程与团队信息，自动生成分工计划、时间线与 QA 责任矩阵</p>
         </header>
 
-        <main class="container">
-            <section class="input-panel">
-                <h2>输入</h2>
-                <form id="planForm">
+        <section class="input-panel">
+            <h2>输入</h2>
+            <form id="planForm">
+                <div class="form-row">
                     <div class="form-group">
                         <label for="courseName">课程名称</label>
-                        <input type="text" id="courseName" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="courseDesc">课程描述/要求</label>
-                        <textarea id="courseDesc" rows="3"></textarea>
+                        <input type="text" id="courseName" placeholder="如：软件工程" required>
                     </div>
                     <div class="form-group">
                         <label for="deadline">截止日期</label>
                         <input type="date" id="deadline" required>
                     </div>
-                    <div class="form-group">
-                        <label>团队成员</label>
-                        <div id="members">
-                            <div class="member-row">
-                                <input type="text" placeholder="姓名" class="member-name">
-                                <input type="text" placeholder="技能标签, 用逗号分隔" class="member-skills">
-                            </div>
-                        </div>
-                        <button type="button" id="addMember" class="btn-small">+ 添加成员</button>
-                    </div>
-                    <button type="submit" id="runBtn" class="btn-primary">生成计划</button>
-                </form>
-            </section>
-
-            <section class="result-panel" id="resultPanel" style="display:none;">
-                <h2>结果</h2>
-                <div id="resultLoading" style="display:none;">
-                    <p>正在生成计划，请稍候...</p>
                 </div>
-                <div id="resultContent"></div>
-            </section>
-        </main>
+                <div class="form-row single">
+                    <div class="form-group">
+                        <label for="courseDesc">课程描述 / 要求</label>
+                        <textarea id="courseDesc" rows="2" placeholder="如：小组合作开发一个智能体系统"></textarea>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>团队成员</label>
+                    <div id="members">
+                        <div class="member-row">
+                            <input type="text" placeholder="姓名" class="member-name">
+                            <input type="text" placeholder="技能标签，逗号分隔" class="member-skills">
+                        </div>
+                    </div>
+                    <button type="button" id="addMember" class="btn-small">+ 添加成员</button>
+                </div>
+                <button type="submit" id="runBtn" class="btn-primary">生成计划</button>
+            </form>
+        </section>
+
+        <div id="resultArea"></div>
     </div>
 
     <script>
@@ -59,19 +55,18 @@
             const row = document.createElement('div');
             row.className = 'member-row';
             row.innerHTML = '<input type="text" placeholder="姓名" class="member-name">' +
-                '<input type="text" placeholder="技能标签, 用逗号分隔" class="member-skills">';
+                '<input type="text" placeholder="技能标签，逗号分隔" class="member-skills">';
             members.appendChild(row);
         });
 
         document.getElementById('planForm').addEventListener('submit', async function(e) {
             e.preventDefault();
-            const loading = document.getElementById('resultLoading');
-            const content = document.getElementById('resultContent');
-            const panel = document.getElementById('resultPanel');
+            const btn = document.getElementById('runBtn');
+            const area = document.getElementById('resultArea');
 
-            loading.style.display = 'block';
-            content.innerHTML = '';
-            panel.style.display = 'block';
+            btn.disabled = true;
+            btn.textContent = '生成中...';
+            area.innerHTML = '<div class="loading-state"><div class="spinner"></div><p>正在调用 AI 生成计划，请稍候...</p></div>';
 
             const memberNames = document.querySelectorAll('.member-name');
             const memberSkills = document.querySelectorAll('.member-skills');
@@ -100,51 +95,127 @@
                     })
                 });
                 const data = await resp.json();
-                loading.style.display = 'none';
-                content.innerHTML = renderResult(data);
+                if (resp.ok) {
+                    area.innerHTML = renderResult(data);
+                } else {
+                    area.innerHTML = '<div class="error-state">请求失败: ' + (data.detail || '未知错误') + '</div>';
+                }
             } catch (err) {
-                loading.style.display = 'none';
-                content.innerHTML = '<p class="error">请求失败: ' + err.message + '</p>';
+                area.innerHTML = '<div class="error-state">请求失败: ' + err.message + '</div>';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '生成计划';
             }
         });
 
+        function esc(s) {
+            if (!s) return '';
+            return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        }
+
         function renderResult(data) {
-            let html = '<div class="result-sections">';
+            let html = '<div class="result-panel">';
 
             // Plan
             if (data.plan) {
-                html += '<div class="result-section"><h3>任务拆解</h3><p>' + data.plan.summary + '</p><ul>';
+                html += '<div class="result-section"><h3>任务拆解</h3><div class="section-body">';
+                html += '<div class="summary-box">' + esc(data.plan.summary) + '</div>';
+                html += '<div class="task-list">';
                 (data.plan.tasks || []).forEach(t => {
-                    html += '<li><strong>' + t.id + '</strong> ' + t.name +
-                        ' <span class="badge">' + t.estimated_hours + 'h</span>' +
-                        (t.dependencies.length ? ' <span class="dep">依赖: ' + t.dependencies.join(', ') + '</span>' : '') +
-                        '</li>';
+                    html += '<div class="task-card">' +
+                        '<div class="task-header">' +
+                        '<span class="task-id">' + esc(t.id) + '</span>' +
+                        '<span class="task-name">' + esc(t.name) + '</span>' +
+                        '<span class="task-hours">' + t.estimated_hours + 'h</span>' +
+                        '</div>';
+                    if (t.description) html += '<div class="task-desc">' + esc(t.description) + '</div>';
+                    html += '<div class="task-meta">';
+                    if (t.dependencies && t.dependencies.length) {
+                        html += '<span class="dep">依赖: ' + t.dependencies.map(esc).join(', ') + '</span>';
+                    }
+                    if (t.required_skills && t.required_skills.length) {
+                        html += t.required_skills.map(s => '<span class="skill">' + esc(s) + '</span>').join('');
+                    }
+                    html += '</div></div>';
                 });
-                html += '</ul></div>';
+                html += '</div>';
+                if (data.plan.reasoning) {
+                    html += '<div class="reasoning-box">' + esc(data.plan.reasoning) + '</div>';
+                }
+                html += '</div></div>';
             }
 
             // Timeline
-            if (data.timeline) {
-                html += '<div class="result-section"><h3>时间线</h3><p>' + data.timeline.note + '</p><ul>';
-                (data.timeline.tasks || []).forEach(t => {
-                    html += '<li' + (t.is_critical ? ' class="critical"' : '') + '>' +
-                        '<strong>' + t.task_id + '</strong> ' + t.name +
-                        ' <span class="badge">' + t.start_date + ' → ' + t.end_date + '</span>' +
-                        (t.is_critical ? ' 🔴 关键路径' : '') +
-                        '</li>';
+            if (data.timeline && data.timeline.tasks && data.timeline.tasks.length) {
+                html += '<div class="result-section"><h3>时间线</h3>';
+                if (data.timeline.note) html += '<div class="section-note">' + esc(data.timeline.note) + '</div>';
+                html += '<div class="section-body"><div class="gantt-container">';
+                const tasks = data.timeline.tasks;
+                // Find date range
+                let minDate = tasks[0].start_date, maxDate = tasks[0].end_date;
+                tasks.forEach(t => {
+                    if (t.start_date < minDate) minDate = t.start_date;
+                    if (t.end_date > maxDate) maxDate = t.end_date;
                 });
-                html += '</ul></div>';
+                const totalDays = Math.ceil((new Date(maxDate) - new Date(minDate)) / 86400000) || 1;
+
+                tasks.forEach(t => {
+                    const offset = Math.ceil((new Date(t.start_date) - new Date(minDate)) / 86400000);
+                    const dur = Math.ceil((new Date(t.end_date) - new Date(t.start_date)) / 86400000) || 1;
+                    const leftPct = (offset / totalDays) * 100;
+                    const widthPct = Math.max((dur / totalDays) * 100, 5);
+                    const cls = t.is_critical ? 'critical' : 'normal';
+                    html += '<div class="gantt-row">' +
+                        '<div class="gantt-label">' + esc(t.task_id) + ' ' + esc(t.name) + '</div>' +
+                        '<div class="gantt-bar-wrap">' +
+                        '<div class="gantt-bar ' + cls + '" style="left:' + leftPct + '%;width:' + widthPct + '%">' +
+                        t.start_date.slice(5) + ' ~ ' + t.end_date.slice(5) +
+                        '</div></div></div>';
+                });
+                html += '</div>';
+                if (data.timeline.critical_path && data.timeline.critical_path.length) {
+                    html += '<div class="task-meta" style="margin-top:0.5rem"><span class="dep">关键路径: ' +
+                        data.timeline.critical_path.map(esc).join(' -> ') + '</span></div>';
+                }
+                if (data.timeline.reasoning) {
+                    html += '<div class="reasoning-box">' + esc(data.timeline.reasoning) + '</div>';
+                }
+                html += '</div></div>';
             }
 
             // QA Matrix
-            if (data.qa_matrix) {
-                html += '<div class="result-section"><h3>QA 责任矩阵</h3><table><thead><tr>' +
-                    '<th>任务</th><th>主讲</th><th>主答</th><th>辅答</th></tr></thead><tbody>';
-                (data.qa_matrix.assignments || []).forEach(a => {
-                    html += '<tr><td>' + a.task_name + '</td><td>' + a.presenter +
-                        '</td><td>' + a.qa_primary + '</td><td>' + (a.qa_support || []).join(', ') + '</td></tr>';
+            if (data.qa_matrix && data.qa_matrix.assignments && data.qa_matrix.assignments.length) {
+                html += '<div class="result-section"><h3>QA 责任矩阵</h3><div class="section-body">';
+                html += '<table><thead><tr><th>任务</th><th>主讲</th><th>主答</th><th>辅答</th></tr></thead><tbody>';
+                data.qa_matrix.assignments.forEach(a => {
+                    html += '<tr><td>' + esc(a.task_name) + '</td>' +
+                        '<td class="role-presenter">' + esc(a.presenter) + '</td>' +
+                        '<td class="role-qa">' + esc(a.qa_primary) + '</td>' +
+                        '<td class="role-support">' + (a.qa_support || []).map(esc).join(', ') + '</td></tr>';
                 });
-                html += '</tbody></table></div>';
+                html += '</tbody></table>';
+                data.qa_matrix.assignments.forEach(a => {
+                    if (a.reasoning) {
+                        html += '<div class="reasoning-box">' + esc(a.task_name) + ': ' + esc(a.reasoning) + '</div>';
+                    }
+                });
+                html += '</div></div>';
+            }
+
+            // Report
+            if (data.report) {
+                html += '<div class="result-section"><h3>报告</h3><div class="section-body">';
+                html += '<div class="report-section">' + esc(data.report.summary) + '</div>';
+                if (data.report.timeline_section) {
+                    html += '<div class="report-section" style="margin-top:0.5rem">' + esc(data.report.timeline_section) + '</div>';
+                }
+                if (data.report.qa_matrix_section) {
+                    html += '<div class="report-section" style="margin-top:0.5rem">' + esc(data.report.qa_matrix_section) + '</div>';
+                }
+                if (data.report.risk_note) {
+                    html += '<div class="report-risk">' + esc(data.report.risk_note) + '</div>';
+                }
+                html += '</div></div>';
             }
 
             html += '</div>';
