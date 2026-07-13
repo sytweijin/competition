@@ -15,6 +15,10 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
     system_prompt = ""
     response_model = None  # 不用 LLM，纯算法
 
+    def __init__(self, llm=None):
+        # 不初始化 LLMClient，Timeline 是纯算法
+        self.llm = None
+
     def run(self, plan: PlanOutput, deadline: str) -> TimelineOutput:
         """根据任务依赖和工时，用 CPM 算法生成倒排时间线"""
         deadline_date = date.fromisoformat(deadline)
@@ -54,8 +58,8 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
                      for t in tasks}
 
         # Forward pass: 最早开始/结束
-        es = {}  # earliest start (day offset)
-        ef = {}  # earliest finish
+        es = {}
+        ef = {}
         for tid in topo_order:
             if not predecessors[tid]:
                 es[tid] = 0
@@ -66,8 +70,8 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
         project_days = max(ef.values()) if ef else 0
 
         # Backward pass: 最晚开始/结束
-        lf = {}  # latest finish
-        ls = {}  # latest start
+        lf = {}
+        ls = {}
         for tid in reversed(topo_order):
             if not successors[tid]:
                 lf[tid] = project_days
@@ -76,7 +80,7 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
             ls[tid] = lf[tid] - durations[tid]
 
         # 关键路径: float == 0 的任务
-        float_time = {tid: ls[tid] - es[tid] for tid in tasks}
+        float_time = {tid: ls[tid] - es[tid] for tid in task_map}
         critical = [tid for tid in topo_order if float_time[tid] == 0]
 
         # 计算实际日期（从 deadline 倒推起始日）
