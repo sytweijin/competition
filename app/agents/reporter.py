@@ -6,7 +6,7 @@ Report Agent
 
 from app.agents.base import BaseAgent
 from app.llm.prompts import REPORTER_SYSTEM
-from app.models.schemas import PlanOutput, TimelineOutput, QAOutput, ReportOutput
+from app.models.schemas import AgentError, PlanOutput, TimelineOutput, QAOutput, ReportOutput
 
 
 class ReporterAgent(BaseAgent[ReportOutput]):
@@ -23,4 +23,48 @@ class ReporterAgent(BaseAgent[ReportOutput]):
             f"## 时间线\n{timeline.model_dump_json(indent=2)}\n\n"
             f"## QA矩阵\n{qa_matrix.model_dump_json(indent=2)}"
         )
-        return self._call_llm(user)
+        result = self._call_llm(user)
+
+        # LLM 失败时用纯文本兜底
+        if isinstance(result, AgentError):
+            return self._fallback_report(plan, timeline, qa_matrix, result.message)
+        return result
+
+    def _fallback_report(self, plan: PlanOutput, timeline: TimelineOutput,
+                         qa_matrix: QAOutput, error_msg: str = "") -> ReportOutput:
+        """LLM 不可用时的纯文本兜底报告"""
+        task_lines = []
+        for t in plan.tasks:
+            dep = f"（依赖: {', '.join(t.dependencies)}）" if t.dependencies else ""
+            task_lines.append(f"- {t.id} {t.name}：{t.estimated_hours}h{dep}")
+        plan_text = f"共 {len(plan.tasks)} 个任务：\n" + "\n".join(task_lines)
+
+        tl_lines = []
+        for t in timeline.tasks:
+            mark = " [关键路径]" if t.is_critical else ""
+            tl_lines.append(f"- {t.task_id} {t.name}：{t.start_date} ~ {t.end_date}{mark}")
+        tl_text = (f"总工期 {timeline.total_days} 天，"
+                   f"关键路径：{', '.join(timeline.critical_path) or '无'}\n"
+                   + "\n".join(tl_lines))
+
+        qa_lines = []
+        for a in qa_matrix.assignments:
+            support = ", ".join(a.qa_support) if a.qa_support else "无"
+            qa_lines.append(
+                f"- {a.task_name}：主讲 {a.presenter}，主答 {a.qa_primary}，辅答 {support}"
+            )
+        qa_text = "\n".join(qa_lines) if qa_lines else "无 QA 分配数据"
+
+        summary = f"{plan.summary}\n\n任务概览：\n{plan_text}"
+        risk = ""
+        if error_msg:
+            risk = f"报告生成异常，以下为兜底文本：{error_msg}"
+        if timeline.total_days == 0 and timeline.tasks:
+            risk += "\n注意：时间线计算可能存在异常。"
+
+        return ReportOutput(
+            summary=summary,
+            timeline_section=tl_text,
+            qa_matrix_section=qa_text,
+            risk_note=risk,
+        )
