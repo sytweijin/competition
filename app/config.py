@@ -11,7 +11,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 MEMORY_DIR = BASE_DIR / "memory"
 
 # LLM
-LLM_API_KEY = os.getenv("LLM_API_KEY", "")sk-sp-D.RIMEH.rDJ9.MEYCIQCgAZrqDGCiCcy2DMHaNGFhR30sGrRX521O0sWSvWcxKwIhAOVRhjTbhg6ZQMuxlgfWezHhfCAxiaQctxggE1oqKF5W
+LLM_API_KEY = os.getenv("LLM_API_KEY", "sk-sp-D.RIMEH.rDJ9.MEYCIQCgAZrqDGCiCcy2DMHaNGFhR30sGrRX521O0sWSvWcxKwIhAOVRhjTbhg6ZQMuxlgfWezHhfCAxiaQctxggE1oqKF5W")
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1")
 LLM_MODEL = os.getenv("LLM_MODEL", "qwen3.7-max")
 LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "3"))
