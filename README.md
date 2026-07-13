@@ -2,7 +2,53 @@
 
 ## 一句话定位
 
-> 别人给你一张**静态分工表**；我们给你一张**可编辑的活协作图**，每个任务都带**角色化的 QA 归属**——计划随现实变化而重算。
+> 别人给你一张**静态分工表**；我们给你一张**可编辑的活协作图**，每个任务都带**角色化的 QA 归属**-- 计划随现实变化而重算。
+
+
+## 当前进度（截至 2026-07-13）
+
+| 编号 | 模块 | 状态 | 负责人 | 备注 |
+|------|------|------|--------|------|
+| Step 0 | JSON 接口契约 (`schemas.py`) | done | B | 所有 Agent 输入输出已定义 |
+| A1 | LLM 调用封装 (`client.py`) | done | B | Structured Output + 重试 |
+| A2 | Coordinator 主链路 (`coordinator.py`) | done | B | Planner->Matcher->Timeline->Report |
+| A5 | FastAPI + 只读 Web (`main.py` / `routes.py` / `index.html`) | done | B | 前后端骨架已通 |
+| - | Agent 基类 + Reporter | done | B | `base.py` / `reporter.py` |
+| B1 | 答辩模拟 Agent | done | B | 骨架已写，Prompt 待迭代 |
+| - | 测试 (test_coordinator / test_api) | done | B | mock 测试已写 |
+| - | Planner Agent | **skeleton** | **A** | 骨架已搭，**Prompt 和校验逻辑待完成** |
+| - | Matcher Agent | **skeleton** | **C** | 骨架已搭，**QA 矩阵 + 可解释性待完成** |
+| - | Timeline Agent | **skeleton** | **C** | 骨架已搭，**关键路径计算待完成** |
+| B2 | Memory (保存/加载计划 JSON) | not started | B | |
+| B3 | 完整角色匹配 | not started | C | |
+| B4 | 协作图动态编辑 | not started | B | 落后即砍 |
+
+## 近期变更
+
+- `BRANCHES.md`: 将 `git add -A` 改为 `git add .`，提交前加了 `git status` 检查，避免误提交不相关文件
+
+## 队友待办
+
+### 队友 A -- Planner Agent
+
+1. **Prompt 迭代**：当前 `prompts.py` 里的 `PLANNER_SYSTEM` 是基础版，需要根据实际输出质量反复调优，让 Planner 拆出合理的 5-8 个子任务（工时、依赖都要靠谱）
+2. **输出校验**：在 `planner.py` 的 `run()` 里添加校验逻辑 -- task id 唯一性、依赖不能指向不存在的任务、依赖环检测
+3. **自测**：用真实课程信息跑几次，确保输出符合 `PlanOutput` schema
+
+### 队友 C -- Timeline + Matcher Agent
+
+1. **Matcher (A3)**：当前 `matcher.py` 只调了 LLM，需要扩展 QA 责任矩阵生成逻辑 -- 答辩细分 + 谁主讲/谁主答/谁辅答
+2. **Timeline (A4)**：当前 `timeline.py` 只调了 LLM，需要补充关键路径计算逻辑（关键路径上的任务标红）
+3. **可解释性**：每个匹配结果附一句"为什么张三主答第3章"；关键路径说明怎么算出来的
+4. **Prompt 迭代**：`MATCHER_SYSTEM` 和 `TIMELINE_SYSTEM` 都需要根据实际输出反复调
+5. **Report 格式化**：检查 `reporter.py` 的输出是否符合预期，必要时调整 `REPORTER_SYSTEM` prompt
+
+### 共同注意事项
+
+- **先读 `schemas.py`**：所有 Agent 的输入输出 JSON 格式都在 `app/models/schemas.py`，这是接口契约，不要随意改字段
+- **开发流程**：按 `BRANCHES.md` 操作 -- 每天先 merge main，下班前 push 自己的分支
+- **有问题找 B**：接口冲突或跑不通时先停下来对齐，不要硬合
+
 
 ## 项目结构
 
