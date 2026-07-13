@@ -1,5 +1,6 @@
 ﻿"""
 Report Agent
+负责人：B
 负责：把 Plan + Timeline + QA 矩阵格式化为报告文本
 """
 

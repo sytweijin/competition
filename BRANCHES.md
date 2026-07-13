@@ -1,65 +1,65 @@
-# ·ÖÖ§²ßÂÔËµÃ÷
+ï»¿# åˆ†æ”¯ç­–ç•¥è¯´æ˜
 
-> ÈıÈË²¢ĞĞ¿ª·¢ + 5 Ìì³å´Ì£¬·Ö¹¤Çå³şµÄÈË²»ĞèÒª¸´ÔÓ Git Á÷³Ì¡£
+> ä¸‰äººå¹¶è¡Œå¼€å‘ + 5 å¤©å†²åˆºï¼Œåˆ†å·¥æ¸…æ¥šçš„äººä¸éœ€è¦å¤æ‚ Git æµç¨‹ã€‚
 
-## ·ÖÖ§¸ÅÀÀ
+## åˆ†æ”¯æ¦‚è§ˆ
 
-| ·ÖÖ§ | ¸ºÔğÈË | ÓÃÍ¾ | ºÏ²¢È¨ÏŞ |
+| åˆ†æ”¯ | è´Ÿè´£äºº | ç”¨é€” | åˆå¹¶æƒé™ |
 |------|--------|------|----------|
-| main | B£¨Äã£© | ÎÈ¶¨¿ÉÑİÊ¾°æ£¬´úÂë×îÖÕ»ã×Üµ½ÕâÀï | Ö»ÓĞ B |
-| coordinator | B£¨Äã£© | ¹Ç¼Ü/LLM·â×°/FastAPI/Coordinator/Web/¼¯³É/´ğ±çÄ£Äâ | B ¡ú main |
-| agent/planner | ¶ÓÓÑA | Planner Agent£º¿Î³Ì¡ú×ÓÈÎÎñJSON | B ¡ú main |
-| agent/timeline-qa | ¶ÓÓÑC | Timeline + QAÔğÈÎ¾ØÕó + ¿É½âÊÍĞÔ | B ¡ú main |
-| fix/* | Ë­ĞŞË­ÓÃ | Bug ĞŞ¸´·ÖÖ§ | B ¡ú main |
-| docs/* | Ë­Ğ´Ë­ÓÃ | ÎÄµµ×¨ÓÃ·ÖÖ§ | B ¡ú main |
+| main | B | ç¨³å®šå¯æ¼”ç¤ºç‰ˆï¼Œä»£ç æœ€ç»ˆæ±‡æ€»åˆ°è¿™é‡Œ | åªæœ‰ B |
+| coordinator | B | éª¨æ¶/LLMå°è£…/FastAPI/Coordinator/Web/Timeline/Reporter/é›†æˆ/ç­”è¾©æ¨¡æ‹Ÿ | B â†’ main |
+| agent/planner | é˜Ÿå‹A | Planner Agentï¼šè¯¾ç¨‹â†’å­ä»»åŠ¡JSON | B â†’ main |
+| agent/matcher | é˜Ÿå‹C | Matcherï¼ˆQAè´£ä»»çŸ©é˜µ + å¯è§£é‡Šæ€§ï¼‰ | B â†’ main |
+| fix/* | è°ä¿®è°ç”¨ | Bug ä¿®å¤åˆ†æ”¯ | B â†’ main |
+| docs/* | è°å†™è°ç”¨ | æ–‡æ¡£ä¸“ç”¨åˆ†æ”¯ | B â†’ main |
 
-## ¹¤×÷Á÷³Ì
+## å·¥ä½œæµç¨‹
 
-### ¸÷ÈËÃ¿ÌìµÄ¹¤×÷
+### å„äººæ¯å¤©çš„å·¥ä½œ
 
-1. ÔçÉÏÏÈÀ­×îĞÂ´úÂë£º
+1. æ—©ä¸Šå…ˆæ‹‰æœ€æ–°ä»£ç ï¼š
    git checkout main && git pull origin main
-   git checkout ×Ô¼ºµÄ·ÖÖ§
+   git checkout è‡ªå·±çš„åˆ†æ”¯
    git merge main
 
-2. Ğ´×Ô¼ºµÄ´úÂë
+2. å†™è‡ªå·±çš„ä»£ç 
 
-3. ÏÂ°àÇ°Ìá½»²¢ÍÆËÍ£º
+3. ä¸‹ç­å‰æäº¤å¹¶æ¨é€ï¼š
    git add .
    git status
-   git commit -m "ÕâÀïĞ´×öÁËÊ²Ã´"
-   git push origin ×Ô¼ºµÄ·ÖÖ§Ãû
+   git commit -m "è¿™é‡Œå†™åšäº†ä»€ä¹ˆ"
+   git push origin è‡ªå·±çš„åˆ†æ”¯å
 
-### ºÏ²¢µ½ main£¨Ö»ÓĞ B ²Ù×÷£©
+### åˆå¹¶åˆ° mainï¼ˆåªæœ‰ B æ“ä½œï¼‰
 
-B Ã¿ÌìÖÁÉÙ×öÒ»´Î¼¯³É¼ì²é£º
+B æ¯å¤©è‡³å°‘åšä¸€æ¬¡é›†æˆæ£€æŸ¥ï¼š
    git checkout main
    git merge origin/agent/planner
-   git merge origin/agent/timeline-qa
+   git merge origin/agent/matcher
    git merge origin/coordinator
-   ½â¾ö³åÍ»ºóÌá½»²¢ÍÆËÍ
+   è§£å†³å†²çªåæäº¤å¹¶æ¨é€
 
-### ³öÏÖ³åÍ»ÔõÃ´°ì
+### å‡ºç°å†²çªæ€ä¹ˆåŠ
 
-- Ğ¡³åÍ»£ºB ÔÚºÏ²¢Ê±Ö±½Ó½â¾ö
-- ½Ó¿Ú£¨schemas.py£©³åÍ»£ºÍ£ÏÂÀ´£¬Èı¸öÈË¶ÔÆë½Ó¿Ú×Ö¶ÎºóÔÙºÏ
-- ·¢ÏÖÅÜ²»Í¨£ºB ÏÈ²» push£¬Í¨Öª×÷ÕßĞŞÍêÔÙºÏ
+- å°å†²çªï¼šB åœ¨åˆå¹¶æ—¶ç›´æ¥è§£å†³
+- æ¥å£ï¼ˆschemas.pyï¼‰å†²çªï¼šåœä¸‹æ¥ï¼Œä¸‰ä¸ªäººå¯¹é½æ¥å£å­—æ®µåå†åˆ
+- å‘ç°è·‘ä¸é€šï¼šB å…ˆä¸ pushï¼Œé€šçŸ¥ä½œè€…ä¿®å®Œå†åˆ
 
-## Ìá½»ĞÅÏ¢¸ñÊ½
+## æäº¤ä¿¡æ¯æ ¼å¼
 
-| Ç°×º | ¾ÙÀı |
+| å‰ç¼€ | ä¸¾ä¾‹ |
 |------|------|
-| feat/planner: | feat/planner: Ìí¼ÓÁËÒÀÀµ»·¼ì²â |
-| feat/timeline: | feat/timeline: ¹Ø¼üÂ·¾¶±êºì |
-| feat/coordinator: | feat/coordinator: Ìí¼ÓÊä³öĞ£Ñé+ÖØÊÔ |
-| fix: | fix: ĞŞ¸´ planner ÈÕÆÚ¸ñÊ½´íÎó |
-| chore: | chore: ¸üĞÂ requirements.txt |
-| docs: | docs: ¸üĞÂ README ½Ó¿ÚËµÃ÷ |
+| feat/planner: | feat/planner: æ·»åŠ äº†ä¾èµ–ç¯æ£€æµ‹ |
+| feat/matcher: | feat/matcher: å…³é”®è·¯å¾„æ ‡çº¢ |
+| feat/coordinator: | feat/coordinator: æ·»åŠ è¾“å‡ºæ ¡éªŒ+é‡è¯• |
+| fix: | fix: ä¿®å¤ planner æ—¥æœŸæ ¼å¼é”™è¯¯ |
+| chore: | chore: æ›´æ–° requirements.txt |
+| docs: | docs: æ›´æ–° README æ¥å£è¯´æ˜ |
 
-## Ê×´Î Git ÉèÖÃ
+## é¦–æ¬¡ Git è®¾ç½®
 
-´ò¿ª Git Bash£¬ÔËĞĞ£º
+æ‰“å¼€ Git Bashï¼Œè¿è¡Œï¼š
    cd /c/Users/ty/Desktop/competition
    bash scripts/setup_git.sh
 
-È»ºó»áÌáÊ¾¹ØÁª GitHub Ô¶³Ì²Ö¿â¡£
+ç„¶åä¼šæç¤ºå…³è” GitHub è¿œç¨‹ä»“åº“ã€‚

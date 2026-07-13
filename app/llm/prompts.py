@@ -1,6 +1,6 @@
 ﻿"""
 所有 Prompt 模板集中管理。
-按 Agent 分节，方便 A / C 各自迭代自己的 Prompt。
+按 Agent 分节，方便 A / B / C 各自迭代自己的 Prompt。
 """
 
 # ──────────── Planner（队友 A 负责） ────────────
@@ -29,7 +29,7 @@ MATCHER_SYSTEM = """你是团队协作 QA 责任匹配专家。
 MATCHER_USER_TEMPLATE = """任务列表：{tasks}
 组员信息：{members}"""
 
-# ──────────── Timeline（队友 C 负责） ────────────
+# ──────────── Timeline（B 负责） ────────────
 
 TIMELINE_SYSTEM = """你是一个项目排期专家。
 根据任务拆解和截止日期，生成倒排时间线。

@@ -18,14 +18,15 @@
 | - | 测试 (test_coordinator / test_api) | done | B | mock 测试已写 |
 | - | Planner Agent | **skeleton** | **A** | 骨架已搭，**Prompt 和校验逻辑待完成** |
 | - | Matcher Agent | **skeleton** | **C** | 骨架已搭，**QA 矩阵 + 可解释性待完成** |
-| - | Timeline Agent | **skeleton** | **C** | 骨架已搭，**关键路径计算待完成** |
+| - | Timeline Agent | **skeleton** | **B** | 骨架已搭，**关键路径计算待完成** |
 | B2 | Memory (保存/加载计划 JSON) | not started | B | |
-| B3 | 完整角色匹配 | not started | C | |
+| B3 | 完整角色匹配 | not started | B | |
 | B4 | 协作图动态编辑 | not started | B | 落后即砍 |
 
 ## 近期变更
 
 - `BRANCHES.md`: 将 `git add -A` 改为 `git add .`，提交前加了 `git status` 检查，避免误提交不相关文件
+- 分工调整：Timeline 和 Reporter 从 C 转到 B，C 只负责 Matcher（QA责任矩阵），减轻 C 的负担；分支名 `agent/timeline-qa` 改为 `agent/matcher`
 
 ## 队友待办
 
@@ -35,19 +36,18 @@
 2. **输出校验**：在 `planner.py` 的 `run()` 里添加校验逻辑 -- task id 唯一性、依赖不能指向不存在的任务、依赖环检测
 3. **自测**：用真实课程信息跑几次，确保输出符合 `PlanOutput` schema
 
-### 队友 C -- Timeline + Matcher Agent
+### 队友 C -- Matcher Agent
 
-1. **Matcher (A3)**：当前 `matcher.py` 只调了 LLM，需要扩展 QA 责任矩阵生成逻辑 -- 答辩细分 + 谁主讲/谁主答/谁辅答
-2. **Timeline (A4)**：当前 `timeline.py` 只调了 LLM，需要补充关键路径计算逻辑（关键路径上的任务标红）
-3. **可解释性**：每个匹配结果附一句"为什么张三主答第3章"；关键路径说明怎么算出来的
-4. **Prompt 迭代**：`MATCHER_SYSTEM` 和 `TIMELINE_SYSTEM` 都需要根据实际输出反复调
-5. **Report 格式化**：检查 `reporter.py` 的输出是否符合预期，必要时调整 `REPORTER_SYSTEM` prompt
+1. **QA 责任矩阵 (A3)**：当前 `matcher.py` 只调了 LLM，需要扩展 QA 责任矩阵生成逻辑 -- 答辩细分 + 谁主讲/谁主答/谁辅答
+2. **可解释性**：每个匹配结果附一句"为什么张三主答第3章"
+3. **Prompt 迭代**：`MATCHER_SYSTEM` 需要根据实际输出反复调优
 
 ### 共同注意事项
 
 - **先读 `schemas.py`**：所有 Agent 的输入输出 JSON 格式都在 `app/models/schemas.py`，这是接口契约，不要随意改字段
 - **开发流程**：按 `BRANCHES.md` 操作 -- 每天先 merge main，下班前 push 自己的分支
 - **有问题找 B**：接口冲突或跑不通时先停下来对齐，不要硬合
+- **Timeline 和 Reporter 由 B 负责**：这两块从 C 调整到 B，减轻 C 的负担
 
 
 ## 项目结构
@@ -70,9 +70,9 @@ competition/
 │   ├── agents/
 │   │   ├── __init__.py
 │   │   ├── base.py           # Agent 基类
-│   │   ├── planner.py        # Planner    ← 队友A 端到端负责
-│   │   ├── matcher.py        # Matcher    ← 队友C 端到端负责
-│   │   ├── timeline.py       # Timeline   ← 队友C 端到端负责
+│   │   ├── planner.py        # Planner    <- 队友A 端到端负责
+│   │   ├── matcher.py        # Matcher    <- 队友C 端到端负责
+│   │   ├── timeline.py       # Timeline   <- B 负责
 │   │   ├── reporter.py       # Report 格式化
 │   │   └── interview_sim.py  # 答辩模拟   ← B1，B 负责
 │   ├── llm/
@@ -101,9 +101,9 @@ competition/
 
 | 人 | 角色 | 端到端负责 | 占提交比重 |
 |---|---|---|---|
-| **B** | 软件工程 | 骨架 + LLM封装 + FastAPI/Web + Coordinator + 集成 + 答辩模拟(B1) + Memory(B2) | ~50%+ |
+| **B** | 软件工程 | 骨架 + LLM封装 + FastAPI/Web + Coordinator + Timeline + Reporter + 集成 + 答辩模拟(B1) + Memory(B2) | ~50%+ |
 | **A** | Agent 设计 | **Planner Agent**：课程→子任务JSON | ~25% |
-| **C** | 知识增强 | **Timeline + QA矩阵**：倒排/关键路径 + 责任矩阵 + 可解释性 | ~25% |
+| **C** | 知识增强 | **Matcher（QA矩阵）**：责任矩阵 + 可解释性 | ~25% |
 
 ## 分支策略
 

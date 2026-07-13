@@ -1,7 +1,7 @@
 ﻿"""
 Timeline Agent
 负责：倒排时间线 + 关键路径标红
-负责人：队友 C
+负责人：B
 """
 
 from app.agents.base import BaseAgent
@@ -24,5 +24,5 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
             tasks=tasks_str, deadline=deadline
         )
         result = self._call_llm(user)
-        # TODO: 队友 C 在此添加关键路径计算逻辑
+        # TODO: B 在此添加关键路径计算逻辑
         return result
