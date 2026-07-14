@@ -1,6 +1,6 @@
 # 小组合作智能体 — 课程作业
 
-**版本：v1.0** | 最后更新：2026-07-14
+**版本：v1.1** | 最后更新：2026-07-15
 
 ## 一句话定位
 
@@ -11,22 +11,30 @@
 ## 系统架构
 
 ```
-AssignmentInput (课程/成员/截止日/每日工时)
-        │
-        ▼
- ┌─────────────┐    ┌─────────────┐    ┌──────────────┐    ┌────────────┐
- │  Planner    │───▶│  Matcher    │───▶│   Timeline   │───▶│  Reporter  │
- │ (LLM 拆任务) │    │ (LLM+B3评分) │    │ (CPM+成员产能)│    │ (LLM+兜底) │
- └─────────────┘    └─────────────┘    └──────────────┘    └────────────┘
-        │                  │                   │                  │
-        ▼                  ▼                   ▼                  ▼
-   validate_plan     skill_score      按负责人日工时折算       FullPlan
-   (去重/去环/清依赖) enhance/workload  倒排日期+浮动+回填
-                                                              │
-                          ┌───────────────────────────────────┘
-                          ▼
-                     B4 动态编辑 (add/remove/update) → 重算 Timeline + Matcher
+AssignmentInput (课程 / 成员 / 截止日 / 每日工时)
+     |
+     v
++-----------+      +-----------+      +------------+      +-----------+
+|  Planner  |----->|  Matcher  |----->|  Timeline  |----->|  Reporter |
++-----------+      +-----------+      +------------+      +-----------+
+     |                  |                   |                  |
+     v                  v                   v                  v
+ validate_plan     skill_score        CPM + 日工时折算        FullPlan
+ 去重/去环/清依赖   enhance/workload   倒排日期 + 浮动天数      |
+                                                              |
+                    +-----------------------------------------+
+                    |
+                    v
+               B4 动态编辑
+               add / remove / update -> 重算 Timeline + Matcher
 ```
+
+| Agent | 职责 | 实现 | LLM 失败兜底 |
+|-------|------|------|-------------|
+| Planner | 课程信息 -> 5-8 子任务 | LLM | 确定性 5 阶段兜底 |
+| Matcher | 任务 -> 主讲/主答/辅答 | LLM + B3 评分增强 | B3 确定性贪心分配 |
+| Timeline | 任务依赖 -> 倒排日期 | 纯 CPM 算法 | 无需兜底（纯数学） |
+| Reporter | 全部结果 -> 答辩报告 | LLM | 纯文本拼接兜底 |
 
 **设计原则**：LLM 负责创造性拆解，确定性算法负责正确性保证（关键路径、技能评分、负载均衡、依赖校验）。每个 Agent 失败都有兜底，主链路永不中断。
 
@@ -46,10 +54,31 @@ AssignmentInput (课程/成员/截止日/每日工时)
 | **B3** | **完整角色匹配 (`scoring.py`)** | ✅ **done** | B | 技能相似度评分 + 负载均衡 + workload |
 | **B4** | **协作图动态编辑 (`editor.py`)** | ✅ **done** | B | add/remove/update + 重算 |
 | — | Prompt 模板 (`prompts.py`) | ✅ done | B | v0.3 全量重构：结构化 Prompt Engineering |
-| — | Planner Agent | skeleton | A | 骨架 + 兜底校验已就位，Prompt 待 A 调优 |
-| — | 测试 (24 个) | ✅ done | B | CPM/Scoring/Editor/Coordinator/API 全覆盖 |
+| — | Planner Agent | skeleton | A | 骨架 + Planner 兜底已就位（LLM 失败时生成 5 阶段计划），Prompt 待 A 调优 |
+| — | CLI 单 Agent 调试 (`cli.py`) | ✅ done | B | v1.1 新增：planner/matcher/timeline/reporter/interview/full |
+| — | 测试 (39 个) | ✅ done | B | CPM/Scoring/Editor/Coordinator/API 全覆盖 |
 
 ## 近期变更
+
+### v1.1（2026-07-15）— 代码质量加固（6 个暗雷修复）
+
+触发 WorkBuddy 代码审查报告，修复 6 个"平时不炸、边界条件下崩溃"的隐患：
+
+#### 健壮性修复
+- **LLM 超时保护**：所有 LLM 调用增加 60s timeout，防止网络卡死时永久挂起
+- **LLM 错误分类**：从一刀切 `llm_timeout` 细分为 `auth_error`/`rate_limit`/`parse_error`/`timeout`/`unknown`
+- **Structured Output 降级**：`beta.parse` 失败后自动回退到 `create` + 手动 JSON 提取，兼容不支持 structured outputs 的端点
+- **Planner 兜底**：LLM 失败时不再 `raise RuntimeError` 崩溃，改为生成确定性 5 阶段兜底计划
+- **依赖重映射**：去重 T1->T1_1 后，所有 dependencies 统一重写，不再指向错误实例
+- **Matcher 空分配兜底**：sanitize 后全空时返回 AgentError，触发 B3 确定性兜底
+
+#### 新增
+- **CLI 单 Agent 调试入口**（`app/cli.py`）：支持单独运行 planner/matcher/timeline/reporter/interview
+- **Agent 单元测试**（`tests/test_agents.py`）：FakeLLMClient 注入，15 个测试覆盖全部 Agent 成功+失败路径
+- **版本统一**：main.py / schemas.py 对齐为 v1.1
+- **依赖锁定**：requirements.txt 加版本上限，新增 pytest-asyncio
+- **CHANGELOG.md**：含原版 vs 现版代码对照
+- **单 Agent 调试指南**（`docs/单Agent调试指南.md`）：面向队友的分步操作说明
 
 ### v1.0.0（2026-07-14）— 全面审查修复 + B4 前端落地
 
@@ -122,6 +151,7 @@ competition/
 │   ├── config.py             # 全局配置
 │   ├── coordinator.py        # 总调度：主链路编排
 │   ├── editor.py             # B4：动态编辑 + 重算
+│   ├── cli.py                # 单 Agent 调试入口
 │   ├── models/schemas.py     # JSON 接口契约（含 B3/B4 模型）
 │   ├── agents/
 │   │   ├── base.py           # Agent 基类
@@ -139,7 +169,7 @@ competition/
 │       ├── routes.py         # FastAPI 路由（run/edit/save/load/interview）
 │       ├── templates/index.html  # TailwindCSS + Lucide + Tab 布局
 │       └── static/style.css  # 补充样式
-├── tests/                    # 24 个单元/集成测试
+├── tests/                    # 39 个单元/集成测试
 ├── memory/                   # B2 计划持久化
 ├── docs/                     # 项目文档
 └── requirements.txt
