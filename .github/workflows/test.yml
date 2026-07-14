@@ -22,6 +22,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Verify imports
+        run: python -c "from app.main import app; print('imports OK')"
+
       - name: Run tests
-        run: python -m pytest -v
+        run: python -m pytest -v -x --tb=long -s
 
