@@ -104,5 +104,4 @@ def edit_plan(req: EditPlanRequest) -> FullPlan:
         timeline=timeline,
         qa_matrix=qa_matrix,
         report=original.report,  # 报告不自动重算，按需单独触发
-        version="1.0",
     )

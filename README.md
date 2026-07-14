@@ -1,6 +1,6 @@
 # 小组合作智能体 — 课程作业
 
-**版本：v1.1** | 最后更新：2026-07-15
+**版本：v1.2** | 最后更新：2026-07-15
 
 ## 一句话定位
 
@@ -54,15 +54,33 @@ AssignmentInput (课程 / 成员 / 截止日 / 每日工时)
 | **B3** | **完整角色匹配 (`scoring.py`)** | ✅ **done** | B | 技能相似度评分 + 负载均衡 + workload |
 | **B4** | **协作图动态编辑 (`editor.py`)** | ✅ **done** | B | add/remove/update + 重算 |
 | — | Prompt 模板 (`prompts.py`) | ✅ done | B | v0.3 全量重构：结构化 Prompt Engineering |
+| — | 进度追踪（前端进度条 + 状态联动） | ✅ done | B | v1.2 新增 |
+| — | 突发情况处理（成员退出/工时变更） | ✅ done | B | v1.0 实现 + v1.2 补测试 |
 | — | Planner Agent | skeleton | A | 骨架 + Planner 兜底已就位（LLM 失败时生成 5 阶段计划），Prompt 待 A 调优 |
 | — | CLI 单 Agent 调试 (`cli.py`) | ✅ done | B | v1.1 新增：planner/matcher/timeline/reporter/interview/full |
-| — | 测试 (39 个) | ✅ done | B | CPM/Scoring/Editor/Coordinator/API 全覆盖 |
+| — | 测试 (43 个) | ✅ done | B | CPM/Scoring/Editor/Coordinator/API 全覆盖 |
 
 ## 近期变更
 
+### v1.2（2026-07-15）— 进度追踪 + 突发情况处理
+
+#### 进度追踪
+- **进度条**：任务列表顶部显示整体完成度（如 "3/8 (37%)"），绿色填充条实时变化
+- **阻塞状态**：status 下拉框新增「阻塞」选项（红色标记）
+- **甘特图联动**：标记任务状态后，时间线甘特图同步显示——已完成半透明、进行中蓝色边框、阻塞红色边框
+- **实时刷新**：改任务状态后进度条立即更新，无需刷新页面
+
+#### 突发情况处理
+- **已有功能验证**：`/api/edit-members` 接口支持成员退出（自动重分配任务）和工时变更（自动重排时间线）
+- **新增测试**：4 个成员变动测试覆盖退课/工时变更/边界保护
+
+#### 代码质量
+- editor.py 版本硬编码修复（version="1.0" -> 使用 schemas 默认值）
+- 测试总数 39 -> 43
+
 ### v1.1（2026-07-15）— 代码质量加固（6 个暗雷修复）
 
-触发 WorkBuddy 代码审查报告，修复 6 个"平时不炸、边界条件下崩溃"的隐患：
+系统性代码审查后，修复 6 个"平时不炸、边界条件下崩溃"的隐患：
 
 #### 健壮性修复
 - **LLM 超时保护**：所有 LLM 调用增加 60s timeout，防止网络卡死时永久挂起
@@ -169,7 +187,7 @@ competition/
 │       ├── routes.py         # FastAPI 路由（run/edit/save/load/interview）
 │       ├── templates/index.html  # TailwindCSS + Lucide + Tab 布局
 │       └── static/style.css  # 补充样式
-├── tests/                    # 39 个单元/集成测试
+├── tests/                    # 43 个单元/集成测试
 ├── memory/                   # B2 计划持久化
 ├── docs/                     # 项目文档
 └── requirements.txt
@@ -207,7 +225,7 @@ python -m app.main     # 默认 http://127.0.0.1:8000
 ## 运行测试
 
 ```bash
-python -m pytest -v    # 39 passed
+python -m pytest -v    # 43 passed
 ```
 
 ## 分支策略
