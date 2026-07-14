@@ -18,20 +18,12 @@ from pydantic import BaseModel, Field
 
 # ──────────── 枚举 / 常量 ────────────
 
-class SkillLevel(str, Enum):
-    """技能等级标签，B3 完整版使用"""
-    beginner = "初级"
-    intermediate = "中级"
-    advanced = "高级"
-    expert = "专家"
-
-
-class MemberRole(str, Enum):
-    """成员在作业中的角色"""
-    presenter = "主讲"
-    qa_primary = "主答"
-    qa_support = "辅答"
-    contributor = "参与"
+class TaskStatus(str, Enum):
+    """Task execution status for progress tracking"""
+    pending = "pending"
+    in_progress = "in_progress"
+    completed = "completed"
+    blocked = "blocked"
 
 
 # ──────────── 输入 ────────────
@@ -50,6 +42,10 @@ class TeamMember(BaseModel):
     available_hours: float = Field(
         default=20.0,
         description="可用工时（人时），B3 负载均衡使用",
+    )
+    daily_available_hours: float = Field(
+        default=4.0,
+        description="每人每天可用工时（小时），用于时间线折算。现实中不同成员可用时间不同。",
     )
 
 
@@ -72,6 +68,8 @@ class SubTask(BaseModel):
     dependencies: list[str] = Field(default_factory=list,
                                     description="依赖的其他任务 ID 列表")
     required_skills: list[str] = Field(default_factory=list)
+    status: TaskStatus = Field(default=TaskStatus.pending,
+                               description="Task execution status")
 
 
 class PlanOutput(BaseModel):
@@ -121,6 +119,8 @@ class TimelineTask(BaseModel):
     float_days: int = Field(default=0,
                             description="浮动天数（0 即关键路径任务）")
     assigned_to: list[str] = Field(default_factory=list)
+    status: TaskStatus = Field(default=TaskStatus.pending,
+                               description="Current execution status")
 
 
 class TimelineOutput(BaseModel):
@@ -152,7 +152,7 @@ class FullPlan(BaseModel):
     timeline: TimelineOutput
     qa_matrix: QAOutput
     report: ReportOutput
-    version: str = "0.2.0"
+    version: str = "1.0"
 
 
 # ──────────── B4：协作图动态编辑 ────────────

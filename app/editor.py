@@ -90,6 +90,7 @@ def edit_plan(req: EditPlanRequest) -> FullPlan:
             plan=new_plan,
             deadline=original.input.deadline.isoformat(),
             assignments=assignments,
+            members=original.input.members,
         )
 
     # 重算 matcher（B3 确定性，保证编辑后即时可见）
@@ -103,5 +104,5 @@ def edit_plan(req: EditPlanRequest) -> FullPlan:
         timeline=timeline,
         qa_matrix=qa_matrix,
         report=original.report,  # 报告不自动重算，按需单独触发
-        version="0.2.0",
+        version="1.0",
     )

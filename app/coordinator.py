@@ -1,8 +1,13 @@
-﻿"""
+"""
 Coordinator 总调度
-负责：编排 Planner → Matcher → Timeline → Reporter 主链路
+负责：编排 Planner -> Matcher -> Timeline -> Reporter 主链路
 同时负责：输出校验 + 重试 + 日志
 负责人：B（提交人）
+
+v0.3 改进：
+- 将成员信息传递给 TimelineAgent，支持按成员实际可用工时折算
+- 将 extra_requirements 传入 Planner
+- 增强错误处理和日志
 """
 
 from __future__ import annotations
@@ -44,8 +49,8 @@ class Coordinator:
         # Step 2: Matcher（B3：LLM + 确定性评分兜底）
         qa_matrix = self._step_matcher(plan, inp.members)
 
-        # Step 3: Timeline（回填 QA 矩阵的负责人）
-        timeline = self._step_timeline(plan, inp.deadline.isoformat(), qa_matrix)
+        # Step 3: Timeline（回填 QA 矩阵的负责人，传入成员信息）
+        timeline = self._step_timeline(plan, inp.deadline.isoformat(), qa_matrix, inp.members)
         if isinstance(timeline, AgentError):
             logger.warning("Timeline failed, skip timeline: %s",
                            timeline.message)
@@ -73,7 +78,13 @@ class Coordinator:
     # ──────────── 各步骤 ────────────
 
     def _step_planner(self, inp: AssignmentInput) -> PlanOutput | AgentError:
-        members = [m.name for m in inp.members]
+        # 为 Planner 提供丰富的成员信息（含技能和可用工时）
+        members = [
+            f"{m.name}(技能: {', '.join(m.skill_tags) or '未标注'}; "
+            f"总可用: {m.available_hours}h; "
+            f"每日可用: {m.daily_available_hours}h)"
+            for m in inp.members
+        ]
         return self.planner.run(
             course_name=inp.course.name,
             course_description=inp.course.description,
@@ -84,7 +95,7 @@ class Coordinator:
 
     def _step_matcher(self, plan: PlanOutput,
                       members) -> QAOutput:
-        """LLM 匹配成功 → enhance 补分；失败 → 确定性兜底。"""
+        """LLM 匹配成功 -> enhance 补分；失败 -> 确定性兜底。"""
         result = self.matcher.run(plan=plan, members=members)
         if isinstance(result, AgentError):
             logger.warning("Matcher LLM failed, use deterministic B3: %s",
@@ -96,7 +107,8 @@ class Coordinator:
         return enhance(result, plan, members)
 
     def _step_timeline(self, plan: PlanOutput, deadline: str,
-                       qa: QAOutput | None = None) -> TimelineOutput | AgentError:
+                       qa: QAOutput | None = None,
+                       members: list | None = None) -> TimelineOutput | AgentError:
         assignments: dict[str, list[str]] = {}
         if qa is not None:
             for a in qa.assignments:
@@ -105,7 +117,7 @@ class Coordinator:
                     people.append(a.qa_primary)
                 assignments[a.task_id] = people
         kwargs: dict = {"plan": plan, "deadline": deadline,
-                        "assignments": assignments}
+                        "assignments": assignments, "members": members}
         if self.hours_per_day is not None:
             kwargs["hours_per_day"] = self.hours_per_day
         return self.timeline.run(**kwargs)

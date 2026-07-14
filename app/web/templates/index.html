@@ -1,347 +1,47 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>小组合作智能体</title>
-    <link rel="stylesheet" href="/static/style.css">
-</head>
-<body>
-    <div class="app">
-        <header>
-            <h1>小组合作智能体</h1>
-            <p class="subtitle">输入课程与团队信息，自动生成分工计划、时间线与 QA 责任矩阵，并可动态编辑重算</p>
-            <div class="toolbar">
-                <button type="button" id="loadBtn" class="btn-ghost">📂 历史计划</button>
-                <button type="button" id="saveBtn" class="btn-ghost" disabled>💾 保存当前</button>
-            </div>
-        </header>
-
-        <section class="input-panel">
-            <h2>📝 输入</h2>
-            <form id="planForm">
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="courseName">课程名称</label>
-                        <input type="text" id="courseName" placeholder="如：软件工程" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="deadline">截止日期</label>
-                        <input type="date" id="deadline" required>
-                    </div>
-                </div>
-                <div class="form-row single">
-                    <div class="form-group">
-                        <label for="courseDesc">课程描述 / 要求</label>
-                        <textarea id="courseDesc" rows="2" placeholder="如：小组合作开发一个智能体系统"></textarea>
-                    </div>
-                </div>
-                <div class="form-group">
-                    <label>团队成员</label>
-                    <div id="members">
-                        <div class="member-row">
-                            <input type="text" placeholder="姓名" class="member-name">
-                            <input type="text" placeholder="技能标签，逗号分隔" class="member-skills">
-                        </div>
-                    </div>
-                    <button type="button" id="addMember" class="btn-small">+ 添加成员</button>
-                </div>
-                <button type="submit" id="runBtn" class="btn-primary">⚡ 生成计划</button>
-            </form>
-        </section>
-
-        <div id="resultArea">
-            <div class="empty-state">
-                <span class="emoji">🗂️</span>
-                填写左侧信息后点击「生成计划」，AI 将自动拆解任务、排期并分配答辩角色
-            </div>
-        </div>
-    </div>
-
-    <script>
-        let currentData = null; // 当前生成的完整计划
-
-        // ──────────── 表单交互 ────────────
-        document.getElementById('addMember').addEventListener('click', () => {
-            const members = document.getElementById('members');
-            const row = document.createElement('div');
-            row.className = 'member-row';
-            row.innerHTML = '<input type="text" placeholder="姓名" class="member-name">' +
-                '<input type="text" placeholder="技能标签，逗号分隔" class="member-skills">';
-            members.appendChild(row);
-        });
-
-        // 默认日期：今天 +14 天
-        {
-            const d = new Date(); d.setDate(d.getDate() + 14);
-            document.getElementById('deadline').value = d.toISOString().slice(0, 10);
-        }
-
-        function esc(s) {
-            return String(s == null ? '' : s)
-                .replace(/&/g, '&amp;').replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-        }
-
-        // ──────────── 生成计划 ────────────
-        document.getElementById('planForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const btn = document.getElementById('runBtn');
-            const area = document.getElementById('resultArea');
-            btn.disabled = true;
-            btn.textContent = '生成中...';
-            area.innerHTML = '<div class="loading-state"><div class="spinner"></div><p>正在调用 AI 生成计划，请稍候...</p></div>';
-
-            const memberNames = document.querySelectorAll('.member-name');
-            const memberSkills = document.querySelectorAll('.member-skills');
-            const members = [];
-            for (let i = 0; i < memberNames.length; i++) {
-                if (memberNames[i].value.trim()) {
-                    members.push({
-                        name: memberNames[i].value.trim(),
-                        skill_tags: memberSkills[i].value.split(',').map(s => s.trim()).filter(Boolean)
-                    });
-                }
-            }
-
-            try {
-                const resp = await fetch('/api/run', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        course: {
-                            name: document.getElementById('courseName').value,
-                            description: document.getElementById('courseDesc').value
-                        },
-                        members: members,
-                        deadline: document.getElementById('deadline').value,
-                        additional_requirements: ''
-                    })
-                });
-                const data = await resp.json();
-                if (resp.ok) {
-                    currentData = data;
-                    document.getElementById('saveBtn').disabled = false;
-                    area.innerHTML = renderResult(data);
-                } else {
-                    area.innerHTML = '<div class="error-state">请求失败: ' + esc(data.detail || '未知错误') + '</div>';
-                }
-            } catch (err) {
-                area.innerHTML = '<div class="error-state">请求失败: ' + esc(err.message) + '</div>';
-            } finally {
-                btn.disabled = false;
-                btn.textContent = '⚡ 生成计划';
-            }
-        });
-
-        // ──────────── 渲染结果 ────────────
-        function renderResult(data) {
-            let html = '<div class="result-panel">';
-
-            // 概要
-            if (data.plan && data.plan.summary) {
-                html += '<div class="summary-box">' + esc(data.plan.summary) + '</div>';
-            }
-
-            // 任务计划
-            if (data.plan && data.plan.tasks && data.plan.tasks.length) {
-                html += '<div class="result-section"><h3>📋 任务计划</h3><div class="section-body"><div class="task-list">';
-                data.plan.tasks.forEach(t => {
-                    html += '<div class="task-card"><div class="task-header">' +
-                        '<span class="task-id">' + esc(t.id) + '</span>' +
-                        '<span class="task-name">' + esc(t.name) + '</span>' +
-                        '<span class="task-hours">' + esc(t.estimated_hours) + 'h</span></div>';
-                    if (t.description) html += '<div class="task-desc">' + esc(t.description) + '</div>';
-                    html += '<div class="task-meta">';
-                    if (t.dependencies && t.dependencies.length) {
-                        html += '<span class="dep">依赖: ' + t.dependencies.map(esc).join(', ') + '</span>';
-                    }
-                    if (t.required_skills && t.required_skills.length) {
-                        html += t.required_skills.map(s => '<span class="skill">' + esc(s) + '</span>').join('');
-                    }
-                    html += '</div></div>';
-                });
-                html += '</div>';
-                if (data.plan.reasoning) {
-                    html += '<div class="reasoning-box">' + esc(data.plan.reasoning) + '</div>';
-                }
-                html += '</div></div>';
-            }
-
-            // 时间线（Gantt）
-            if (data.timeline && data.timeline.tasks && data.timeline.tasks.length) {
-                html += '<div class="result-section"><h3>📅 时间线（CPM 关键路径）</h3>';
-                if (data.timeline.note) html += '<div class="section-note">' + esc(data.timeline.note) + '</div>';
-                html += '<div class="section-body">';
-                html += '<div class="legend">' +
-                    '<span><span class="dot critical"></span>关键路径</span>' +
-                    '<span><span class="dot normal"></span>可浮动</span>';
-                if (data.timeline.total_days) html += '<span>总工期 ' + esc(data.timeline.total_days) + ' 天</span>';
-                html += '</div>';
-                html += '<div class="gantt-container">';
-                const tasks = data.timeline.tasks;
-                let minDate = tasks[0].start_date, maxDate = tasks[0].end_date;
-                tasks.forEach(t => {
-                    if (t.start_date < minDate) minDate = t.start_date;
-                    if (t.end_date > maxDate) maxDate = t.end_date;
-                });
-                const totalDays = Math.ceil((new Date(maxDate) - new Date(minDate)) / 86400000) || 1;
-                tasks.forEach(t => {
-                    const offset = Math.ceil((new Date(t.start_date) - new Date(minDate)) / 86400000);
-                    const dur = Math.ceil((new Date(t.end_date) - new Date(t.start_date)) / 86400000) || 1;
-                    const leftPct = (offset / totalDays) * 100;
-                    const widthPct = Math.max((dur / totalDays) * 100, 4);
-                    const cls = t.is_critical ? 'critical' : 'normal';
-                    const floatTxt = (!t.is_critical && t.float_days) ? ' · 浮动' + t.float_days + 'd' : '';
-                    const assignee = (t.assigned_to && t.assigned_to.length) ? ' · ' + t.assigned_to.map(esc).join('/') : '';
-                    html += '<div class="gantt-row">' +
-                        '<div class="gantt-label">' + esc(t.task_id) + ' ' + esc(t.name) + '</div>' +
-                        '<div class="gantt-bar-wrap">' +
-                        '<div class="gantt-bar ' + cls + '" style="left:' + leftPct + '%;width:' + widthPct + '%">' +
-                        t.start_date.slice(5) + '~' + t.end_date.slice(5) + floatTxt +
-                        '</div></div>' +
-                        '<div class="gantt-assignee">' + assignee.replace(' · ', '') + '</div></div>';
-                });
-                html += '</div>';
-                if (data.timeline.critical_path && data.timeline.critical_path.length) {
-                    html += '<div class="task-meta" style="margin-top:0.6rem"><span class="dep">关键路径: ' +
-                        data.timeline.critical_path.map(esc).join(' → ') + '</span></div>';
-                }
-                if (data.timeline.reasoning) {
-                    html += '<div class="reasoning-box">' + esc(data.timeline.reasoning) + '</div>';
-                }
-                html += '</div></div>';
-            }
-
-            // 负载摘要（B3）
-            if (data.qa_matrix && data.qa_matrix.workload && Object.keys(data.qa_matrix.workload).length) {
-                const wl = data.qa_matrix.workload;
-                const maxV = Math.max(...Object.values(wl), 0.01);
-                html += '<div class="result-section"><h3>⚖️ 成员负载</h3><div class="section-body"><div class="workload-list">';
-                Object.entries(wl).forEach(([name, val]) => {
-                    html += '<div class="workload-row"><span class="workload-name">' + esc(name) + '</span>' +
-                        '<div class="workload-track"><div class="workload-fill" style="width:' + (val / maxV * 100) + '%"></div></div>' +
-                        '<span class="workload-val">' + val.toFixed(1) + 'h</span></div>';
-                });
-                html += '</div></div></div>';
-            }
-
-            // QA 矩阵
-            if (data.qa_matrix && data.qa_matrix.assignments && data.qa_matrix.assignments.length) {
-                html += '<div class="result-section"><h3>🎯 QA 责任矩阵</h3><div class="section-body">';
-                html += '<div class="table-wrap"><table><thead><tr><th>任务</th><th>主讲</th><th>主答</th><th>辅答</th><th>匹配</th></tr></thead><tbody>';
-                data.qa_matrix.assignments.forEach(a => {
-                    const sc = (typeof a.score === 'number' && a.score > 0) ? '<span class="score-pill">' + (a.score * 100).toFixed(0) + '%</span>' : '';
-                    html += '<tr><td>' + esc(a.task_name) + '</td>' +
-                        '<td class="role-presenter">' + esc(a.presenter) + '</td>' +
-                        '<td class="role-qa">' + esc(a.qa_primary) + '</td>' +
-                        '<td class="role-support">' + (a.qa_support || []).map(esc).join(', ') + '</td>' +
-                        '<td>' + sc + '</td></tr>';
-                });
-                html += '</tbody></table></div>';
-                data.qa_matrix.assignments.forEach(a => {
-                    if (a.reasoning) {
-                        html += '<div class="reasoning-box">' + esc(a.task_name) + ': ' + esc(a.reasoning) + '</div>';
-                    }
-                });
-                if (data.qa_matrix.note) {
-                    html += '<div class="reasoning-box">' + esc(data.qa_matrix.note) + '</div>';
-                }
-                html += '</div></div>';
-            }
-
-            // 报告
-            if (data.report) {
-                html += '<div class="result-section"><h3>📄 报告</h3><div class="section-body">';
-                html += '<div class="report-section">' + esc(data.report.summary) + '</div>';
-                if (data.report.timeline_section) html += '<div class="report-section">' + esc(data.report.timeline_section) + '</div>';
-                if (data.report.qa_matrix_section) html += '<div class="report-section">' + esc(data.report.qa_matrix_section) + '</div>';
-                if (data.report.risk_note) html += '<div class="report-risk">' + esc(data.report.risk_note) + '</div>';
-                html += '</div></div>';
-            }
-
-            html += '</div>';
-            return html;
-        }
-
-        // ──────────── B2：保存当前 ────────────
-        document.getElementById('saveBtn').addEventListener('click', async () => {
-            if (!currentData) return;
-            try {
-                const resp = await fetch('/api/save', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(currentData)
-                });
-                const data = await resp.json();
-                if (resp.ok) {
-                    alert('已保存：' + data.filename);
-                } else {
-                    alert('保存失败: ' + (data.detail || '未知错误'));
-                }
-            } catch (err) { alert('保存失败: ' + err.message); }
-        });
-
-        // ──────────── B2：历史计划 ────────────
-        document.getElementById('loadBtn').addEventListener('click', openPlanList);
-
-        async function openPlanList() {
-            try {
-                const resp = await fetch('/api/plans');
-                const data = await resp.json();
-                const plans = data.plans || [];
-                let html = '<div class="modal-backdrop" id="modalBackdrop"><div class="modal"><h3>历史计划</h3>';
-                if (!plans.length) {
-                    html += '<p style="color:var(--text-muted);text-align:center;padding:1.5rem">暂无保存的计划</p>';
-                } else {
-                    html += '<div class="plan-list">';
-                    plans.forEach(p => {
-                        html += '<div class="plan-item"><span class="name">' + esc(p.filename) + '</span>' +
-                            '<span class="size">' + (p.size / 1024).toFixed(1) + 'KB</span>' +
-                            '<button class="btn-ghost" data-load="' + esc(p.filename) + '">载入</button>' +
-                            '<button class="btn-danger" data-del="' + esc(p.filename) + '">删除</button></div>';
-                    });
-                    html += '</div>';
-                }
-                html += '<div class="modal-actions"><button class="btn-ghost" id="modalClose">关闭</button></div></div></div>';
-                const old = document.getElementById('modalBackdrop');
-                if (old) old.remove();
-                document.body.insertAdjacentHTML('beforeend', html);
-
-                document.getElementById('modalClose').onclick = () => document.getElementById('modalBackdrop').remove();
-                document.getElementById('modalBackdrop').onclick = (e) => {
-                    if (e.target.id === 'modalBackdrop') e.target.remove();
-                };
-                document.querySelectorAll('[data-load]').forEach(b => {
-                    b.onclick = () => loadPlanFile(b.getAttribute('data-load'));
-                });
-                document.querySelectorAll('[data-del]').forEach(b => {
-                    b.onclick = () => deletePlanFile(b.getAttribute('data-del'));
-                });
-            } catch (err) { alert('加载列表失败: ' + err.message); }
-        }
-
-        async function loadPlanFile(filename) {
-            try {
-                const resp = await fetch('/api/load/' + encodeURIComponent(filename));
-                const data = await resp.json();
-                if (resp.ok) {
-                    currentData = data;
-                    document.getElementById('saveBtn').disabled = false;
-                    document.getElementById('resultArea').innerHTML = renderResult(data);
-                    const m = document.getElementById('modalBackdrop'); if (m) m.remove();
-                    window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
-                } else { alert('载入失败: ' + (data.detail || '未知错误')); }
-            } catch (err) { alert('载入失败: ' + err.message); }
-        }
-
-        async function deletePlanFile(filename) {
-            if (!confirm('确认删除 ' + filename + ' ?')) return;
-            try {
-                const resp = await fetch('/api/plans/' + encodeURIComponent(filename), { method: 'DELETE' });
-                if (resp.ok) { openPlanList(); } else { alert('删除失败'); }
-            } catch (err) { alert('删除失败: ' + err.message); }
-        }
-    </script>
-</body>
-</html>
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>小组合作智能体 v1.0</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/lucide@latest"></script>
+<link rel="stylesheet" href="/static/style.css"></head>
+<body class="bg-slate-50 text-slate-800 min-h-screen">
+<header class="bg-white border-b border-slate-200 sticky top-0 z-40 shadow-sm"><div class="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between"><div class="flex items-center gap-3"><div class="w-9 h-9 rounded-lg bg-gradient-to-br from-blue-600 to-indigo-600 flex items-center justify-center"><i data-lucide="brain" class="w-5 h-5 text-white"></i></div><div><h1 class="text-lg font-bold text-slate-900 leading-tight">小组合作智能体</h1><p class="text-xs text-slate-500">AI 驱动的任务拆解 · 排期 · 答辩分工 <span class="text-slate-400">v1.0</span></p></div></div><div class="flex items-center gap-2"><button id="loadBtn" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 transition"><i data-lucide="folder-open" class="w-4 h-4"></i>历史计划</button><button id="saveBtn" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 transition disabled:opacity-40 disabled:cursor-not-allowed" disabled><i data-lucide="save" class="w-4 h-4"></i>保存</button><button id="exportBtn" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 transition disabled:opacity-40 disabled:cursor-not-allowed" disabled><i data-lucide="download" class="w-4 h-4"></i>导出</button></div></div></header>
+<main class="max-w-7xl mx-auto px-4 sm:px-6 py-6"><div class="grid grid-cols-1 lg:grid-cols-12 gap-6"><div class="lg:col-span-4"><div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden sticky top-20"><div class="px-5 py-3.5 border-b border-slate-100 bg-slate-50/60"><h2 class="text-sm font-semibold text-slate-700 flex items-center gap-2"><i data-lucide="settings-2" class="w-4 h-4 text-blue-600"></i>配置输入</h2></div><form id="planForm" class="p-5 space-y-4"><div class="space-y-1"><label class="text-xs font-medium text-slate-500 uppercase tracking-wide">课程名称</label><input type="text" id="courseName" placeholder="如：软件工程" required class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition"></div><div class="space-y-1"><label class="text-xs font-medium text-slate-500 uppercase tracking-wide">课程描述 / 要求</label><textarea id="courseDesc" rows="3" placeholder="如：小组合作开发一个智能体系统" class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition resize-none"></textarea></div><div class="space-y-1"><label class="text-xs font-medium text-slate-500 uppercase tracking-wide">截止日期</label><input type="date" id="deadline" required class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition"></div><div class="space-y-1"><label class="text-xs font-medium text-slate-500 uppercase tracking-wide">额外要求</label><textarea id="extraReq" rows="2" placeholder="如：必须使用 Python" class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition resize-none"></textarea></div><div class="space-y-2"><label class="text-xs font-medium text-slate-500 uppercase tracking-wide">团队成员</label><p class="text-[11px] text-slate-400 -mt-1">每人的「每日工时」指该成员每天可用于此项目的有效工作时间，用于时间线折算和负载预警</p><div id="members" class="space-y-2"></div><button type="button" id="addMember" class="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 font-medium mt-1"><i data-lucide="plus" class="w-3.5 h-3.5"></i>添加成员</button></div><button type="submit" id="runBtn" class="w-full py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 text-white text-sm font-semibold rounded-lg hover:from-blue-700 hover:to-indigo-700 active:scale-[0.98] transition-all shadow-sm shadow-blue-600/20 flex items-center justify-center gap-2"><i data-lucide="zap" class="w-4 h-4"></i>生成计划</button></form></div></div>
+<div class="lg:col-span-8"><div id="warningsArea" class="hidden mb-4 space-y-2"></div><div id="resultArea"><div class="bg-white rounded-xl border border-dashed border-slate-300 p-12 text-center"><div class="w-16 h-16 mx-auto mb-4 rounded-2xl bg-slate-100 flex items-center justify-center"><i data-lucide="layout-dashboard" class="w-8 h-8 text-slate-400"></i></div><p class="text-slate-500 text-sm">填写左侧信息后点击「生成计划」</p><p class="text-slate-400 text-xs mt-1">AI 将自动拆解任务、排期并分配答辩角色</p></div></div></div></div></main>
+<script>
+let currentData=null,currentTab='plan';
+function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function simpleMarkdown(t){if(!t)return'';let h=esc(t);h=h.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');h=h.replace(/\*(.+?)\*/g,'<em>$1</em>');h=h.replace(/^### (.+)$/gm,'<h4 class="font-semibold text-slate-800 mt-3 mb-1">$1</h4>');h=h.replace(/^## (.+)$/gm,'<h3 class="font-bold text-slate-900 mt-4 mb-2 text-base">$1</h3>');h=h.replace(/^- (.+)$/gm,'<li class="ml-4 list-disc text-slate-700">$1</li>');h=h.replace(/\n/g,'<br>');return h;}
+function switchTab(tab){currentTab=tab;document.querySelectorAll('.tab-btn').forEach(b=>{const a=b.dataset.tab===tab;b.className='tab-btn px-3 py-1.5 text-xs sm:text-sm font-medium rounded-lg transition cursor-pointer whitespace-nowrap flex items-center gap-1.5 '+(a?'bg-blue-600 text-white shadow-sm':'text-slate-500 hover:text-slate-700 hover:bg-slate-100');});document.querySelectorAll('.tab-panel').forEach(p=>{p.style.display=p.dataset.panel===tab?'block':'none';});}
+{const d=new Date();d.setDate(d.getDate()+14);document.getElementById('deadline').value=d.toISOString().slice(0,10);}
+function createMemberRow(n,s,h){n=n||'';s=s||'';h=h||'4';const r=document.createElement('div');r.className='member-row grid grid-cols-12 gap-2 items-center';r.innerHTML='<input type="text" placeholder="\u59d3\u540d" value="'+esc(n)+'" class="member-name col-span-3 px-2.5 py-1.5 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition"><input type="text" placeholder="\u6280\u80fd\u6807\u7b7e" value="'+esc(s)+'" class="member-skills col-span-6 px-2.5 py-1.5 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition"><input type="number" placeholder="\u6bcf\u65e5\u5de5\u65f6" value="'+h+'" class="member-hours col-span-2 px-2 py-1.5 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition" min="0.5" max="12" step="0.5" title="\u8be5\u6210\u5458\u6bcf\u5929\u53ef\u7528\u4e8e\u6b64\u9879\u76ee\u7684\u6709\u6548\u5de5\u4f5c\u65f6\u95f4"><button type="button" class="remove-member col-span-1 w-7 h-7 flex items-center justify-center rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition" title="\u79fb\u9664"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>';r.querySelector('.remove-member').onclick=function(){r.remove();};return r;}
+document.getElementById('members').appendChild(createMemberRow());
+document.getElementById('addMember').addEventListener('click',function(){document.getElementById('members').appendChild(createMemberRow());});
+function showWarnings(data){var area=document.getElementById('warningsArea');var w=[];if(data.timeline&&data.timeline.total_days>0&&data.input&&data.input.deadline){var dl=new Date(data.input.deadline);var td=new Date();td.setHours(0,0,0,0);var avail=Math.ceil((dl-td)/86400000);if(data.timeline.total_days>avail)w.push({type:'danger',msg:'\u5de5\u671f\u8d85\u51fa\u622a\u6b62\u65e5\u671f\uff01\u603b\u5de5\u671f '+data.timeline.total_days+' \u5929\uff0c\u4f46\u8ddd\u622a\u6b62\u4ec5\u5269 '+avail+' \u5929\u3002\u5efa\u8bae\u51cf\u5c11\u4efb\u52a1\u6216\u589e\u52a0\u4eba\u624b\u3002'});else if(data.timeline.total_days>avail*0.85)w.push({type:'warn',msg:'\u5de5\u671f\u8f83\u7d27\uff1a\u603b\u5de5\u671f '+data.timeline.total_days+' \u5929\uff0c\u8ddd\u622a\u6b62 '+avail+' \u5929\uff0c\u7f13\u51b2\u4e0d\u8db3 15%\u3002'});}
+if(data.qa_matrix&&data.qa_matrix.workload&&data.input&&data.input.members){var mm={};data.input.members.forEach(function(m){mm[m.name]=m.available_hours||20;});Object.entries(data.qa_matrix.workload).forEach(function(e){var n=e[0],h=e[1];var c=mm[n];if(c&&h>c)w.push({type:'danger',msg:n+' \u8d1f\u8f7d\u8d85\u6807\uff1aAI \u5206\u914d\u7684\u4efb\u52a1\u6298\u7b97\u5de5\u65f6 '+h.toFixed(1)+'h \u8d85\u8fc7\u4e86\u8be5\u6210\u5458\u586b\u5199\u7684\u603b\u53ef\u7528\u5de5\u65f6 '+c+'h\u3002\u5efa\u8bae\u8c03\u6574\u4efb\u52a1\u6216\u589e\u52a0\u53ef\u7528\u65f6\u95f4\u3002'});else if(c&&h>c*0.85)w.push({type:'warn',msg:n+' \u8d1f\u8f7d\u504f\u9ad8\uff1a\u5206\u914d '+h.toFixed(1)+'h / \u53ef\u7528 '+c+'h ('+(h/c*100).toFixed(0)+'%)\uff0c\u5efa\u8bae\u5173\u6ce8\u3002'});});}
+if(!w.length){area.classList.add('hidden');return;}area.classList.remove('hidden');area.innerHTML=w.map(function(x){var cls=x.type==='danger'?'bg-red-50 border-red-200 text-red-700':'bg-amber-50 border-amber-200 text-amber-700';var icon=x.type==='danger'?'alert-circle':'alert-triangle';return '<div class="flex items-start gap-2 px-4 py-2.5 rounded-lg border '+cls+' text-sm"><i data-lucide="'+icon+'" class="w-4 h-4 mt-0.5 shrink-0"></i><span>'+esc(x.msg)+'</span></div>';}).join('');lucide.createIcons();}
+document.getElementById('planForm').addEventListener('submit',async function(e){e.preventDefault();var btn=document.getElementById('runBtn');var area=document.getElementById('resultArea');btn.disabled=true;btn.innerHTML='<span class="inline-block w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></span> \u751f\u6210\u4e2d...';area.innerHTML='<div class="bg-white rounded-xl border border-slate-200 shadow-sm p-16 text-center"><div class="inline-block w-8 h-8 border-3 border-blue-200 border-t-blue-600 rounded-full animate-spin mb-4"></div><p class="text-slate-500 text-sm">\u6b63\u5728\u8c03\u7528 AI \u751f\u6210\u8ba1\u5212...</p></div>';document.getElementById('warningsArea').classList.add('hidden');var ns=document.querySelectorAll('.member-name');var ss=document.querySelectorAll('.member-skills');var hs=document.querySelectorAll('.member-hours');var members=[];for(var i=0;i<ns.length;i++){if(ns[i].value.trim())members.push({name:ns[i].value.trim(),skill_tags:ss[i].value.split(',').map(function(s){return s.trim();}).filter(Boolean),daily_available_hours:parseFloat(hs[i].value)||4,available_hours:20});}try{var resp=await fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({course:{name:document.getElementById('courseName').value,description:document.getElementById('courseDesc').value},members:members,deadline:document.getElementById('deadline').value,additional_requirements:document.getElementById('extraReq').value})});var data=await resp.json();if(resp.ok){currentData=data;document.getElementById('saveBtn').disabled=false;document.getElementById('exportBtn').disabled=false;showWarnings(data);renderResult(data);}else{area.innerHTML='<div class="bg-red-50 border border-red-200 rounded-xl p-8 text-center"><p class="text-red-600 text-sm">'+esc(data.detail||'\u672a\u77e5\u9519\u8bef')+'</p></div>';lucide.createIcons();}}catch(err){area.innerHTML='<div class="bg-red-50 border border-red-200 rounded-xl p-8 text-center"><p class="text-red-600 text-sm">'+esc(err.message)+'</p></div>';lucide.createIcons();}finally{btn.disabled=false;btn.innerHTML='<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> \u751f\u6210\u8ba1\u5212';}});
+function renderResult(data){var area=document.getElementById('resultArea');var tnm={};if(data.plan&&data.plan.tasks)data.plan.tasks.forEach(function(x){tnm[x.id]=x.name;});var summaryHtml='';if(data.plan&&data.plan.summary)summaryHtml='<div class="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 rounded-xl p-4 mb-4"><div class="flex items-start gap-2"><i data-lucide="lightbulb" class="w-4 h-4 text-amber-500 mt-0.5 shrink-0"></i><p class="text-sm text-amber-800">'+esc(data.plan.summary)+'</p></div></div>';
+var tabs=[{id:'plan',label:'\u4efb\u52a1\u8ba1\u5212',icon:'list-checks'},{id:'timeline',label:'\u65f6\u95f4\u7ebf',icon:'calendar-range'},{id:'qa',label:'QA \u77e9\u9635',icon:'users'},{id:'edit',label:'\u7f16\u8f91\u8ba1\u5212',icon:'pencil'},{id:'report',label:'\u62a5\u544a',icon:'file-text'},{id:'interview',label:'\u7b54\u8fa9\u6a21\u62df',icon:'message-circle-question'}];
+var tabsHtml='<div class="flex items-center gap-1 p-1 bg-slate-100 rounded-lg mb-4 overflow-x-auto">';tabs.forEach(function(t){var a=t.id==='plan'?'bg-blue-600 text-white shadow-sm':'text-slate-500 hover:text-slate-700 hover:bg-white/60';tabsHtml+='<button class="tab-btn px-3 py-1.5 text-xs sm:text-sm font-medium rounded-lg transition cursor-pointer whitespace-nowrap flex items-center gap-1.5 '+a+'" data-tab="'+t.id+'" onclick="switchTab(\''+t.id+'\')"><i data-lucide="'+t.icon+'" class="w-3.5 h-3.5"></i>'+t.label+'</button>';});tabsHtml+='</div>';
+var planHtml='<div class="tab-panel" data-panel="plan">';if(data.plan&&data.plan.tasks&&data.plan.tasks.length){planHtml+='<div class="space-y-2">';data.plan.tasks.forEach(function(t){var deps=(t.dependencies&&t.dependencies.length)?'<span class="text-xs text-amber-600 bg-amber-50 px-2 py-0.5 rounded-md">\u4f9d\u8d56: '+t.dependencies.map(function(d){return esc(d)+' '+esc(tnm[d]||'');}).join(', ')+'</span>':'';var skills=(t.required_skills||[]).map(function(s){return '<span class="text-xs text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md">'+esc(s)+'</span>';}).join('');var curStatus=t.status||'pending';var statusOpts='<select class="status-select text-[10px] px-1.5 py-0.5 rounded border border-slate-200 outline-none cursor-pointer ml-1 '+(curStatus==='completed'?'bg-green-100 text-green-700':curStatus==='in_progress'?'bg-blue-100 text-blue-700':'bg-slate-100 text-slate-500')+'" data-task-id="'+esc(t.id)+'"><option value="pending"'+(curStatus==='pending'?' selected':'')+'>\u5f85\u5f00\u59cb</option><option value="in_progress"'+(curStatus==='in_progress'?' selected':'')+'>\u8fdb\u884c\u4e2d</option><option value="completed"'+(curStatus==='completed'?' selected':'')+'>\u5df2\u5b8c\u6210</option></select>';planHtml+='<div class="border border-slate-200 rounded-lg p-3 hover:border-slate-300 transition'+(curStatus==='completed'?' opacity-60':'')+'"><div class="flex items-center gap-2 mb-1"><span class="font-mono text-xs font-semibold text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded">'+esc(t.id)+'</span><span class="text-sm font-medium text-slate-800'+(curStatus==='completed'?' line-through':'')+'">'+esc(t.name)+'</span>'+statusOpts+'<span class="ml-auto text-xs text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md font-medium">'+esc(t.estimated_hours)+'h</span></div>'+(t.description?'<p class="text-xs text-slate-500 mb-1.5">'+esc(t.description)+'</p>':'')+'<div class="flex flex-wrap gap-1">'+deps+skills+'</div></div>';});planHtml+='</div>';if(data.plan.reasoning)planHtml+='<div class="mt-3 bg-slate-50 border-l-2 border-slate-300 pl-3 py-2 text-xs text-slate-500 italic">'+simpleMarkdown(data.plan.reasoning)+'</div>';}planHtml+='</div>';
+var tlHtml='<div class="tab-panel" data-panel="timeline" style="display:none">';if(data.timeline&&data.timeline.tasks&&data.timeline.tasks.length){var tasks=data.timeline.tasks;var mn=tasks[0].start_date,mx=tasks[0].end_date;tasks.forEach(function(t){if(t.start_date<mn)mn=t.start_date;if(t.end_date>mx)mx=t.end_date;});var td=Math.ceil((new Date(mx)-new Date(mn))/86400000)||1;tlHtml+='<div class="flex items-center gap-4 text-xs text-slate-500 mb-4"><span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-sm bg-red-500"></span>\u5173\u952e\u8def\u5f84</span><span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-sm bg-emerald-500"></span>\u53ef\u6d6e\u52a8</span><span class="ml-auto font-medium">\u603b\u5de5\u671f <span class="text-blue-600 font-bold">'+esc(data.timeline.total_days)+'</span> \u5929</span></div><div class="space-y-2">';tasks.forEach(function(t){var off=Math.ceil((new Date(t.start_date)-new Date(mn))/86400000);var dur=Math.ceil((new Date(t.end_date)-new Date(t.start_date))/86400000)||1;var lp=(off/td)*100;var wp=Math.max((dur/td)*100,4);var bc=t.is_critical?'bg-red-500':'bg-emerald-500';var cb=t.is_critical?'<span class="text-[10px] text-red-600 bg-red-50 px-1.5 py-0.5 rounded font-medium">\u5173\u952e</span>':'';var ft=(!t.is_critical&&t.float_days)?'<span class="text-[10px] text-slate-400">\u6d6e\u52a8 '+t.float_days+'d</span>':'';var asgn=(t.assigned_to&&t.assigned_to.length)?'<span class="text-[10px] text-slate-400">'+t.assigned_to.map(esc).join('/')+'</span>':'';tlHtml+='<div class="flex items-center gap-3"><div class="w-32 shrink-0 text-xs text-slate-600 truncate"><span class="font-mono text-indigo-500">'+esc(t.task_id)+'</span> '+esc(t.name)+'</div><div class="flex-1 relative h-7 bg-slate-100 rounded-md overflow-hidden"><div class="absolute h-full rounded-md '+bc+' opacity-90 flex items-center px-2 text-[10px] text-white font-medium whitespace-nowrap" style="left:'+lp+'%;width:'+wp+'%">'+t.start_date.slice(5)+'~'+t.end_date.slice(5)+'</div></div><div class="w-20 shrink-0 flex items-center gap-1 justify-end">'+cb+ft+asgn+'</div></div>';});tlHtml+='</div>';if(data.timeline.critical_path&&data.timeline.critical_path.length)tlHtml+='<div class="mt-3 text-xs text-slate-500">\u5173\u952e\u8def\u5f84: <span class="font-mono text-red-600 font-medium">'+data.timeline.critical_path.map(function(id){return esc(id)+' '+esc(tnm[id]||'');}).join(' \u2192 ')+'</span></div>';if(data.timeline.reasoning)tlHtml+='<div class="mt-2 bg-slate-50 border-l-2 border-slate-300 pl-3 py-2 text-xs text-slate-500 italic">'+simpleMarkdown(data.timeline.reasoning)+'</div>';}else{tlHtml+='<p class="text-sm text-slate-400 text-center py-8">\u6682\u65e0\u65f6\u95f4\u7ebf\u6570\u636e</p>';}tlHtml+='</div>';
+var qaHtml='<div class="tab-panel" data-panel="qa" style="display:none">';if(data.qa_matrix&&data.qa_matrix.assignments&&data.qa_matrix.assignments.length){if(data.qa_matrix.workload&&Object.keys(data.qa_matrix.workload).length){var wl=data.qa_matrix.workload;var mxv=Math.max.apply(null,Object.values(wl).concat([0.01]));qaHtml+='<div class="mb-4 space-y-2">';Object.entries(wl).forEach(function(e){var n=e[0],v=e[1];var p=(v/mxv*100).toFixed(0);var om=data.input&&data.input.members?data.input.members.find(function(m){return m.name===n;}):null;var ov=om&&v>(om.available_hours||20);var brc=ov?'bg-red-500':'bg-gradient-to-r from-blue-500 to-indigo-500';qaHtml+='<div class="flex items-center gap-3 text-xs"><span class="w-16 text-slate-600 truncate">'+esc(n)+'</span><div class="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden"><div class="h-full '+brc+' rounded-full transition-all" style="width:'+p+'%"></div></div><span class="w-12 text-right text-slate-500 tabular-nums">'+v.toFixed(1)+'h</span></div>';});qaHtml+='</div>';}qaHtml+='<div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr class="border-b border-slate-200"><th class="text-left py-2 px-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">\u4efb\u52a1</th><th class="text-left py-2 px-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">\u4e3b\u8bb2</th><th class="text-left py-2 px-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">\u4e3b\u7b54</th><th class="text-left py-2 px-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">\u8f85\u7b54</th><th class="text-left py-2 px-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">\u5339\u914d\u5ea6</th></tr></thead><tbody>';data.qa_matrix.assignments.forEach(function(a){var sc=(typeof a.score==='number'&&a.score>0)?'<span class="text-xs font-semibold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-md">'+(a.score*100).toFixed(0)+'%</span>':'<span class="text-xs text-slate-300">-</span>';qaHtml+='<tr class="border-b border-slate-100 hover:bg-slate-50/50 transition"><td class="py-2 px-3 text-slate-700">'+esc(a.task_name)+'</td><td class="py-2 px-3 font-medium text-blue-600">'+esc(a.presenter)+'</td><td class="py-2 px-3 font-medium text-amber-600">'+esc(a.qa_primary)+'</td><td class="py-2 px-3 text-slate-500">'+(a.qa_support||[]).map(esc).join(', ')+'</td><td class="py-2 px-3">'+sc+'</td></tr>';});qaHtml+='</tbody></table></div>';var rs=data.qa_matrix.assignments.filter(function(a){return a.reasoning;});if(rs.length){qaHtml+='<div class="mt-3 space-y-1.5">';rs.forEach(function(a){qaHtml+='<div class="bg-slate-50 border-l-2 border-slate-300 pl-3 py-1.5 text-xs text-slate-500"><span class="font-medium text-slate-600">'+esc(a.task_name)+':</span> '+esc(a.reasoning)+'</div>';});qaHtml+='</div>';}}else{qaHtml+='<p class="text-sm text-slate-400 text-center py-8">\u6682\u65e0 QA \u5206\u914d\u6570\u636e</p>';}qaHtml+='</div>';
+var editHtml='<div class="tab-panel" data-panel="edit" style="display:none">';if(data.plan&&data.plan.tasks&&data.plan.tasks.length){editHtml+='<h4 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">\u4efb\u52a1\u7f16\u8f91</h4><div class="space-y-3" id="editTasksList">';data.plan.tasks.forEach(function(t){editHtml+='<div class="border border-slate-200 rounded-lg p-3 flex items-center gap-3" data-edit-task="'+esc(t.id)+'"><span class="font-mono text-xs font-semibold text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded">'+esc(t.id)+'</span><input type="text" value="'+esc(t.name)+'" class="edit-name flex-1 px-2 py-1 text-sm border border-slate-300 rounded focus:border-blue-500 outline-none"><input type="number" value="'+t.estimated_hours+'" class="edit-hours w-16 px-2 py-1 text-sm border border-slate-300 rounded focus:border-blue-500 outline-none" min="0" step="0.5"><span class="text-xs text-slate-400">h</span><button class="btn-edit-remove px-2 py-1 text-xs rounded border border-red-200 text-red-500 hover:bg-red-50 transition" data-remove="'+esc(t.id)+'">\u5220\u9664</button></div>';});editHtml+='</div><div class="mt-4 flex gap-2"><button id="addTaskBtn" class="inline-flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg border border-dashed border-slate-300 text-slate-500 hover:border-blue-400 hover:text-blue-600 transition"><i data-lucide="plus" class="w-3.5 h-3.5"></i>\u65b0\u589e\u4efb\u52a1</button><button id="applyEditBtn" class="ml-auto inline-flex items-center gap-1.5 px-4 py-1.5 text-sm font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition"><i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>\u5e94\u7528\u4fee\u6539\u5e76\u91cd\u7b97</button></div><div id="editStatus" class="mt-2 text-xs text-slate-400"></div>';
+editHtml+='<hr class="my-4 border-slate-200"><h4 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">\u6210\u5458\u7ba1\u7406\uff08\u7a81\u53d1\u60c5\u51b5\u5904\u7406\uff09</h4><p class="text-[11px] text-slate-400 mb-2">\u6210\u5458\u9000\u8bfe\u3001\u5de5\u65f6\u53d8\u5316\u7b49\u7a81\u53d1\u60c5\u51b5\u53ef\u5728\u6b64\u5904\u7406\uff0c\u4fee\u6539\u540e\u81ea\u52a8\u91cd\u7b97\u5206\u5de5\u548c\u65f6\u95f4\u7ebf</h4><div class="space-y-2" id="memberEditList">';if(data.input&&data.input.members){data.input.members.forEach(function(m){editHtml+='<div class="border border-slate-200 rounded-lg p-3 flex items-center gap-3" data-member="'+esc(m.name)+'"><span class="text-sm font-medium text-slate-700 w-16 truncate">'+esc(m.name)+'</span><label class="text-xs text-slate-500">\u6bcf\u65e5\u5de5\u65f6:</label><input type="number" value="'+m.daily_available_hours+'" class="member-edit-hours w-16 px-2 py-1 text-sm border border-slate-300 rounded focus:border-blue-500 outline-none" min="0.5" max="12" step="0.5"><span class="text-xs text-slate-400">h</span><button class="btn-member-remove ml-auto px-2 py-1 text-xs rounded border border-red-200 text-red-500 hover:bg-red-50 transition">\u79fb\u9664\u6210\u5458</button></div>';});}editHtml+='</div><button id="applyMemberEditBtn" class="mt-3 inline-flex items-center gap-1.5 px-4 py-1.5 text-sm font-semibold rounded-lg bg-amber-600 text-white hover:bg-amber-700 transition"><i data-lucide="users" class="w-3.5 h-3.5"></i>\u5e94\u7528\u6210\u5458\u53d8\u52a8\u5e76\u91cd\u7b97</button><div id="memberEditStatus" class="mt-2 text-xs text-slate-400"></div>';}else{editHtml+='<p class="text-sm text-slate-400 text-center py-8">\u8bf7\u5148\u751f\u6210\u8ba1\u5212</p>';}editHtml+='</div>';
+var rHtml='<div class="tab-panel" data-panel="report" style="display:none">';if(data.report){rHtml+='<div class="prose prose-sm prose-slate max-w-none">';if(data.report.summary)rHtml+='<div class="text-sm text-slate-700 leading-relaxed mb-4">'+simpleMarkdown(data.report.summary)+'</div>';if(data.report.timeline_section)rHtml+='<div class="text-sm text-slate-600 leading-relaxed mb-3 border-t border-slate-100 pt-3">'+simpleMarkdown(data.report.timeline_section)+'</div>';if(data.report.qa_matrix_section)rHtml+='<div class="text-sm text-slate-600 leading-relaxed mb-3 border-t border-slate-100 pt-3">'+simpleMarkdown(data.report.qa_matrix_section)+'</div>';if(data.report.risk_note)rHtml+='<div class="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700 mt-3">'+simpleMarkdown(data.report.risk_note)+'</div>';rHtml+='</div>';}else{rHtml+='<p class="text-sm text-slate-400 text-center py-8">\u6682\u65e0\u62a5\u544a</p>';}rHtml+='</div>';
+var iHtml='<div class="tab-panel" data-panel="interview" style="display:none"><div class="py-6 space-y-3"><div class="space-y-1"><label class="text-xs font-medium text-slate-500 uppercase tracking-wide">\u6a21\u62df\u8981\u6c42\uff08\u53ef\u9009\uff09</label><textarea id="simReq" rows="2" placeholder="\u5982\uff1a\u8bc4\u59d4\u66f4\u770b\u91cd\u6280\u672f\u5b9e\u73b0\u7ec6\u8282" class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500 outline-none transition resize-none"></textarea></div><div class="text-center"><button id="simBtn" class="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-violet-600 to-purple-600 text-white text-sm font-semibold rounded-lg hover:from-violet-700 hover:to-purple-700 active:scale-[0.98] transition-all shadow-sm"><i data-lucide="message-circle-question" class="w-4 h-4"></i>AI \u6a21\u62df\u7b54\u8fa9\u63d0\u95ee</button><div id="simResult" class="mt-4 text-left"></div></div></div></div>';
+area.innerHTML=summaryHtml+tabsHtml+'<div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">'+planHtml+tlHtml+qaHtml+editHtml+rHtml+iHtml+'</div>';lucide.createIcons();bindEditEvents();bindMemberEditEvents();bindStatusEvents();bindInterviewEvents();}
+function bindStatusEvents(){document.querySelectorAll('.status-select').forEach(function(sel){sel.addEventListener('change',function(){var tid=this.getAttribute('data-task-id');var newStatus=this.value;if(!currentData)return;var task=currentData.plan.tasks.find(function(t){return t.id===tid;});if(task)task.status=newStatus;this.className='status-select text-[10px] px-1.5 py-0.5 rounded border border-slate-200 outline-none cursor-pointer ml-1 '+(newStatus==='completed'?'bg-green-100 text-green-700':newStatus==='in_progress'?'bg-blue-100 text-blue-700':'bg-slate-100 text-slate-500');var card=this.closest('.border');if(newStatus==='completed'){card.classList.add('opacity-60');this.nextElementSibling&&this.parentElement.querySelector('.font-medium').classList.add('line-through');}else{card.classList.remove('opacity-60');var nm=this.parentElement.querySelector('.font-medium');if(nm)nm.classList.remove('line-through');}});});}
+function bindEditEvents(){var addBtn=document.getElementById('addTaskBtn');if(addBtn)addBtn.onclick=function(){var c=addBtn.parentElement.previousElementSibling;var nid='T'+(c.children.length+1);var d=document.createElement('div');d.className='border border-blue-300 border-dashed rounded-lg p-3 flex items-center gap-3';d.setAttribute('data-edit-task',nid);d.innerHTML='<span class="font-mono text-xs font-semibold text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">'+nid+'</span><input type="text" placeholder="\u4efb\u52a1\u540d\u79f0" class="edit-name flex-1 px-2 py-1 text-sm border border-slate-300 rounded focus:border-blue-500 outline-none"><input type="number" placeholder="\u5de5\u65f6" class="edit-hours w-16 px-2 py-1 text-sm border border-slate-300 rounded focus:border-blue-500 outline-none" min="0" step="0.5"><span class="text-xs text-slate-400">h</span><button class="btn-edit-remove px-2 py-1 text-xs rounded border border-red-200 text-red-500 hover:bg-red-50 transition" data-remove="'+nid+'">\u5220\u9664</button>';d.querySelector('.btn-edit-remove').onclick=function(){d.remove();};c.appendChild(d);};document.querySelectorAll('.btn-edit-remove').forEach(function(b){b.onclick=function(){b.closest('[data-edit-task]').remove();};});var applyBtn=document.getElementById('applyEditBtn');if(applyBtn)applyBtn.onclick=async function(){if(!currentData)return;applyBtn.disabled=true;var st=document.getElementById('editStatus');st.textContent='\u6b63\u5728\u91cd\u7b97...';var edits=[];var origIds=new Set(currentData.plan.tasks.map(function(t){return t.id;}));var curRows=document.querySelectorAll('[data-edit-task]');var curIds=new Set();curRows.forEach(function(row){var tid=row.getAttribute('data-edit-task');var nm=row.querySelector('.edit-name').value.trim();var hr=parseFloat(row.querySelector('.edit-hours').value)||0;curIds.add(tid);if(!origIds.has(tid))edits.push({op:'add',task:{id:tid,name:nm||'\u65b0\u4efb\u52a1',estimated_hours:hr,dependencies:[],required_skills:[]}});else{var orig=currentData.plan.tasks.find(function(t){return t.id===tid;});if(orig&&(orig.name!==nm||orig.estimated_hours!==hr))edits.push({op:'update',task_id:tid,task:Object.assign({},orig,{name:nm,estimated_hours:hr})});}});origIds.forEach(function(id){if(!curIds.has(id))edits.push({op:'remove',task_id:id});});if(!edits.length){st.textContent='\u6ca1\u6709\u4fee\u6539';applyBtn.disabled=false;return;}try{var resp=await fetch('/api/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({plan:currentData,edits:edits,recompute_timeline:true,recompute_matcher:true})});var data=await resp.json();if(resp.ok){currentData=data;st.textContent='\u91cd\u7b97\u5b8c\u6210\uff01';showWarnings(data);renderResult(data);switchTab('plan');}else{st.textContent='\u5931\u8d25: '+(data.detail||'\u672a\u77e5\u9519\u8bef');}}catch(err){st.textContent='\u5931\u8d25: '+err.message;}finally{applyBtn.disabled=false;}};}
+function bindMemberEditEvents(){document.querySelectorAll('.btn-member-remove').forEach(function(b){b.onclick=function(){var row=b.closest('[data-member]');if(confirm('\u786e\u8ba4\u79fb\u9664\u6210\u5458 '+row.getAttribute('data-member')+' \uff1f\u79fb\u9664\u540e\u5c06\u91cd\u65b0\u5206\u914d\u4efb\u52a1\u3002'))row.remove();};});var applyBtn=document.getElementById('applyMemberEditBtn');if(applyBtn)applyBtn.onclick=async function(){if(!currentData)return;applyBtn.disabled=true;var st=document.getElementById('memberEditStatus');st.textContent='\u6b63\u5728\u91cd\u7b97...';var removed=[];var updated={};var memberRows=document.querySelectorAll('[data-member]');var currentNames=new Set();memberRows.forEach(function(row){var name=row.getAttribute('data-member');currentNames.add(name);var hours=parseFloat(row.querySelector('.member-edit-hours').value)||4;var orig=currentData.input.members.find(function(m){return m.name===name;});if(orig&&orig.daily_available_hours!==hours)updated[name]=hours;});if(currentData.input.members){currentData.input.members.forEach(function(m){if(!currentNames.has(m.name))removed.push(m.name);});}if(!removed.length&&!Object.keys(updated).length){st.textContent='\u6ca1\u6709\u53d8\u52a8';applyBtn.disabled=false;return;}try{var resp=await fetch('/api/edit-members',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({plan:currentData,removed_members:removed,updated_members:updated})});var data=await resp.json();if(resp.ok){currentData=data;st.textContent='\u6210\u5458\u53d8\u52a8\u5df2\u5e94\u7528\uff01';showWarnings(data);renderResult(data);switchTab('qa');}else{st.textContent='\u5931\u8d25: '+(data.detail||'\u672a\u77e5\u9519\u8bef');}}catch(err){st.textContent='\u5931\u8d25: '+err.message;}finally{applyBtn.disabled=false;}};}
+function bindInterviewEvents(){var simBtn=document.getElementById('simBtn');if(!simBtn)return;simBtn.addEventListener('click',async function(){if(!currentData)return;simBtn.disabled=true;simBtn.innerHTML='<span class="inline-block w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></span> \u751f\u6210\u4e2d...';var sr=document.getElementById('simResult');sr.innerHTML='<p class="text-sm text-slate-400">\u6b63\u5728\u751f\u6210\u7b54\u8fa9\u95ee\u9898...</p>';try{var resp=await fetch('/api/interview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({plan:currentData.plan,qa_matrix:currentData.qa_matrix,user_requirements:document.getElementById('simReq').value||''})});var data=await resp.json();if(resp.ok&&data.questions)sr.innerHTML='<div class="bg-violet-50 border border-violet-200 rounded-lg p-4 text-sm text-violet-800 leading-relaxed">'+simpleMarkdown(data.questions)+'</div>';else sr.innerHTML='<p class="text-red-500 text-sm">'+esc(data.detail||'\u751f\u6210\u5931\u8d25')+'</p>';}catch(err){sr.innerHTML='<p class="text-red-500 text-sm">'+esc(err.message)+'</p>';}finally{simBtn.disabled=false;simBtn.innerHTML='<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></svg> AI \u6a21\u62df\u7b54\u8fa9\u63d0\u95ee';}});}
+document.getElementById('saveBtn').addEventListener('click',async function(){if(!currentData)return;try{var resp=await fetch('/api/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(currentData)});var data=await resp.json();if(resp.ok)alert('\u5df2\u4fdd\u5b58\uff1a'+data.filename);else alert('\u4fdd\u5b58\u5931\u8d25: '+(data.detail||'\u672a\u77e5\u9519\u8bef'));}catch(err){alert('\u4fdd\u5b58\u5931\u8d25: '+err.message);}});
+document.getElementById('exportBtn').addEventListener('click',async function(){if(!currentData)return;try{var resp=await fetch('/api/export/markdown',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(currentData)});if(resp.ok){var text=await resp.text();var blob=new Blob([text],{type:'text/markdown;charset=utf-8'});var url=URL.createObjectURL(blob);var a=document.createElement('a');a.href=url;a.download=(currentData.input.course.name||'plan')+'_report.md';a.click();URL.revokeObjectURL(url);}else{alert('\u5bfc\u51fa\u5931\u8d25');}}catch(err){alert('\u5bfc\u51fa\u5931\u8d25: '+err.message);}});
+document.getElementById('loadBtn').addEventListener('click',openPlanList);
+async function openPlanList(){try{var resp=await fetch('/api/plans');var data=await resp.json();var plans=data.plans||[];var html='<div class="modal-backdrop" id="modalBackdrop"><div class="modal"><div class="flex items-center justify-between mb-3"><h3 class="text-base font-semibold text-slate-800">\u5386\u53f2\u8ba1\u5212</h3><button class="w-7 h-7 flex items-center justify-center rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition" id="modalClose"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></div><input type="text" id="planSearch" placeholder="\u641c\u7d22\u6587\u4ef6\u540d..." class="w-full px-3 py-1.5 text-sm border border-slate-300 rounded-lg mb-3 focus:border-blue-500 outline-none"><div class="space-y-2 max-h-72 overflow-y-auto" id="planListContainer">';if(!plans.length)html+='<p class="text-sm text-slate-400 text-center py-6">\u6682\u65e0\u4fdd\u5b58\u7684\u8ba1\u5212</p>';else plans.forEach(function(p){html+='<div class="plan-item flex items-center gap-3 p-3 border border-slate-200 rounded-lg hover:bg-slate-50 transition" data-filename="'+esc(p.filename.toLowerCase())+'"><div class="flex-1 min-w-0"><p class="text-sm font-mono text-slate-600 truncate">'+esc(p.filename)+'</p><p class="text-xs text-slate-400">'+(p.size/1024).toFixed(1)+' KB</p></div><button class="px-3 py-1 text-xs rounded-md border border-slate-300 text-slate-600 hover:bg-blue-50 hover:border-blue-300 hover:text-blue-600 transition" data-load="'+esc(p.filename)+'">\u8f7d\u5165</button><button class="px-3 py-1 text-xs rounded-md border border-red-200 text-red-500 hover:bg-red-50 transition" data-del="'+esc(p.filename)+'">\u5220\u9664</button></div>';});html+='</div></div></div>';var old=document.getElementById('modalBackdrop');if(old)old.remove();document.body.insertAdjacentHTML('beforeend',html);document.getElementById('modalClose').onclick=function(){document.getElementById('modalBackdrop').remove();};document.getElementById('modalBackdrop').onclick=function(e){if(e.target.id==='modalBackdrop')e.target.remove();};document.querySelectorAll('[data-load]').forEach(function(b){b.onclick=function(){loadPlanFile(b.getAttribute('data-load'));};});document.querySelectorAll('[data-del]').forEach(function(b){b.onclick=function(){deletePlanFile(b.getAttribute('data-del'));};});document.getElementById('planSearch').oninput=function(e){var q=e.target.value.toLowerCase();document.querySelectorAll('.plan-item').forEach(function(item){item.style.display=item.getAttribute('data-filename').includes(q)?'flex':'none';});};}catch(err){alert('\u52a0\u8f7d\u5217\u8868\u5931\u8d25: '+err.message);}}
+async function loadPlanFile(fn){try{var resp=await fetch('/api/load/'+encodeURIComponent(fn));var data=await resp.json();if(resp.ok){currentData=data;document.getElementById('saveBtn').disabled=false;document.getElementById('exportBtn').disabled=false;showWarnings(data);renderResult(data);var m=document.getElementById('modalBackdrop');if(m)m.remove();}else alert('\u8f7d\u5165\u5931\u8d25: '+(data.detail||'\u672a\u77e5\u9519\u8bef'));}catch(err){alert('\u8f7d\u5165\u5931\u8d25: '+err.message);}}
+async function deletePlanFile(fn){if(!confirm('\u786e\u8ba4\u5220\u9664 '+fn+' ?'))return;try{var resp=await fetch('/api/plans/'+encodeURIComponent(fn),{method:'DELETE'});if(resp.ok)openPlanList();else alert('\u5220\u9664\u5931\u8d25');}catch(err){alert('\u5220\u9664\u5931\u8d25: '+err.message);}}
+lucide.createIcons();
+</script></body></html>

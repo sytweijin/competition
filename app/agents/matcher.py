@@ -42,7 +42,6 @@ class MatcherAgent(BaseAgent[QAOutput]):
         for a in qa.assignments:
             # 跳过指向不存在任务的分配
             if a.task_id not in task_map:
-                cleaned.append(a.model_copy(update={"task_name": a.task_name}))
                 continue
             presenter = a.presenter if a.presenter in valid_names else fallback
             primary = a.qa_primary if a.qa_primary in valid_names else fallback

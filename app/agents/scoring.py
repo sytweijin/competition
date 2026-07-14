@@ -64,7 +64,7 @@ def assign_with_balance(plan: PlanOutput,
     for t in plan.tasks:
         # 主讲：技能分 - 负载惩罚
         scored = [
-            (m.name, skill_score(m, t.required_skills) - 0.15 * load[m.name])
+            (m.name, skill_score(m, t.required_skills) - 0.25 * load[m.name])
             for m in members
         ]
         scored.sort(key=lambda x: x[1], reverse=True)
@@ -81,7 +81,7 @@ def assign_with_balance(plan: PlanOutput,
         rest2 = [(n, s) for n, s in rest if n not in (primary,)]
         support = [n for n, _ in rest2[:2]]
 
-        best_score = scored[0][1] + 0.15 * load[presenter]
+        best_score = scored[0][1] + 0.25 * load[presenter]
         reasoning = (
             f"{presenter} 技能标签 {_fmt(name_to_skills[presenter])} "
             f"与任务所需 {_fmt(t.required_skills)} 匹配度最高"
@@ -109,8 +109,20 @@ def assign_with_balance(plan: PlanOutput,
         for s in a.qa_support:
             work[s] = work.get(s, 0.0) + h * 0.25
 
-    return QAOutput(assignments=assignments, workload=work,
-                    note="基于技能匹配 + 负载均衡的确定性分配（B3）")
+    # Overload detection
+    overload_warnings = []
+    member_map = {m.name: m for m in members}
+    for name, hours in work.items():
+        m = member_map.get(name)
+        if m and hours > m.available_hours:
+            overload_warnings.append(
+                f"{name} 负载 {hours:.1f}h 超过可用 {m.available_hours:.1f}h"
+            )
+    note = "基于技能匹配 + 负载均衡的确定性分配（B3）"
+    if overload_warnings:
+        note += "；警告：" + "；".join(overload_warnings)
+
+    return QAOutput(assignments=assignments, workload=work, note=note)
 
 
 def _fmt(tags: list[str]) -> str:
