@@ -6,6 +6,7 @@ A / C 在并行开发前必须先看此文件。
 约定：
 - 所有 Agent 输出必须是 Pydantic model，Coordinator 以此做 validate。
 - 错误格式统一为 AgentError。
+- 字段一旦发布即视为「接口契约」，向后兼容，新增字段需带默认值。
 """
 
 from datetime import date
@@ -45,7 +46,11 @@ class TeamMember(BaseModel):
     """团队成员信息"""
     name: str
     skill_tags: list[str] = Field(default_factory=list,
-                                   description="技能标签 e.g. ['前端','Python','PPT']")
+                                  description="技能标签 e.g. ['前端','Python','PPT']")
+    available_hours: float = Field(
+        default=20.0,
+        description="可用工时（人时），B3 负载均衡使用",
+    )
 
 
 class AssignmentInput(BaseModel):
@@ -62,10 +67,10 @@ class SubTask(BaseModel):
     """Planner 输出的一个子任务"""
     id: str = Field(description="唯一标识，如 T1, T2")
     name: str
-    description: str
-    estimated_hours: float = Field(description="预估工时（人时）")
+    description: str = ""
+    estimated_hours: float = Field(default=0.0, description="预估工时（人时）")
     dependencies: list[str] = Field(default_factory=list,
-                                     description="依赖的其他任务 ID 列表")
+                                    description="依赖的其他任务 ID 列表")
     required_skills: list[str] = Field(default_factory=list)
 
 
@@ -74,7 +79,7 @@ class PlanOutput(BaseModel):
     tasks: list[SubTask]
     summary: str = Field(description="总体任务拆解说明")
     reasoning: str = Field(default="",
-                            description="可解释性：为什么这样拆")
+                           description="可解释性：为什么这样拆")
 
 
 # ──────────── Matcher 输出 ────────────
@@ -83,18 +88,24 @@ class QAAssignment(BaseModel):
     """单个任务的 QA 责任分配"""
     task_id: str
     task_name: str
-    chapter: str = Field(description="所属答辩章节/段落")
+    chapter: str = Field(default="", description="所属答辩章节/段落")
     presenter: str = Field(description="主讲人姓名")
     qa_primary: str = Field(description="主答人姓名")
     qa_support: list[str] = Field(default_factory=list,
-                                   description="辅答人列表")
+                                  description="辅答人列表")
+    score: float = Field(default=0.0,
+                         description="B3：该分配的技能匹配得分（0-1）")
     reasoning: str = Field(default="",
-                            description="可解释性：为什么这样分配")
+                           description="可解释性：为什么这样分配")
 
 
 class QAOutput(BaseModel):
     """Matcher Agent 的完整输出"""
     assignments: list[QAAssignment]
+    workload: dict[str, float] = Field(
+        default_factory=dict,
+        description="B3：成员负载摘要 {姓名: 折算工时}",
+    )
     note: str = ""
 
 
@@ -107,6 +118,8 @@ class TimelineTask(BaseModel):
     start_date: date
     end_date: date
     is_critical: bool = Field(description="是否在关键路径上")
+    float_days: int = Field(default=0,
+                            description="浮动天数（0 即关键路径任务）")
     assigned_to: list[str] = Field(default_factory=list)
 
 
@@ -117,7 +130,7 @@ class TimelineOutput(BaseModel):
     total_days: int
     note: str = ""
     reasoning: str = Field(default="",
-                            description="可解释性：关键路径如何得出")
+                           description="可解释性：关键路径如何得出")
 
 
 # ──────────── Report 输出 ────────────
@@ -125,8 +138,8 @@ class TimelineOutput(BaseModel):
 class ReportOutput(BaseModel):
     """最终报告文本"""
     summary: str
-    timeline_section: str
-    qa_matrix_section: str
+    timeline_section: str = ""
+    qa_matrix_section: str = ""
     risk_note: str = ""
 
 
@@ -139,7 +152,30 @@ class FullPlan(BaseModel):
     timeline: TimelineOutput
     qa_matrix: QAOutput
     report: ReportOutput
-    version: str = "0.1.0"
+    version: str = "0.2.0"
+
+
+# ──────────── B4：协作图动态编辑 ────────────
+
+class TaskEdit(BaseModel):
+    """单个任务的编辑操作（B4）。
+
+    op 取值：
+    - "add"    : 新增任务（需提供 task，id 不能与现有冲突）
+    - "remove" : 删除任务（task_id 必须存在）
+    - "update" : 修改任务（task_id 必须存在，task 为新内容）
+    """
+    op: str = Field(description="操作类型：add / remove / update")
+    task_id: str = Field(default="", description="目标任务 ID（remove/update 用）")
+    task: Optional[SubTask] = Field(default=None, description="add/update 的新任务内容")
+
+
+class EditPlanRequest(BaseModel):
+    """B4 编辑计划的请求：基于已有计划应用一系列编辑后重算。"""
+    plan: FullPlan
+    edits: list[TaskEdit]
+    recompute_timeline: bool = Field(default=True, description="是否重算时间线")
+    recompute_matcher: bool = Field(default=True, description="是否重算 QA 矩阵")
 
 
 # ──────────── 通用 ────────────

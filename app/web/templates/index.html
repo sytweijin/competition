@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
@@ -10,11 +10,15 @@
     <div class="app">
         <header>
             <h1>小组合作智能体</h1>
-            <p class="subtitle">输入课程与团队信息，自动生成分工计划、时间线与 QA 责任矩阵</p>
+            <p class="subtitle">输入课程与团队信息，自动生成分工计划、时间线与 QA 责任矩阵，并可动态编辑重算</p>
+            <div class="toolbar">
+                <button type="button" id="loadBtn" class="btn-ghost">📂 历史计划</button>
+                <button type="button" id="saveBtn" class="btn-ghost" disabled>💾 保存当前</button>
+            </div>
         </header>
 
         <section class="input-panel">
-            <h2>输入</h2>
+            <h2>📝 输入</h2>
             <form id="planForm">
                 <div class="form-row">
                     <div class="form-group">
@@ -42,15 +46,23 @@
                     </div>
                     <button type="button" id="addMember" class="btn-small">+ 添加成员</button>
                 </div>
-                <button type="submit" id="runBtn" class="btn-primary">生成计划</button>
+                <button type="submit" id="runBtn" class="btn-primary">⚡ 生成计划</button>
             </form>
         </section>
 
-        <div id="resultArea"></div>
+        <div id="resultArea">
+            <div class="empty-state">
+                <span class="emoji">🗂️</span>
+                填写左侧信息后点击「生成计划」，AI 将自动拆解任务、排期并分配答辩角色
+            </div>
+        </div>
     </div>
 
     <script>
-        document.getElementById('addMember').addEventListener('click', function() {
+        let currentData = null; // 当前生成的完整计划
+
+        // ──────────── 表单交互 ────────────
+        document.getElementById('addMember').addEventListener('click', () => {
             const members = document.getElementById('members');
             const row = document.createElement('div');
             row.className = 'member-row';
@@ -59,11 +71,23 @@
             members.appendChild(row);
         });
 
-        document.getElementById('planForm').addEventListener('submit', async function(e) {
+        // 默认日期：今天 +14 天
+        {
+            const d = new Date(); d.setDate(d.getDate() + 14);
+            document.getElementById('deadline').value = d.toISOString().slice(0, 10);
+        }
+
+        function esc(s) {
+            return String(s == null ? '' : s)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
+        // ──────────── 生成计划 ────────────
+        document.getElementById('planForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             const btn = document.getElementById('runBtn');
             const area = document.getElementById('resultArea');
-
             btn.disabled = true;
             btn.textContent = '生成中...';
             area.innerHTML = '<div class="loading-state"><div class="spinner"></div><p>正在调用 AI 生成计划，请稍候...</p></div>';
@@ -96,38 +120,37 @@
                 });
                 const data = await resp.json();
                 if (resp.ok) {
+                    currentData = data;
+                    document.getElementById('saveBtn').disabled = false;
                     area.innerHTML = renderResult(data);
                 } else {
-                    area.innerHTML = '<div class="error-state">请求失败: ' + (data.detail || '未知错误') + '</div>';
+                    area.innerHTML = '<div class="error-state">请求失败: ' + esc(data.detail || '未知错误') + '</div>';
                 }
             } catch (err) {
-                area.innerHTML = '<div class="error-state">请求失败: ' + err.message + '</div>';
+                area.innerHTML = '<div class="error-state">请求失败: ' + esc(err.message) + '</div>';
             } finally {
                 btn.disabled = false;
-                btn.textContent = '生成计划';
+                btn.textContent = '⚡ 生成计划';
             }
         });
 
-        function esc(s) {
-            if (!s) return '';
-            return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-        }
-
+        // ──────────── 渲染结果 ────────────
         function renderResult(data) {
             let html = '<div class="result-panel">';
 
-            // Plan
-            if (data.plan) {
-                html += '<div class="result-section"><h3>任务拆解</h3><div class="section-body">';
+            // 概要
+            if (data.plan && data.plan.summary) {
                 html += '<div class="summary-box">' + esc(data.plan.summary) + '</div>';
-                html += '<div class="task-list">';
-                (data.plan.tasks || []).forEach(t => {
-                    html += '<div class="task-card">' +
-                        '<div class="task-header">' +
+            }
+
+            // 任务计划
+            if (data.plan && data.plan.tasks && data.plan.tasks.length) {
+                html += '<div class="result-section"><h3>📋 任务计划</h3><div class="section-body"><div class="task-list">';
+                data.plan.tasks.forEach(t => {
+                    html += '<div class="task-card"><div class="task-header">' +
                         '<span class="task-id">' + esc(t.id) + '</span>' +
                         '<span class="task-name">' + esc(t.name) + '</span>' +
-                        '<span class="task-hours">' + t.estimated_hours + 'h</span>' +
-                        '</div>';
+                        '<span class="task-hours">' + esc(t.estimated_hours) + 'h</span></div>';
                     if (t.description) html += '<div class="task-desc">' + esc(t.description) + '</div>';
                     html += '<div class="task-meta">';
                     if (t.dependencies && t.dependencies.length) {
@@ -145,37 +168,44 @@
                 html += '</div></div>';
             }
 
-            // Timeline
+            // 时间线（Gantt）
             if (data.timeline && data.timeline.tasks && data.timeline.tasks.length) {
-                html += '<div class="result-section"><h3>时间线</h3>';
+                html += '<div class="result-section"><h3>📅 时间线（CPM 关键路径）</h3>';
                 if (data.timeline.note) html += '<div class="section-note">' + esc(data.timeline.note) + '</div>';
-                html += '<div class="section-body"><div class="gantt-container">';
+                html += '<div class="section-body">';
+                html += '<div class="legend">' +
+                    '<span><span class="dot critical"></span>关键路径</span>' +
+                    '<span><span class="dot normal"></span>可浮动</span>';
+                if (data.timeline.total_days) html += '<span>总工期 ' + esc(data.timeline.total_days) + ' 天</span>';
+                html += '</div>';
+                html += '<div class="gantt-container">';
                 const tasks = data.timeline.tasks;
-                // Find date range
                 let minDate = tasks[0].start_date, maxDate = tasks[0].end_date;
                 tasks.forEach(t => {
                     if (t.start_date < minDate) minDate = t.start_date;
                     if (t.end_date > maxDate) maxDate = t.end_date;
                 });
                 const totalDays = Math.ceil((new Date(maxDate) - new Date(minDate)) / 86400000) || 1;
-
                 tasks.forEach(t => {
                     const offset = Math.ceil((new Date(t.start_date) - new Date(minDate)) / 86400000);
                     const dur = Math.ceil((new Date(t.end_date) - new Date(t.start_date)) / 86400000) || 1;
                     const leftPct = (offset / totalDays) * 100;
-                    const widthPct = Math.max((dur / totalDays) * 100, 5);
+                    const widthPct = Math.max((dur / totalDays) * 100, 4);
                     const cls = t.is_critical ? 'critical' : 'normal';
+                    const floatTxt = (!t.is_critical && t.float_days) ? ' · 浮动' + t.float_days + 'd' : '';
+                    const assignee = (t.assigned_to && t.assigned_to.length) ? ' · ' + t.assigned_to.map(esc).join('/') : '';
                     html += '<div class="gantt-row">' +
                         '<div class="gantt-label">' + esc(t.task_id) + ' ' + esc(t.name) + '</div>' +
                         '<div class="gantt-bar-wrap">' +
                         '<div class="gantt-bar ' + cls + '" style="left:' + leftPct + '%;width:' + widthPct + '%">' +
-                        t.start_date.slice(5) + ' ~ ' + t.end_date.slice(5) +
-                        '</div></div></div>';
+                        t.start_date.slice(5) + '~' + t.end_date.slice(5) + floatTxt +
+                        '</div></div>' +
+                        '<div class="gantt-assignee">' + assignee.replace(' · ', '') + '</div></div>';
                 });
                 html += '</div>';
                 if (data.timeline.critical_path && data.timeline.critical_path.length) {
-                    html += '<div class="task-meta" style="margin-top:0.5rem"><span class="dep">关键路径: ' +
-                        data.timeline.critical_path.map(esc).join(' -> ') + '</span></div>';
+                    html += '<div class="task-meta" style="margin-top:0.6rem"><span class="dep">关键路径: ' +
+                        data.timeline.critical_path.map(esc).join(' → ') + '</span></div>';
                 }
                 if (data.timeline.reasoning) {
                     html += '<div class="reasoning-box">' + esc(data.timeline.reasoning) + '</div>';
@@ -183,43 +213,134 @@
                 html += '</div></div>';
             }
 
-            // QA Matrix
+            // 负载摘要（B3）
+            if (data.qa_matrix && data.qa_matrix.workload && Object.keys(data.qa_matrix.workload).length) {
+                const wl = data.qa_matrix.workload;
+                const maxV = Math.max(...Object.values(wl), 0.01);
+                html += '<div class="result-section"><h3>⚖️ 成员负载</h3><div class="section-body"><div class="workload-list">';
+                Object.entries(wl).forEach(([name, val]) => {
+                    html += '<div class="workload-row"><span class="workload-name">' + esc(name) + '</span>' +
+                        '<div class="workload-track"><div class="workload-fill" style="width:' + (val / maxV * 100) + '%"></div></div>' +
+                        '<span class="workload-val">' + val.toFixed(1) + 'h</span></div>';
+                });
+                html += '</div></div></div>';
+            }
+
+            // QA 矩阵
             if (data.qa_matrix && data.qa_matrix.assignments && data.qa_matrix.assignments.length) {
-                html += '<div class="result-section"><h3>QA 责任矩阵</h3><div class="section-body">';
-                html += '<table><thead><tr><th>任务</th><th>主讲</th><th>主答</th><th>辅答</th></tr></thead><tbody>';
+                html += '<div class="result-section"><h3>🎯 QA 责任矩阵</h3><div class="section-body">';
+                html += '<div class="table-wrap"><table><thead><tr><th>任务</th><th>主讲</th><th>主答</th><th>辅答</th><th>匹配</th></tr></thead><tbody>';
                 data.qa_matrix.assignments.forEach(a => {
+                    const sc = (typeof a.score === 'number' && a.score > 0) ? '<span class="score-pill">' + (a.score * 100).toFixed(0) + '%</span>' : '';
                     html += '<tr><td>' + esc(a.task_name) + '</td>' +
                         '<td class="role-presenter">' + esc(a.presenter) + '</td>' +
                         '<td class="role-qa">' + esc(a.qa_primary) + '</td>' +
-                        '<td class="role-support">' + (a.qa_support || []).map(esc).join(', ') + '</td></tr>';
+                        '<td class="role-support">' + (a.qa_support || []).map(esc).join(', ') + '</td>' +
+                        '<td>' + sc + '</td></tr>';
                 });
-                html += '</tbody></table>';
+                html += '</tbody></table></div>';
                 data.qa_matrix.assignments.forEach(a => {
                     if (a.reasoning) {
                         html += '<div class="reasoning-box">' + esc(a.task_name) + ': ' + esc(a.reasoning) + '</div>';
                     }
                 });
+                if (data.qa_matrix.note) {
+                    html += '<div class="reasoning-box">' + esc(data.qa_matrix.note) + '</div>';
+                }
                 html += '</div></div>';
             }
 
-            // Report
+            // 报告
             if (data.report) {
-                html += '<div class="result-section"><h3>报告</h3><div class="section-body">';
+                html += '<div class="result-section"><h3>📄 报告</h3><div class="section-body">';
                 html += '<div class="report-section">' + esc(data.report.summary) + '</div>';
-                if (data.report.timeline_section) {
-                    html += '<div class="report-section" style="margin-top:0.5rem">' + esc(data.report.timeline_section) + '</div>';
-                }
-                if (data.report.qa_matrix_section) {
-                    html += '<div class="report-section" style="margin-top:0.5rem">' + esc(data.report.qa_matrix_section) + '</div>';
-                }
-                if (data.report.risk_note) {
-                    html += '<div class="report-risk">' + esc(data.report.risk_note) + '</div>';
-                }
+                if (data.report.timeline_section) html += '<div class="report-section">' + esc(data.report.timeline_section) + '</div>';
+                if (data.report.qa_matrix_section) html += '<div class="report-section">' + esc(data.report.qa_matrix_section) + '</div>';
+                if (data.report.risk_note) html += '<div class="report-risk">' + esc(data.report.risk_note) + '</div>';
                 html += '</div></div>';
             }
 
             html += '</div>';
             return html;
+        }
+
+        // ──────────── B2：保存当前 ────────────
+        document.getElementById('saveBtn').addEventListener('click', async () => {
+            if (!currentData) return;
+            try {
+                const resp = await fetch('/api/save', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(currentData)
+                });
+                const data = await resp.json();
+                if (resp.ok) {
+                    alert('已保存：' + data.filename);
+                } else {
+                    alert('保存失败: ' + (data.detail || '未知错误'));
+                }
+            } catch (err) { alert('保存失败: ' + err.message); }
+        });
+
+        // ──────────── B2：历史计划 ────────────
+        document.getElementById('loadBtn').addEventListener('click', openPlanList);
+
+        async function openPlanList() {
+            try {
+                const resp = await fetch('/api/plans');
+                const data = await resp.json();
+                const plans = data.plans || [];
+                let html = '<div class="modal-backdrop" id="modalBackdrop"><div class="modal"><h3>历史计划</h3>';
+                if (!plans.length) {
+                    html += '<p style="color:var(--text-muted);text-align:center;padding:1.5rem">暂无保存的计划</p>';
+                } else {
+                    html += '<div class="plan-list">';
+                    plans.forEach(p => {
+                        html += '<div class="plan-item"><span class="name">' + esc(p.filename) + '</span>' +
+                            '<span class="size">' + (p.size / 1024).toFixed(1) + 'KB</span>' +
+                            '<button class="btn-ghost" data-load="' + esc(p.filename) + '">载入</button>' +
+                            '<button class="btn-danger" data-del="' + esc(p.filename) + '">删除</button></div>';
+                    });
+                    html += '</div>';
+                }
+                html += '<div class="modal-actions"><button class="btn-ghost" id="modalClose">关闭</button></div></div></div>';
+                const old = document.getElementById('modalBackdrop');
+                if (old) old.remove();
+                document.body.insertAdjacentHTML('beforeend', html);
+
+                document.getElementById('modalClose').onclick = () => document.getElementById('modalBackdrop').remove();
+                document.getElementById('modalBackdrop').onclick = (e) => {
+                    if (e.target.id === 'modalBackdrop') e.target.remove();
+                };
+                document.querySelectorAll('[data-load]').forEach(b => {
+                    b.onclick = () => loadPlanFile(b.getAttribute('data-load'));
+                });
+                document.querySelectorAll('[data-del]').forEach(b => {
+                    b.onclick = () => deletePlanFile(b.getAttribute('data-del'));
+                });
+            } catch (err) { alert('加载列表失败: ' + err.message); }
+        }
+
+        async function loadPlanFile(filename) {
+            try {
+                const resp = await fetch('/api/load/' + encodeURIComponent(filename));
+                const data = await resp.json();
+                if (resp.ok) {
+                    currentData = data;
+                    document.getElementById('saveBtn').disabled = false;
+                    document.getElementById('resultArea').innerHTML = renderResult(data);
+                    const m = document.getElementById('modalBackdrop'); if (m) m.remove();
+                    window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+                } else { alert('载入失败: ' + (data.detail || '未知错误')); }
+            } catch (err) { alert('载入失败: ' + err.message); }
+        }
+
+        async function deletePlanFile(filename) {
+            if (!confirm('确认删除 ' + filename + ' ?')) return;
+            try {
+                const resp = await fetch('/api/plans/' + encodeURIComponent(filename), { method: 'DELETE' });
+                if (resp.ok) { openPlanList(); } else { alert('删除失败'); }
+            } catch (err) { alert('删除失败: ' + err.message); }
         }
     </script>
 </body>

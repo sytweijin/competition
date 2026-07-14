@@ -1,150 +1,156 @@
-﻿# 小组合作智能体 - 课程作业
+﻿# 小组合作智能体 — 课程作业
 
 ## 一句话定位
 
-> 别人给你一张**静态分工表**；我们给你一张**可编辑的活协作图**，每个任务都带**角色化的 QA 归属**-- 计划随现实变化而重算。
+> 别人给你一张**静态分工表**；我们给你一张**可编辑的活协作图**——每个任务带角色化的 QA 归属，计划随现实变化而**实时重算**。
 
+输入「课程信息 + 团队成员 + 截止日」，系统自动：**拆解任务 → CPM 排期 → 技能匹配分配答辩角色 → 生成报告**，并支持随时增删改任务、即时重算。
 
-## 当前进度（截至 2026-07-13）
+## 系统架构
 
-| 编号 | 模块 | 状态 | 负责人 | 备注 |
+```
+AssignmentInput (课程/成员/截止日)
+        │
+        ▼
+ ┌─────────────┐    ┌─────────────┐    ┌──────────────┐    ┌────────────┐
+ │  Planner    │───▶│  Matcher    │───▶│   Timeline   │───▶│  Reporter  │
+ │ (LLM 拆任务) │    │ (LLM+B3评分) │    │ (CPM 关键路径)│    │ (LLM+兜底) │
+ └─────────────┘    └─────────────┘    └──────────────┘    └────────────┘
+        │                  │                   │                  │
+        ▼                  ▼                   ▼                  ▼
+   validate_plan     skill_score          倒排日期+浮动        FullPlan
+   (去重/去环/清依赖) enhance/workload     回填负责人
+                                                              │
+                          ┌───────────────────────────────────┘
+                          ▼
+                     B4 动态编辑 (add/remove/update) → 重算 Timeline + Matcher
+```
+
+**设计原则**：LLM 负责创造性拆解，确定性算法负责正确性保证（关键路径、技能评分、负载均衡、依赖校验）。每个 Agent 失败都有兜底，主链路永不中断。
+
+## 当前进度（截至 2026-07-14）
+
+| 编号 | 模块 | 状态 | 负责人 | 说明 |
 |------|------|------|--------|------|
-| Step 0 | JSON 接口契约 (`schemas.py`) | done | B | 所有 Agent 输入输出已定义 |
-| A1 | LLM 调用封装 (`client.py`) | done | B | Structured Output + 重试 |
-| A2 | Coordinator 主链路 (`coordinator.py`) | done | B | Planner->Matcher->Timeline->Report |
-| A5 | FastAPI + 只读 Web (`main.py` / `routes.py` / `index.html`) | done | B | Gantt时间线+QA表格+报告展示 |
-| - | Agent 基类 + Reporter | done | B | Prompt 优化 + 兜底报告 |
-| B1 | 答辩模拟 Agent | done | B | Prompt 已优化，5 维度覆盖 |
-| - | 测试 (test_coordinator / test_api) | done | B | mock 测试已写 |
-| - | Planner Agent | **skeleton** | **A** | 骨架已搭，**Prompt 和校验逻辑待完成** |
-| - | Matcher Agent | **skeleton** | **C** | 骨架已搭，**QA 矩阵 + 可解释性待完成** |
-| - | Timeline Agent | done | B | CPM 算法关键路径计算已实现 |
-| B2 | Memory (保存/加载计划 JSON) | done | B | save/load/list API 已实现 |
-| B3 | 完整角色匹配 | not started | B | |
-| B4 | 协作图动态编辑 | not started | B | 落后即砍 |
+| Step 0 | JSON 接口契约 (`schemas.py`) | ✅ done | B | 含 B3/B4 扩展模型 |
+| A1 | LLM 调用封装 (`client.py`) | ✅ done | B | Structured Output + 重试 |
+| A2 | Coordinator 主链路 (`coordinator.py`) | ✅ done | B | Planner→Matcher→Timeline→Report |
+| A5 | FastAPI + Web (`main.py`/`routes.py`/`index.html`) | ✅ done | B | Gantt+QA表+负载条+Memory+编辑 |
+| A3/A4 | Matcher（QA矩阵） | ✅ done | B+C | LLM + B3 评分增强 + 成员名校验 |
+| — | Timeline Agent (`timeline.py`) | ✅ done | B | CPM 算法，环容错，可配置工时 |
+| — | Reporter Agent (`reporter.py`) | ✅ done | B | LLM + 纯文本兜底 |
+| B1 | 答辩模拟 Agent (`interview_sim.py`) | ✅ done | B | 5 维度，优先级标注 |
+| B2 | Memory (`routes.py` save/load/list/delete) | ✅ done | B | 计划持久化 + Web 管理 |
+| **B3** | **完整角色匹配 (`scoring.py`)** | ✅ **done** | B | 技能相似度评分 + 负载均衡 + workload |
+| **B4** | **协作图动态编辑 (`editor.py`)** | ✅ **done** | B | add/remove/update + 重算 |
+| — | Planner Agent | skeleton | A | 骨架 + 兜底校验已就位，Prompt 待 A 调优 |
+| — | 测试 (24 个) | ✅ done | B | CPM/Scoring/Editor/Coordinator/API 全覆盖 |
 
-## 近期变更
+## 近期变更（最新迭代）
 
-- Web 前端重做：Gantt 式时间线可视化、QA 矩阵表格美化、报告展示区、加载动画
-- B2 Memory：实现了 save/load/list API，计划可保存到 memory 目录并重新加载
-- B1 答辩模拟：Prompt 优化为 5 维度（技术/分工/进度/风险/QA），带优先级标注
-- Planner Prompt：修复了 LLM 漏输出 summary 字段的问题
-- Timeline：修复了 BaseAgent 初始化 LLM 的 bug 和遍历 SubTask 对象的 bug
-- 分工调整：Timeline 和 Reporter 从 C 转到 B，C 只负责 Matcher（QA责任矩阵），减轻 C 的负担；分支名 `agent/timeline-qa` 改为 `agent/matcher`
-- Timeline Agent：实现了 CPM 关键路径算法（拓扑排序 + Forward/Backward pass），不依赖 LLM，纯算法
-- Reporter Agent：优化了 Prompt，增加了 LLM 失败时的纯文本兜底报告
-- `BRANCHES.md`: 将 `git add -A` 改为 `git add .`，提交前加了 `git status` 检查，避免误提交不相关文件
-- `config.py`: 移除了硬编码的 API Key 默认值
+### 代码质量与健壮性
+- **Agent 返回类型统一**：`run()` 显式声明 `PlanOutput | AgentError`，消除类型契约不一致
+- **计划校验兜底**：新增 `validation.py`——去重 task id、剔除悬空依赖、Kahn 环检测，Planner 输出与 B4 编辑共用
+- **Matcher 成员名校验**：剔除 LLM 编造的不存在成员名，自动回退到真实成员
+- **Matcher 降级**：LLM 不可用时自动启用 B3 确定性匹配，不再返回空矩阵
 
-## 队友待办
+### Timeline 精细化（响应「时间倒排更灵活」）
+- `hours_per_day` **可配置**（请求级参数），工时→天数折算不再硬编码
+- **依赖环容错**：不再直接返回空，而是断环继续排期并标注风险
+- 输出每个任务的 **`float_days`（浮动天数）**，前端展示非关键任务的弹性
+- QA 矩阵负责人**回填**到时间线，Gantt 条上显示谁负责
 
-### 队友 A -- Planner Agent
+### B3 完整角色匹配（新）
+- `scoring.py`：基于技能标签相似度（SequenceMatcher）的确定性评分引擎
+- 贪心 + 负载均衡分配主讲/主答/辅答，避免某人任务过重
+- 生成 **workload 负载摘要**（主讲=全工时，主答=0.5，辅答=0.25），前端可视化条形图
 
-1. **Prompt 迭代**：当前 `prompts.py` 里的 `PLANNER_SYSTEM` 是基础版，需要根据实际输出质量反复调优，让 Planner 拆出合理的 5-8 个子任务（工时、依赖都要靠谱）
-2. **输出校验**：在 `planner.py` 的 `run()` 里添加校验逻辑 -- task id 唯一性、依赖不能指向不存在的任务、依赖环检测
-3. **自测**：用真实课程信息跑几次，确保输出符合 `PlanOutput` schema
+### B4 协作图动态编辑（新）
+- `editor.py`：对 FullPlan 应用 `add/remove/update` 编辑序列
+- 编辑后**自动重算** Timeline(CPM) 与 Matcher(B3)，实现「计划随现实重算」
+- 新增 `/api/edit` 路由 + DELETE `/api/plans/{filename}`
 
-### 队友 C -- Matcher Agent
+### Web 精致化
+- Gantt 加入**日期刻度网格 + 关键路径图例 + 浮动天数 + 负责人**
+- 新增**成员负载条形图**（B3 workload 可视化）
+- 新增**历史计划**弹窗（载入/删除）、**保存当前**按钮（B2 完整暴露）
+- 渐变标题、空状态、响应式表格、hover 微交互
 
-1. **QA 责任矩阵 (A3)**：当前 `matcher.py` 只调了 LLM，需要扩展 QA 责任矩阵生成逻辑 -- 答辩细分 + 谁主讲/谁主答/谁辅答
-2. **可解释性**：每个匹配结果附一句"为什么张三主答第3章"
-3. **Prompt 迭代**：`MATCHER_SYSTEM` 需要根据实际输出反复调优
-
-### 共同注意事项
-
-- **先读 `schemas.py`**：所有 Agent 的输入输出 JSON 格式都在 `app/models/schemas.py`，这是接口契约，不要随意改字段
-- **开发流程**：按 `BRANCHES.md` 操作 -- 每天先 merge main，下班前 push 自己的分支
-- **有问题找 B**：接口冲突或跑不通时先停下来对齐，不要硬合
-- **Timeline 和 Reporter 由 B 负责**：这两块从 C 调整到 B，减轻 C 的负担
-
+### 测试
+- 从 2 个测试扩展到 **24 个**：Timeline CPM（7）、Scoring（7）、Editor（8）、Coordinator、API
 
 ## 项目结构
 
 ```
 competition/
-├── .env.example              # 环境变量模板（复制为 .env 后编辑）
-├── .gitignore
-├── BRANCHES.md               # 分支策略说明
-├── README.md
-├── requirements.txt
-├── app/                      # 主应用
-│   ├── __init__.py
-│   ├── main.py               # FastAPI 入口（B 负责）
+├── app/
+│   ├── main.py               # FastAPI 入口
 │   ├── config.py             # 全局配置
-│   ├── coordinator.py        # 总调度：编排 A2 主链路（B 负责）
-│   ├── models/
-│   │   ├── __init__.py
-│   │   └── schemas.py        # JSON 接口契约 ← 第0步，必须先定
+│   ├── coordinator.py        # 总调度：主链路编排
+│   ├── editor.py             # B4：动态编辑 + 重算
+│   ├── models/schemas.py     # JSON 接口契约（含 B3/B4 模型）
 │   ├── agents/
-│   │   ├── __init__.py
 │   │   ├── base.py           # Agent 基类
-│   │   ├── planner.py        # Planner    <- 队友A 端到端负责
-│   │   ├── matcher.py        # Matcher    <- 队友C 端到端负责
-│   │   ├── timeline.py       # Timeline   <- B 负责
-│   │   ├── reporter.py       # Report 格式化
-│   │   └── interview_sim.py  # 答辩模拟   ← B1，B 负责
+│   │   ├── planner.py        # Planner（A 负责 Prompt）
+│   │   ├── matcher.py        # Matcher：QA 矩阵 + 校验
+│   │   ├── scoring.py        # B3：技能评分 + 负载均衡
+│   │   ├── timeline.py       # Timeline：CPM 关键路径
+│   │   ├── reporter.py       # 报告格式化
+│   │   ├── interview_sim.py  # B1：答辩模拟
+│   │   └── validation.py     # 计划校验（去重/去环/清依赖）
 │   ├── llm/
-│   │   ├── __init__.py
-│   │   ├── client.py         # A1: LLM 调用封装
-│   │   └── prompts.py        # 所有 Prompt 模板
+│   │   ├── client.py         # LLM 调用封装
+│   │   └── prompts.py        # Prompt 模板
 │   └── web/
-│       ├── __init__.py
-│       ├── routes.py         # FastAPI 路由
-│       ├── templates/
-│       │   └── index.html    # 演示用前端
-│       └── static/
-│           └── style.css
-├── scripts/
-│   └── setup_git.sh          # Git 初始化脚本
-├── tests/                    # 单元测试
-│   ├── __init__.py
-│   ├── test_coordinator.py
-│   └── test_api.py
-├── memory/                   # B2: 计划状态的保存/加载
-├── docs/                     # 项目文档（docx + MVP 拆解方案）
-└── notebooks/                # 实验/探索用
+│       ├── routes.py         # FastAPI 路由（run/edit/save/load）
+│       ├── templates/index.html
+│       └── static/style.css
+├── tests/                    # 24 个单元/集成测试
+├── memory/                   # B2 计划持久化
+├── docs/                     # 项目文档
+└── requirements.txt
 ```
+
+## API 参考
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/run` | 生成完整计划（可选 `hours_per_day`） |
+| POST | `/api/edit` | B4：应用编辑并重算 |
+| POST | `/api/save` | B2：保存计划到 memory |
+| GET | `/api/plans` | B2：列出已保存计划 |
+| GET | `/api/load/{filename}` | B2：载入计划 |
+| DELETE | `/api/plans/{filename}` | B2：删除计划 |
+| GET | `/api/health` | 健康检查 |
 
 ## 三人分工
 
-| 人 | 角色 | 端到端负责 | 占提交比重 |
+| 人 | 角色 | 端到端负责 | 占比 |
 |---|---|---|---|
-| **B** | 软件工程 | 骨架 + LLM封装 + FastAPI/Web + Coordinator + Timeline + Reporter + 集成 + 答辩模拟(B1) + Memory(B2) | ~50%+ |
-| **A** | Agent 设计 | **Planner Agent**：课程→子任务JSON | ~25% |
-| **C** | 知识增强 | **Matcher（QA矩阵）**：责任矩阵 + 可解释性 | ~25% |
-
-## 分支策略
-
-团队协作分支说明见 [BRANCHES.md](BRANCHES.md)。简要原则：
-- 每人一个独享开发分支，互不干扰
-- **只有 B** 能合并到 `main`
-- 每天至少集成一次，避免最后一天爆炸
+| **B** | 软件工程 | 骨架 + LLM封装 + Coordinator + Timeline + Reporter + Matcher增强(B3) + 动态编辑(B4) + Web + Memory(B2) + 答辩模拟(B1) + 测试 | ~55% |
+| **A** | Agent 设计 | **Planner**：Prompt 调优 + 输出质量（校验兜底已由 B 提供） | ~22% |
+| **C** | 知识增强 | **Matcher QA 矩阵**：Prompt + 可解释性（评分增强已由 B 提供） | ~23% |
 
 ## 快速启动
 
 ```bash
-# 安装依赖
 pip install -r requirements.txt
-
-# 配置环境变量（复制并编辑）
-cp .env.example .env
-
-# 启动服务
-python -m app.main
+cp .env.example .env   # 编辑填入 LLM_API_KEY
+python -m app.main     # 默认 http://127.0.0.1:8000
 ```
 
-## MVP 节奏
+## 运行测试
 
-> 以下为最初规划，实际进度以「当前进度」表为准。
+```bash
+python -m pytest -q    # 24 passed
+```
 
-- **D1**：定数据模型 + LLM封装 + FastAPI骨架 + Hello World + 最小垂直切片
-- **D2**：Planner + Matcher Prompt 迭代，主链路跑通
-- **D3**：Timeline + QA 矩阵 + 可解释性
-- **D4**：只读Web + 答辩模拟 + 边界用例测试
-- **D5**：联调 + 演示彩排 + 收尾
+## 分支策略
 
-## 提交范围（课程作业版）
+详见 [BRANCHES.md](BRANCHES.md)。每人一个独享分支，只有 B 合并 `main`，每天至少集成一次。
 
-A 类（必做）：A1~A5
-B 类（加做）：B1 优先，B4 落后即砍
-C 类：比赛阶段再扩展
+## 提交范围
+
+- **A 类（必做）**：A1~A5 ✅
+- **B 类（加做）**：B1 答辩模拟 ✅、B2 Memory ✅、B3 完整角色匹配 ✅、B4 协作图动态编辑 ✅
+- **C 类**：比赛阶段再扩展
