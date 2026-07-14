@@ -152,7 +152,7 @@ class FullPlan(BaseModel):
     timeline: TimelineOutput
     qa_matrix: QAOutput
     report: ReportOutput
-    version: str = "1.0"
+    version: str = "1.1"
 
 
 # ──────────── B4：协作图动态编辑 ────────────

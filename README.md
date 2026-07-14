@@ -177,7 +177,7 @@ python -m app.main     # 默认 http://127.0.0.1:8000
 ## 运行测试
 
 ```bash
-python -m pytest -v    # 24 passed
+python -m pytest -v    # 39 passed
 ```
 
 ## 分支策略
@@ -189,3 +189,17 @@ python -m pytest -v    # 24 passed
 - **A 类（必做）**：A1~A5 ✅
 - **B 类（加做）**：B1 答辩模拟 ✅、B2 Memory ✅、B3 完整角色匹配 ✅、B4 协作图动态编辑 ✅
 - **C 类**：比赛阶段再扩展
+
+## 单 Agent 调试
+
+不需要启动 Web 服务，可以单独运行任意一个 Agent 来调试 Prompt 或算法。
+详细用法见 [单 Agent 调试指南](docs/单Agent调试指南.md)。
+
+快速示例：
+```bash
+python -m app.cli planner --course "软件工程" --desc "小组项目" --members "张三:前端,李四:后端" --deadline 2026-08-01
+```
+
+## 变更历史
+
+详细版本变更记录见 [CHANGELOG.md](CHANGELOG.md)，包含每一版的改动内容、原因分析和收益说明。

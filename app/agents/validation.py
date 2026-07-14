@@ -30,6 +30,7 @@ def validate_plan(plan: PlanOutput) -> PlanOutput:
     ids = [t.id for t in tasks]
     # 去重保护：若出现重复 id，按出现顺序加后缀
     seen: dict[str, int] = {}
+    id_remap: dict[str, str] = {}  # original_id -> deduped_id
     deduped: list[SubTask] = []
     for t in tasks:
         if t.id in seen:
@@ -38,8 +39,15 @@ def validate_plan(plan: PlanOutput) -> PlanOutput:
         else:
             seen[t.id] = 0
             new_id = t.id
+        id_remap[t.id] = new_id
         deduped.append(t.model_copy(update={"id": new_id}))
     tasks = deduped
+
+    # Remap dependencies after dedup
+    for i, t in enumerate(tasks):
+        if t.dependencies:
+            remapped = [id_remap.get(d, d) for d in t.dependencies]
+            tasks[i] = t.model_copy(update={"dependencies": remapped})
     valid_ids = {t.id for t in tasks}
 
     # 剔除悬空依赖

@@ -15,7 +15,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 
-app = FastAPI(title="小组合作智能体", version="0.1.0")
+app = FastAPI(title="小组合作智能体", version="1.1")
 
 # 注册路由
 from app.web.routes import router as api_router

@@ -51,4 +51,11 @@ class MatcherAgent(BaseAgent[QAOutput]):
                 "qa_primary": primary,
                 "qa_support": support,
             }))
+        if not cleaned:
+            return AgentError(
+                agent="Matcher",
+                error_type="validation_error",
+                message="LLM assignments all reference invalid members/tasks",
+                recoverable=True,
+            )
         return qa.model_copy(update={"assignments": cleaned})

@@ -16,7 +16,7 @@ import logging
 
 from app.models.schemas import (
     AgentError, AssignmentInput, FullPlan, PlanOutput,
-    QAOutput, TimelineOutput, ReportOutput,
+    QAOutput, TimelineOutput, ReportOutput, SubTask,
 )
 from app.agents.planner import PlannerAgent
 from app.agents.matcher import MatcherAgent
@@ -44,7 +44,9 @@ class Coordinator:
         # Step 1: Planner
         plan = self._step_planner(inp)
         if isinstance(plan, AgentError):
-            raise RuntimeError(f"Planner failed: {plan.message}")
+            logger.warning("Planner LLM failed, use deterministic fallback: %s",
+                           plan.message)
+            plan = self._fallback_plan(inp, plan.message)
 
         # Step 2: Matcher（B3：LLM + 确定性评分兜底）
         qa_matrix = self._step_matcher(plan, inp.members)
@@ -127,3 +129,35 @@ class Coordinator:
                        qa_matrix: QAOutput) -> ReportOutput | AgentError:
         return self.reporter.run(plan=plan, timeline=timeline,
                                  qa_matrix=qa_matrix)
+    @staticmethod
+    def _fallback_plan(inp: AssignmentInput,
+                       error_msg: str = "") -> PlanOutput:
+        """Planner LLM 不可用时的确定性兜底计划。
+
+        按 5 个标准阶段生成通用任务，确保下游链路不中断。
+        """
+        base_hours = {0: (4, "需求分析与调研", ["调研", "文档"]),
+                      1: (6, "方案设计与技术选型", ["设计", "架构"]),
+                      2: (8, "核心模块开发", ["开发", "编程"]),
+                      3: (6, "测试与联调", ["测试", "调试"]),
+                      4: (4, "文档撰写与答辩准备", ["文档", "PPT"])}
+        tasks: list[SubTask] = []
+        for i in range(5):
+            hours, name, skills = base_hours[i]
+            deps = [tasks[i - 1].id] if i > 0 else []
+            tasks.append(SubTask(
+                id=f"T{i + 1}",
+                name=name,
+                description=f"{name}：根据课程要求完成对应工作",
+                estimated_hours=float(hours),
+                dependencies=deps,
+                required_skills=skills,
+            ))
+        return PlanOutput(
+            tasks=tasks,
+            summary=("Planner 不可用，已生成确定性兜底计划（5 个标准阶段）。"
+                     f"错误信息：{error_msg}" if error_msg
+                     else "确定性兜底计划（5 个标准阶段）"),
+            reasoning=("LLM 规划失败，按需求→设计→开发→测试→文档的标准"
+                       "瀑布模型生成默认计划，确保下游可用。"),
+        )
