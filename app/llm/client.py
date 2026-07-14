@@ -23,7 +23,7 @@ from app.models.schemas import AgentError
 logger = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
 
-LLM_TIMEOUT = 60  # 秒
+LLM_TIMEOUT = 120  # 秒
 
 
 def _classify_error(e: Exception) -> str:
