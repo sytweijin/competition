@@ -9,7 +9,7 @@ A / C 在并行开发前必须先看此文件。
 - 字段一旦发布即视为「接口契约」，向后兼容，新增字段需带默认值。
 """
 
-from datetime import date
+from datetime import date, datetime
 from enum import Enum
 from typing import Optional
 
@@ -127,8 +127,8 @@ class TimelineTask(BaseModel):
     """带时间线信息的任务"""
     task_id: str
     name: str
-    start_date: date
-    end_date: date
+    start_date: datetime
+    end_date: datetime
     is_critical: bool = Field(description="是否在关键路径上")
     float_days: int = Field(default=0,
                             description="浮动天数（0 即关键路径任务）")

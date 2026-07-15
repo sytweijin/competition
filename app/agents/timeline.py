@@ -171,7 +171,7 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
         for tid in topo_order:
             t = task_map[tid]
             # half-day 偏移转成自然日：开始日 = start_base + es/2 天
-            s_date = (datetime.combine(start_base, datetime.min.time()) + timedelta(days=es[tid] / 2)).date()
+            s_date = datetime.combine(start_base, datetime.min.time()) + timedelta(days=es[tid] / 2)
             # 结束日 = 开始日 + 工期 - 1 天（含头不含尾→含头含尾的自然日语义，避免相邻重叠）
             dur_days = math.ceil(durations[tid] / 2)
             e_date = s_date + timedelta(days=max(0, dur_days - 1))

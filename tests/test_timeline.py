@@ -1,3 +1,4 @@
+from datetime import datetime
 """Timeline Agent (CPM 关键路径) 单元测试。"""
 from datetime import date, timedelta
 
@@ -22,7 +23,7 @@ def test_single_task():
     )
     assert out.total_days >= 1
     assert out.critical_path == ["T1"]
-    assert out.tasks[0].end_date == date(2026, 7, 20)  # 截止日倒推
+    assert out.tasks[0].end_date == datetime(2026, 7, 20)  # 截止日倒推
 
 
 def test_linear_chain_critical_path():
@@ -35,9 +36,9 @@ def test_linear_chain_critical_path():
     out = TimelineAgent().run(plan, "2026-07-20")
     assert out.critical_path == ["T1", "T2", "T3"]
     # T3 结束于截止日
-    assert out.tasks[-1].end_date == date(2026, 7, 20)
+    assert out.tasks[-1].end_date == datetime(2026, 7, 20)
     # 起始日 = 截止日 - (总天数 - 1)（含头含尾的自然日语义）
-    assert out.tasks[0].start_date == date(2026, 7, 20) - timedelta(days=out.total_days - 1)
+    assert out.tasks[0].start_date == datetime(2026, 7, 20) - timedelta(days=out.total_days - 1)
 
 
 def test_parallel_task_has_float():
