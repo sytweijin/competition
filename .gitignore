@@ -36,3 +36,5 @@ editor_sdk.log
 
 # Jupyter
 .ipynb_checkpoints/
+_fix*.py
+
