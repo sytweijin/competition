@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import math
 from collections import deque
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from app.agents.base import BaseAgent
 from app.models.schemas import (
@@ -171,7 +171,7 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
         for tid in topo_order:
             t = task_map[tid]
             # half-day 偏移转成自然日：开始日 = start_base + es/2 天
-            s_date = start_base + timedelta(days=es[tid] / 2)
+            s_date = (datetime.combine(start_base, datetime.min.time()) + timedelta(days=es[tid] / 2)).date()
             # 结束日 = 开始日 + 工期 - 1 天（含头不含尾→含头含尾的自然日语义，避免相邻重叠）
             dur_days = math.ceil(durations[tid] / 2)
             e_date = s_date + timedelta(days=max(0, dur_days - 1))
@@ -193,7 +193,7 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
             risk += "（总工期为 0，请检查任务工时）"
 
         # Deadline overrun check
-        available_days = max(1, math.ceil((deadline_date - today).days))
+        available_days = max(1, math.ceil((datetime.combine(deadline_date, datetime.min.time()) - datetime.combine(today, datetime.min.time())).total_seconds() / 86400))
         overrun_days = project_days - available_days
         if forced_forward:
             risk += f"（警告：倒推起始日早于今天，已改为从今天正排；总工期 {project_days} 天，"

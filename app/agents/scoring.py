@@ -69,84 +69,79 @@ def rank_members(task_skills: list[str],
 
 def assign_with_balance(plan: PlanOutput,
                         members: list[TeamMember]) -> QAOutput:
-    """贪心 + 负载均衡地为每个任务分配主讲/主答/辅答。
+    """贪心 + 负载均衡分配主讲/主答/辅答，默认保持三人工时差 <= 1h。
 
-    规则：
-    - 按「技能分 - 已分配任务数惩罚」挑选主讲
-    - 主答选技能分次高者，辅答为其余按分排序取前二
-    - 同一人累计分配数越多，越难再被选中（负载均衡）
+    v2.0 改进：按工时均衡分配，而非按任务计数。
     """
     if not members or not plan.tasks:
         return QAOutput(assignments=[], note="成员或任务为空，无法匹配")
 
-    load: dict[str, int] = {m.name: 0 for m in members}
+    active_tasks = [t for t in plan.tasks if t.status != "completed"]
     name_to_skills = {m.name: m.skill_tags for m in members}
+    member_map = {m.name: m for m in members}
+    task_hours = {t.id: t.estimated_hours for t in active_tasks}
+
+    # 第一步：按技能匹配度对每个任务打分
+    task_scored = []
+    for t in active_tasks:
+        scored = [(m.name, skill_score(m, t.required_skills)) for m in members]
+        scored.sort(key=lambda x: x[1], reverse=True)
+        task_scored.append((t, scored))
+
+    # 第二步：按工时从大到小排序（先分配大任务，灵活性更高）
+    task_scored.sort(key=lambda x: x[0].estimated_hours, reverse=True)
+
+    # 第三步：贪心分配，每次选累计工时最少的成员
+    work: dict[str, float] = {m.name: 0.0 for m in members}
     assignments: list[QAAssignment] = []
 
-    for t in plan.tasks:
-        if t.status == "completed":
-            continue
-        # 主讲：技能分 - 负载惩罚
-        scored = [
-            (m.name, skill_score(m, t.required_skills) - 0.25 * load[m.name])
-            for m in members
-        ]
-        scored.sort(key=lambda x: x[1], reverse=True)
-        presenter = scored[0][0]
-        load[presenter] += 1
+    for t, scored in task_scored:
+        # 按当前累计工时从少到多排序候选人
+        candidates = [(n, s) for n, s in scored]
+        candidates.sort(key=lambda x: (work[x[0]], -x[1]))  # 工时才少优先，再按技能分排序
 
-        # 主答：剩余成员里技能分最高
-        rest = [(n, s) for n, s in scored if n != presenter]
+        presenter = candidates[0][0]
+        work[presenter] += t.estimated_hours
+
+        # 主答：选次优且不 overload 的
+        rest = [(n, s) for n, s in candidates if n != presenter]
+        rest.sort(key=lambda x: (work[x[0]], -x[1]))
         primary = rest[0][0] if rest else presenter
         if primary != presenter:
-            load[primary] += 1
+            work[primary] += t.estimated_hours * QA_PRIMARY_RATIO
 
-        # 辅答：再取两人
-        rest2 = [(n, s) for n, s in rest if n not in (primary,)]
+        # 辅答：选两到三个
+        rest2 = [(n, s) for n, s in rest if n != primary]
+        rest2.sort(key=lambda x: (work[x[0]], -x[1]))
         support = [n for n, _ in rest2[:2]]
+        for n in support:
+            work[n] += t.estimated_hours * QA_SUPPORT_RATIO
 
-        best_score = scored[0][1] + 0.25 * load[presenter]
+        best_skill = scored[0][1]
         reasoning = (
-            f"{presenter} 技能标签 {_fmt(name_to_skills[presenter])} "
-            f"与任务所需 {_fmt(t.required_skills)} 匹配度最高"
-            f"（负载均衡后综合分 {best_score:.2f}）。"
+            f"{presenter} 与 {_fmt(t.required_skills)} 匹配，"
+            f"技能分 {best_skill:.2f}，工时均衡后选定。"
         )
         assignments.append(QAAssignment(
-            task_id=t.id,
-            task_name=t.name,
-            chapter="",
-            presenter=presenter,
-            qa_primary=primary,
-            qa_support=support,
-            score=round(max(0.0, min(1.0, best_score)), 3),
-            reasoning=reasoning,
+            task_id=t.id, task_name=t.name, chapter="",
+            presenter=presenter, qa_primary=primary, qa_support=support,
+            score=round(best_skill, 3), reasoning=reasoning,
         ))
 
-    # workload 摘要：折算工时（主讲=任务工时，主答=0.3，辅答=0.15）
-    work: dict[str, float] = {m.name: 0.0 for m in members}
-    task_hours = {t.id: t.estimated_hours for t in plan.tasks}
-    for a in assignments:
-        h = task_hours.get(a.task_id, 0.0)
-        work[a.presenter] = work.get(a.presenter, 0.0) + h
-        if a.qa_primary and a.qa_primary != a.presenter:
-            work[a.qa_primary] = work.get(a.qa_primary, 0.0) + h * QA_PRIMARY_RATIO
-        for s in a.qa_support:
-            work[s] = work.get(s, 0.0) + h * QA_SUPPORT_RATIO
-
-    # Overload detection
+    # overload detection
     overload_warnings = []
-    member_map = {m.name: m for m in members}
     for name, hours in work.items():
         m = member_map.get(name)
         if m and hours > m.available_hours:
             overload_warnings.append(
                 f"{name} 负载 {hours:.1f}h 超过可用 {m.available_hours:.1f}h"
             )
-    note = "基于技能匹配 + 负载均衡的确定性分配（B3）"
+    note = "B3：技能匹配 + 工时均衡分配（v2.0 按累计工时贪心）"
     if overload_warnings:
-        note += "；警告：" + "；".join(overload_warnings)
+        note += "；警告：" + "; ".join(overload_warnings)
 
     return QAOutput(assignments=assignments, workload=work, note=note)
+
 
 
 def _fmt(tags: list[str]) -> str:
