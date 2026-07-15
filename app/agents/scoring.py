@@ -69,105 +69,85 @@ def rank_members(task_skills: list[str],
 
 def assign_with_balance(plan: PlanOutput,
                         members: list[TeamMember]) -> QAOutput:
-    """技能匹配 + 严格负载均衡分配。
+    """???? + ?????????v2.1??
 
-    先按技能分配，然后迭代交换任务使三人工时差 <= 1h。
+    ?????????? <= 1h?
     """
     if not members or not plan.tasks:
-        return QAOutput(assignments=[], note="成员或任务为空，无法匹配")
+        return QAOutput(assignments=[], note="????????????")
 
     active_tasks = [t for t in plan.tasks if t.status != "completed"]
     name_to_skills = {m.name: m.skill_tags for m in members}
     member_map = {m.name: m for m in members}
     task_hours = {t.id: t.estimated_hours for t in active_tasks}
 
-    # ----- 第 1 步：纯技能分初分配 -----
-    def _skill_only(t, m_name):
-        return skill_score(member_map[m_name], t.required_skills)
+    # ??????????????????
+    active_tasks.sort(key=lambda t: t.estimated_hours, reverse=True)
+    work = {m.name: 0.0 for m in members}
+    assignments = []
 
-    assignments: list[QAAssignment] = []
     for t in active_tasks:
-        scored = [(m.name, _skill_only(t, m.name)) for m in members]
-        scored.sort(key=lambda x: x[1], reverse=True)
+        # ???????????????????????
+        scored = [(m.name, skill_score(m, t.required_skills)) for m in members]
+        scored.sort(key=lambda x: (-x[1], work[x[0]]))  # ???????????
         presenter = scored[0][0]
-        primary = scored[1][0] if len(scored) > 1 else presenter
-        support = [n for n, _ in scored[2:4]]
+        work[presenter] += t.estimated_hours
+
+        # ???????????
+        rest = [(n, s) for n, s in scored if n != presenter]
+        rest.sort(key=lambda x: (-x[1], work[x[0]]))
+        primary = rest[0][0] if rest else presenter
+        if primary != presenter:
+            work[primary] += t.estimated_hours * QA_PRIMARY_RATIO
+
+        # ??????????
+        rest2 = [n for n, _ in rest if n != primary]
+        rest2.sort(key=lambda n: work[n])
+        support = rest2[:2]
+        for s in support:
+            work[s] += t.estimated_hours * QA_SUPPORT_RATIO
+
+        best_skill = scored[0][1]
         reasoning = (
-            f"{presenter} 与 {_fmt(t.required_skills)} 匹配度最高"
-            f"（技能分 {scored[0][1]:.2f}）。"
+            f"{presenter} ? {_fmt(t.required_skills)} ??"
+            f"???? {best_skill:.2f}??????????"
         )
         assignments.append(QAAssignment(
             task_id=t.id, task_name=t.name, chapter="",
             presenter=presenter, qa_primary=primary, qa_support=support,
-            score=round(scored[0][1], 3), reasoning=reasoning,
+            score=round(best_skill, 3), reasoning=reasoning,
         ))
 
-    # ----- 第 2 步：计算 workload -----
-    def _recalc():
-        w = {m.name: 0.0 for m in members}
-        for a in assignments:
-            h = task_hours.get(a.task_id, 0)
-            w[a.presenter] += h
-            if a.qa_primary and a.qa_primary != a.presenter:
-                w[a.qa_primary] += h * QA_PRIMARY_RATIO
-            for s in a.qa_support:
-                w[s] += h * QA_SUPPORT_RATIO
-        return w
-
-    work = _recalc()
-
-    # ----- 第 3 步：迭代均衡（最多 100 轮）-----
-    for _round in range(100):
-        sorted_w = sorted(work.items(), key=lambda x: x[1])
+    # ???? > 1h?????????
+    sorted_w = sorted(work.items(), key=lambda x: x[1])
+    for _pass in range(30):
         if sorted_w[-1][1] - sorted_w[0][1] <= 1.0:
             break
         overloaded = sorted_w[-1][0]
         underloaded = sorted_w[0][0]
-
-        # 找 overloaded 主讲的任务中，最适合转给 underloaded 的
-        best_task = None
-        best_hours = 0
-        best_skill_gap = 999
-
-        for a in assignments:
-            if a.presenter != overloaded:
-                continue
-            h = task_hours.get(a.task_id, 0)
+        # ?? overloaded ?????????? underloaded
+        candidates = [(a, task_hours.get(a.task_id, 0)) for a in assignments
+                      if a.presenter == overloaded]
+        # ??????????????????????????
+        gap = sorted_w[-1][1] - sorted_w[0][1]
+        candidates.sort(key=lambda x: abs(x[1] - gap/2))  # ??? gap/2 ???
+        swapped = False
+        for a, h in candidates:
             if h <= 0:
                 continue
-            # 检查 underloaded 的技能匹配度
-            skill_under = _skill_only(next(t for t in active_tasks if t.id == a.task_id), underloaded)
-            skill_over = _skill_only(next(t for t in active_tasks if t.id == a.task_id), overloaded)
-            gap = skill_over - skill_under
-            # 交换后 overloaded 减少 h，underloaded 增加 h
             new_over = work[overloaded] - h
             new_under = work[underloaded] + h
-            if new_under <= new_over + 1.0 and gap < best_skill_gap:
-                best_task = a
-                best_hours = h
-                best_skill_gap = gap
-
-        if best_task is None or best_hours <= 0:
-            # 最后一次尝试：交换主答/辅答角色以微调（每个辅答只占 15%-30% 工时）
-            for a in assignments:
-                h = task_hours.get(a.task_id, 0)
-                # 把 overloaded 的辅答角色转给 underloaded
-                if overloaded in a.qa_support:
-                    a.qa_support = [s if s != overloaded else underloaded for s in a.qa_support]
-                    work = _recalc()
-                    break
-                # 把 overloaded 是主答但不是主讲的任务，转主答角色
-                if a.qa_primary == overloaded and a.presenter != overloaded:
-                    a.qa_primary = underloaded
-                    a.reasoning += f"（主答调整为{underloaded}以均衡工时）"
-                    work = _recalc()
-                    break
+            # ????????????????????????
+            if abs(new_over - new_under) < sorted_w[-1][1] - sorted_w[0][1]:
+                a.presenter = underloaded
+                work[overloaded] -= h
+                work[underloaded] += h
+                a.reasoning += f"???{underloaded}????????"
+                swapped = True
+                break
+        if not swapped:
             break
-
-        # 执行交换：把主讲角色从 overloaded 转给 underloaded
-        best_task.presenter = underloaded
-        work = _recalc()
-        best_task.reasoning += f"（为均衡工时，转由{underloaded}主讲）"
+        sorted_w = sorted(work.items(), key=lambda x: x[1])
 
     # overload detection
     overload_warnings = []
@@ -175,11 +155,11 @@ def assign_with_balance(plan: PlanOutput,
         m = member_map.get(name)
         if m and hours > m.available_hours:
             overload_warnings.append(
-                f"{name} 负载 {hours:.1f}h 超过可用 {m.available_hours:.1f}h"
+                f"{name} ?? {hours:.1f}h ???? {m.available_hours:.1f}h"
             )
-    note = "B3：技能匹配 + 严格负载均衡（v2.0）"
+    note = "B3????? + ???????v2.1?"
     if overload_warnings:
-        note += "；警告：" + "; ".join(overload_warnings)
+        note += "????" + "; ".join(overload_warnings)
 
     return QAOutput(assignments=assignments, workload=work, note=note)
 def _fmt(tags: list[str]) -> str:
