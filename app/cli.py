@@ -57,7 +57,7 @@ def parse_hours_members(raw: str) -> list[TeamMember]:
             name, daily_hours = part, 4.0
         members.append(TeamMember(
             name=name.strip(), daily_available_hours=daily_hours,
-            available_hours=max(daily_hours, daily_hours * 14),
+            available_hours=max(daily_hours, daily_hours * 14)  # CLI ????cmd_full?? _run ???,
         ))
     return members
 
