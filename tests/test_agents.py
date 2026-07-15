@@ -243,7 +243,7 @@ def test_interview_sim_with_requirements():
 # ──────────── validate_plan ────────────
 
 def test_validate_plan_cycle_detection():
-    """有环的计划 -> PlanValidationError"""
+    """有环的计划 -> 断环容错（保留任务，断开入环依赖），不再抛异常"""
     plan = PlanOutput(
         tasks=[
             SubTask(id="T1", name="A", dependencies=["T2"]),
@@ -251,8 +251,10 @@ def test_validate_plan_cycle_detection():
         ],
         summary="有环",
     )
-    with pytest.raises(PlanValidationError):
-        validate_plan(plan)
+    result = validate_plan(plan)
+    assert len(result.tasks) == 2
+    for t in result.tasks:
+        assert t.dependencies == []
 
 
 def test_validate_plan_empty():

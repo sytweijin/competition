@@ -28,7 +28,7 @@ class BaseAgent(Generic[T]):
     def __init__(self, llm: LLMClient | None = None):
         self.llm = llm or LLMClient()
 
-    def _call_llm(self, user_prompt: str) -> T | AgentError:
+    def _call_llm(self, user_prompt: str, temperature: float = 0.3) -> T | AgentError:
         """调用 LLM 并校验输出格式"""
         if not self.response_model:
             raise NotImplementedError("Subclass must set response_model")
@@ -36,4 +36,5 @@ class BaseAgent(Generic[T]):
             system_prompt=self.system_prompt,
             user_prompt=user_prompt,
             response_model=self.response_model,
+            temperature=temperature,
         )

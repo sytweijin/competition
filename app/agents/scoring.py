@@ -1,4 +1,4 @@
-﻿"""
+"""
 B3：完整角色匹配 —— 基于技能标签的确定性评分引擎。
 
 不依赖 LLM。用「技能覆盖度 + 负载均衡」为每个 (任务, 成员) 打分，
@@ -15,9 +15,31 @@ from app.models.schemas import (
 )
 
 
+def _normalize_tag(tag: str) -> str:
+    """标签归一化：去空格、转小写，便于精确匹配。"""
+    return tag.strip().lower().replace(" ", "")
+
+
 def _similar(a: str, b: str) -> float:
-    """两个技能标签的相似度（大小写/空白不敏感）。"""
-    return SequenceMatcher(None, a.strip().lower(), b.strip().lower()).ratio()
+    """两个技能标签的相似度（大小写/空白不敏感，支持包含关系）。"""
+    na, nb = _normalize_tag(a), _normalize_tag(b)
+    if not na or not nb:
+        return 0.0
+    # 完全匹配
+    if na == nb:
+        return 1.0
+    # 包含关系（如「前端」vs「前端开发」）给高分
+    if na in nb or nb in na:
+        return 0.85
+    # 退化为字符相似度
+    return SequenceMatcher(None, na, nb).ratio()
+
+
+# 角色投入系数：主讲承担任务全部工时，主答辅助参与折算 30%，辅答各折算 15%。
+# 说明：同一任务的工时按角色投入占比分配到各成员，避免重复计数导致负载虚高。
+PRESENTER_RATIO = 1.0
+QA_PRIMARY_RATIO = 0.3
+QA_SUPPORT_RATIO = 0.15
 
 
 def skill_score(member: TeamMember, required_skills: list[str]) -> float:
@@ -98,16 +120,16 @@ def assign_with_balance(plan: PlanOutput,
             reasoning=reasoning,
         ))
 
-    # workload 摘要：折算工时（主讲=任务工时，主答=0.5，辅答=0.25）
+    # workload 摘要：折算工时（主讲=任务工时，主答=0.3，辅答=0.15）
     work: dict[str, float] = {m.name: 0.0 for m in members}
     task_hours = {t.id: t.estimated_hours for t in plan.tasks}
     for a in assignments:
         h = task_hours.get(a.task_id, 0.0)
         work[a.presenter] = work.get(a.presenter, 0.0) + h
         if a.qa_primary and a.qa_primary != a.presenter:
-            work[a.qa_primary] = work.get(a.qa_primary, 0.0) + h * 0.5
+            work[a.qa_primary] = work.get(a.qa_primary, 0.0) + h * QA_PRIMARY_RATIO
         for s in a.qa_support:
-            work[s] = work.get(s, 0.0) + h * 0.25
+            work[s] = work.get(s, 0.0) + h * QA_SUPPORT_RATIO
 
     # Overload detection
     overload_warnings = []
@@ -147,13 +169,24 @@ def enhance(qa: QAOutput, plan: PlanOutput,
         # 折算工时到 workload
         work[a.presenter] = work.get(a.presenter, 0.0) + h
         if a.qa_primary and a.qa_primary != a.presenter:
-            work[a.qa_primary] = work.get(a.qa_primary, 0.0) + h * 0.5
+            work[a.qa_primary] = work.get(a.qa_primary, 0.0) + h * QA_PRIMARY_RATIO
         for s in a.qa_support:
-            work[s] = work.get(s, 0.0) + h * 0.25
+            work[s] = work.get(s, 0.0) + h * QA_SUPPORT_RATIO
         # 补 score
         score = a.score
         if score == 0.0 and t is not None and a.presenter in member_map:
             score = skill_score(member_map[a.presenter], t.required_skills)
         enhanced.append(a.model_copy(update={"score": round(score, 3)}))
 
-    return qa.model_copy(update={"assignments": enhanced, "workload": work})
+    # 负载失衡/超载检测，补充到 note
+    imbalance = []
+    for name, hours in work.items():
+        m = member_map.get(name)
+        if m and hours > m.available_hours:
+            imbalance.append(
+                f"{name} 负载 {hours:.1f}h 超过可用 {m.available_hours:.1f}h")
+    note = qa.note or ""
+    if imbalance:
+        note += "；负载警告：" + "；".join(imbalance)
+    return qa.model_copy(update={
+        "assignments": enhanced, "workload": work, "note": note})

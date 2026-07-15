@@ -1,4 +1,4 @@
-﻿"""
+"""
 Matcher Agent
 负责：QA 责任矩阵生成 + 答辩细分/角色匹配
 负责人：队友 C（端到端）；B 负责兜底校验与 B3 技能评分增强
@@ -19,9 +19,14 @@ class MatcherAgent(BaseAgent[QAOutput]):
             members: list[TeamMember]) -> QAOutput | AgentError:
         """根据任务计划和成员信息生成 QA 责任矩阵。"""
         members_str = "; ".join(
-            f"{m.name}: {', '.join(m.skill_tags) or '未标注'}" for m in members
+            f"{m.name}(技能: {', '.join(m.skill_tags) or '未标注'}; "
+            f"可用工时: {m.available_hours}h)"
+            for m in members
         )
-        tasks_str = "; ".join(f"{t.id} {t.name}" for t in plan.tasks)
+        tasks_str = "; ".join(
+            f"{t.id} {t.name}({t.estimated_hours}h, 需: {', '.join(t.required_skills) or '无'})"
+            for t in plan.tasks
+        )
         user = MATCHER_USER_TEMPLATE.format(tasks=tasks_str, members=members_str)
         result = self._call_llm(user)
         if isinstance(result, AgentError):

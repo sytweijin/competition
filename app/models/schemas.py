@@ -1,4 +1,4 @@
-﻿"""
+"""
 ===== 第 0 步：JSON 接口契约 =====
 这是整个项目的核心——所有 Agent 的输入/输出格式在此定义。
 A / C 在并行开发前必须先看此文件。
@@ -13,7 +13,7 @@ from datetime import date
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # ──────────── 枚举 / 常量 ────────────
@@ -41,12 +41,17 @@ class TeamMember(BaseModel):
                                   description="技能标签 e.g. ['前端','Python','PPT']")
     available_hours: float = Field(
         default=20.0,
-        description="可用工时（人时），B3 负载均衡使用",
+        description="总可用工时（人时）= 每日工时 × 可用天数。负载均衡与超载预警使用。",
     )
     daily_available_hours: float = Field(
         default=4.0,
         description="每人每天可用工时（小时），用于时间线折算。现实中不同成员可用时间不同。",
     )
+    @field_validator('available_hours', 'daily_available_hours')
+    @classmethod
+    def _clamp_hours(cls, v: float) -> float:
+        """钳制工时到合法下限，避免 0/负值导致除零或负工时。"""
+        return max(0.5, float(v))
 
 
 class AssignmentInput(BaseModel):
@@ -55,6 +60,15 @@ class AssignmentInput(BaseModel):
     members: list[TeamMember]
     deadline: date = Field(description="作业截止日期")
     additional_requirements: str = ""
+
+    @field_validator("members")
+    @classmethod
+    def _at_least_one_member(cls, v):
+        """至少 1 名有姓名的成员，CLI 与 Web 共用此校验。"""
+        named = [m for m in v if m.name.strip()]
+        if not named:
+            raise ValueError("至少需要 1 名有姓名的团队成员")
+        return named
 
 
 # ──────────── Planner 输出 ────────────
@@ -152,7 +166,7 @@ class FullPlan(BaseModel):
     timeline: TimelineOutput
     qa_matrix: QAOutput
     report: ReportOutput
-    version: str = "1.1"
+    version: str = "2.0"
 
 
 # ──────────── B4：协作图动态编辑 ────────────

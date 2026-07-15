@@ -1,4 +1,4 @@
-﻿"""
+"""
 B4：协作图动态编辑。
 负责人：B
 
@@ -72,16 +72,19 @@ def edit_plan(req: EditPlanRequest) -> FullPlan:
     new_plan = apply_edits(original.plan, req.edits)
 
     try:
-        new_plan = validate_plan(new_plan)
+        new_plan = validate_plan(new_plan, tolerate_cycle=False)
     except PlanValidationError as e:
         raise EditError(f"编辑后计划非法：{e}") from e
 
-    # 重算 timeline
+    # 先重算 matcher（B3 确定性），再用新分配回填负责人算 timeline，保证二者一致
+    qa_matrix = original.qa_matrix
+    if req.recompute_matcher:
+        qa_matrix = assign_with_balance(new_plan, original.input.members)
+
     timeline = original.timeline
     if req.recompute_timeline:
-        # 复用原 QA 分配回填负责人
         assignments: dict[str, list[str]] = {}
-        for a in original.qa_matrix.assignments:
+        for a in qa_matrix.assignments:
             people = [a.presenter] if a.presenter else []
             if a.qa_primary and a.qa_primary not in people:
                 people.append(a.qa_primary)
@@ -92,11 +95,6 @@ def edit_plan(req: EditPlanRequest) -> FullPlan:
             assignments=assignments,
             members=original.input.members,
         )
-
-    # 重算 matcher（B3 确定性，保证编辑后即时可见）
-    qa_matrix = original.qa_matrix
-    if req.recompute_matcher:
-        qa_matrix = assign_with_balance(new_plan, original.input.members)
 
     return FullPlan(
         input=original.input,

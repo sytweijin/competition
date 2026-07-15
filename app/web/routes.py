@@ -1,13 +1,15 @@
-﻿"""
+"""
 FastAPI 路由（A5：简易只读 Web + B2 Memory + B4 动态编辑）
 """
 
 import json
 import logging
+import re
 from datetime import date, datetime
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from app.config import MEMORY_DIR
@@ -22,6 +24,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _safe_filepath(filename: str) -> Path:
+    """构造安全的 memory 目录文件路径，防止路径穿越。"""
+    # 只取文件名部分，去掉任何目录分隔符
+    safe = Path(filename).name
+    if not safe or safe in (".", "..") or not safe.endswith(".json"):
+        raise HTTPException(status_code=400, detail="非法文件名")
+    fp = (MEMORY_DIR / safe).resolve()
+    # 确保解析后的路径仍在 MEMORY_DIR 内
+    if not str(fp).startswith(str(MEMORY_DIR.resolve())):
+        raise HTTPException(status_code=400, detail="非法文件名")
+    return fp
+
+
+
 class RunRequest(BaseModel):
     course: CourseInfo
     members: list[TeamMember]
@@ -33,9 +49,13 @@ class RunRequest(BaseModel):
 async def run_plan(req: RunRequest):
     """执行完整的 Agent 链路并返回结果。"""
     try:
+        # 校验：至少 1 个有姓名的成员（P1-16）
+        valid_members = [m for m in req.members if m.name.strip()]
+        if not valid_members:
+            raise HTTPException(status_code=400, detail="至少需要 1 名有姓名的团队成员")
         inp = AssignmentInput(
             course=req.course,
-            members=req.members,
+            members=valid_members,
             deadline=date.fromisoformat(req.deadline),
             additional_requirements=req.additional_requirements,
         )
@@ -70,7 +90,9 @@ async def save_plan(plan: FullPlan):
     try:
         MEMORY_DIR.mkdir(parents=True, exist_ok=True)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        course_name = plan.input.course.name or "plan"
+        # 清洗课程名中的路径分隔符等危险字符，防止路径穿越
+        raw_name = plan.input.course.name or "plan"
+        course_name = re.sub(r'[^\w\u4e00-\u9fff._-]', "_", raw_name).strip("_") or "plan"
         filename = f"{ts}_{course_name}.json"
         filepath = MEMORY_DIR / filename
         filepath.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
@@ -101,7 +123,7 @@ async def list_plans(q: str = ""):
 async def load_plan(filename: str):
     """加载指定计划。"""
     try:
-        filepath = MEMORY_DIR / filename
+        filepath = _safe_filepath(filename)
         if not filepath.exists():
             raise HTTPException(status_code=404, detail="Plan not found")
         data = json.loads(filepath.read_text(encoding="utf-8"))
@@ -117,7 +139,7 @@ async def load_plan(filename: str):
 async def delete_plan(filename: str):
     """删除指定计划。"""
     try:
-        filepath = MEMORY_DIR / filename
+        filepath = _safe_filepath(filename)
         if not filepath.exists():
             raise HTTPException(status_code=404, detail="Plan not found")
         filepath.unlink()
@@ -147,16 +169,102 @@ async def interview_sim(req: InterviewRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/recompute", response_model=FullPlan)
+async def recompute_plan(req: FullPlan):
+    """基于任务状态/成员变动重新计算时间线和匹配（不重跑 LLM）。
+
+    前端状态切换（completed/blocked 等）或成员变动后调用此端点，
+    确保排期与分配与最新状态保持一致。
+    """
+    try:
+        from app.agents.scoring import assign_with_balance
+        from app.agents.timeline import TimelineAgent
+
+        plan = req.plan
+        members = req.input.members
+
+        # 重算 Matcher（确定性，即时可见）
+        qa_matrix = assign_with_balance(plan, members)
+
+        # 回填负责人，重算 Timeline（会读取 task.status）
+        assignments: dict[str, list[str]] = {}
+        for a in qa_matrix.assignments:
+            people = [a.presenter] if a.presenter else []
+            if a.qa_primary and a.qa_primary not in people:
+                people.append(a.qa_primary)
+            assignments[a.task_id] = people
+
+        timeline = TimelineAgent().run(
+            plan=plan,
+            deadline=req.input.deadline.isoformat(),
+            assignments=assignments,
+            members=members,
+        )
+
+        return FullPlan(
+            input=req.input,
+            plan=plan,
+            timeline=timeline,
+            qa_matrix=qa_matrix,
+            report=req.report,
+        )
+    except Exception as e:
+        logger.exception("Recompute failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/export/docx")
+async def export_docx(plan: FullPlan):
+    """导出当前计划为 Word 文档。"""
+    try:
+        from app.web.exporters import plan_to_docx
+        data = plan_to_docx(plan)
+        return Response(
+            content=data,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={"Content-Disposition": 'attachment; filename="plan_report.docx"'},
+        )
+    except Exception as e:
+        logger.exception("Export docx failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/export/pdf")
+async def export_pdf(plan: FullPlan):
+    """导出当前计划为 PDF 文档。"""
+    try:
+        from app.web.exporters import plan_to_pdf
+        data = plan_to_pdf(plan)
+        return Response(
+            content=data, media_type="application/pdf",
+            headers={"Content-Disposition": 'attachment; filename="plan_report.pdf"'},
+        )
+    except Exception as e:
+        logger.exception("Export pdf failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/export/markdown")
+async def export_current_plan(plan: FullPlan):
+    """导出当前计划为 Markdown（前端「导出」按钮调用，无需先保存）。"""
+    try:
+        md = _plan_to_markdown(plan.model_dump())
+        return Response(
+            content=md, media_type="text/markdown; charset=utf-8",
+            headers={"Content-Disposition": 'attachment; filename="plan_report.md"'},
+        )
+    except Exception as e:
+        logger.exception("Export current plan failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.get("/export/{filename}")
 async def export_plan(filename: str, fmt: str = "markdown"):
     """Export a saved plan as Markdown or plain text."""
     try:
-        filepath = MEMORY_DIR / filename
+        filepath = _safe_filepath(filename)
         if not filepath.exists():
             raise HTTPException(status_code=404, detail="Plan not found")
         data = json.loads(filepath.read_text(encoding="utf-8"))
         md = _plan_to_markdown(data)
-        from fastapi.responses import Response
         content_type = "text/markdown; charset=utf-8" if fmt == "markdown" else "text/plain; charset=utf-8"
         ext = ".md" if fmt == "markdown" else ".txt"
         return Response(content=md, media_type=content_type,
@@ -257,7 +365,14 @@ async def edit_members_endpoint(req: MemberEditRequest):
             if m.name in req.removed_members:
                 continue
             if m.name in req.updated_members:
-                m = m.model_copy(update={"daily_available_hours": max(0.5, req.updated_members[m.name])})
+                new_daily = max(0.5, req.updated_members[m.name])
+                # 同步重算 available_hours（按剩余天数，与前端一致），避免超载阈值失真
+                import math
+                remaining = max(1, (fp.input.deadline - date.today()).days)
+                m = m.model_copy(update={
+                    "daily_available_hours": new_daily,
+                    "available_hours": max(new_daily, new_daily * remaining),
+                })
             new_members.append(m)
 
         if not new_members:
@@ -288,7 +403,9 @@ async def edit_members_endpoint(req: MemberEditRequest):
             plan=fp.plan,
             timeline=timeline,
             qa_matrix=qa_matrix,
-            report=fp.report,
+            report=fp.report.model_copy(update={
+                "risk_note": (fp.report.risk_note + "\n（成员已变动，此报告可能已过期，建议重新生成）").strip(),
+            }),
         )
     except HTTPException:
         raise

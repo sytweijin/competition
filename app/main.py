@@ -1,4 +1,4 @@
-﻿"""
+"""
 FastAPI 应用入口（A5）
 """
 
@@ -15,7 +15,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 
-app = FastAPI(title="小组合作智能体", version="1.1")
+app = FastAPI(title="小组合作智能体", version="2.0")
 
 # 注册路由
 from app.web.routes import router as api_router

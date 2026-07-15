@@ -1,6 +1,18 @@
 # 小组合作智能体 — 课程作业
 
-**版本：v1.2** | 最后更新：2026-07-15
+**版本：v2.0** | 最后更新：2026-07-16
+
+## v2.0 更新亮点（2026-07-16 深度审查修复）
+
+本次版本针对全量代码审查发现的 30 项问题进行系统性修复：
+
+- **工时链路打通**：每日工时真正驱动规划，不再有硬编码的假产能。
+- **排期更现实**：CPM 改为半天粒度，小任务不再被放大成整天；起始日不会排到过去。
+- **导出完整可用**：支持 Markdown / Word / PDF 三种格式导出，普通用户可直接打印。
+- **状态闭环**：标记任务「完成/阻塞」会实时重算排期与分工，不再只是视觉标记。
+- **安全加固**：修复路径穿越、空成员、负载误报等问题。
+
+详见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 一句话定位
 
@@ -31,7 +43,7 @@ AssignmentInput (课程 / 成员 / 截止日 / 每日工时)
 
 | Agent | 职责 | 实现 | LLM 失败兜底 |
 |-------|------|------|-------------|
-| Planner | 课程信息 -> 5-8 子任务 | LLM | 确定性 5 阶段兜底 |
+| Planner | 课程信息 -> 1-8 子任务（按规模弹性） | LLM | 确定性 5 阶段兜底 |
 | Matcher | 任务 -> 主讲/主答/辅答 | LLM + B3 评分增强 | B3 确定性贪心分配 |
 | Timeline | 任务依赖 -> 倒排日期 | 纯 CPM 算法 | 无需兜底（纯数学） |
 | Reporter | 全部结果 -> 答辩报告 | LLM | 纯文本拼接兜底 |
@@ -83,7 +95,7 @@ AssignmentInput (课程 / 成员 / 截止日 / 每日工时)
 系统性代码审查后，修复 6 个"平时不炸、边界条件下崩溃"的隐患：
 
 #### 健壮性修复
-- **LLM 超时保护**：所有 LLM 调用增加 60s timeout，防止网络卡死时永久挂起
+- **LLM 超时保护**：所有 LLM 调用增加 120s timeout，防止网络卡死时永久挂起
 - **LLM 错误分类**：从一刀切 `llm_timeout` 细分为 `auth_error`/`rate_limit`/`parse_error`/`timeout`/`unknown`
 - **Structured Output 降级**：`beta.parse` 失败后自动回退到 `create` + 手动 JSON 提取，兼容不支持 structured outputs 的端点
 - **Planner 兜底**：LLM 失败时不再 `raise RuntimeError` 崩溃，改为生成确定性 5 阶段兜底计划
@@ -105,7 +117,7 @@ AssignmentInput (课程 / 成员 / 截止日 / 每日工时)
 - editor.py 重算 timeline 时未传 members（已修复）
 - routes.py 导出函数 f-string 语法错误（已修复）
 - schemas.py 删除未使用的 SkillLevel/MemberRole 枚举
-- routes.py 清理冗余 hours_per_day 字段
+- routes.py 清理冗余 hours_per_day 字段（已移除，改用成员级 daily_available_hours）
 
 #### 新功能
 - **B4 编辑计划 Tab**：前端可直接增删改任务并一键重算 Timeline + Matcher
@@ -197,7 +209,7 @@ competition/
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/api/run` | 生成完整计划（可选 `hours_per_day`） |
+| POST | `/api/run` | 生成完整计划（成员级每日工时） |
 | POST | `/api/edit` | B4：应用编辑并重算 |
 | POST | `/api/interview` | B1：AI 答辩模拟（v0.3 新增） |
 | POST | `/api/save` | B2：保存计划到 memory |

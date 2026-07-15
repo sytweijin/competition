@@ -6,6 +6,53 @@
 
 ---
 
+## v2.0 - 深度审查修复：工时链路 / 排期算法 / 导出 / 状态闭环（2026-07-16）
+
+**定位：** 针对全面代码审查发现的 30 项问题进行系统性修复，覆盖前端与后端、提示词、算法与安全性，使系统趋近生产可用。
+
+---
+
+### P0 核心修复
+
+1. **工时链路打通**：前端 `available_hours` 不再硬编码 20，改为按「每日工时 × 距截止日剩余天数」自动推算真实产能；schema 新增工时下限校验（钳制 0.5h 下限，杜绝除零/负工时）。
+2. **清理死代码**：移除 `Coordinator.hours_per_day` 全局参数及其 CLI 入口——它曾覆盖成员级每日工时，导致 CLI 与 Web 行为冲突。
+3. **排期粒度升级**：Timeline CPM 从「整数天」升级为「半天为最小粒度」，小任务不再被强制占满一整天；5 个 2h 串行任务从 5 天降至 3 天。
+4. **导出接口修复**：新增 `POST /export/markdown`、`/export/docx`、`/export/pdf` 端点，前端「导出」按钮拆分为 Markdown / Word / PDF 三选项，导出功能完全可用（原 GET 端点因前后端不匹配而损坏）。
+5. **状态切换闭环**：任务状态（completed/blocked 等）现在触发后端 `/recompute` 重算——CPM 读取 status（已完成任务不占排期，后续任务自动前移），TimelineTask.status 与 SubTask.status 同步，不再只是「涂色」。
+
+### P1 健壮性修复
+
+6. **Planner 容错**：`validate_plan` 对依赖环改为「断环保留」（而非整体丢弃 LLM 结果），新增 `tolerate_cycle` 参数供编辑场景严格拒绝。
+7. **Timeline 排期**：修复相邻任务日期重叠；起始日不再排到过去（自动改为从今天正排并提示延期）。
+8. **Matcher 提示词**：移除「要求 LLM 做增量负载均衡」这一不可能完成的硬约束，改为「系统会自动校正」；matcher 传入完整工时信息。
+9. **负载系数**：workload 折算系数常量化（主讲 1.0 / 主答 0.3 / 辅答 0.15）并加文档，`enhance` 补充超载告警，减少误报。
+10. **安全加固**：`/save` `/load` `/delete` 增加路径穿越防护（`_safe_filepath` + 文件名清洗）；`/run` 校验至少 1 名有姓名成员。
+11. **CLI 对齐**：`parse_hours_members` 同步推算 `available_hours`，`cmd_full` 改用工时解析，行为与 Web 一致。
+
+### P2 体验优化
+
+12. **Word/PDF 导出**：新增 `app/web/exporters.py`，用 python-docx 和 reportlab 生成结构化文档（任务表、时间线表、QA 表、风险提示），普通用户可直接打印/批注。
+13. **报告渲染增强**：前端 `simpleMarkdown` 升级支持 Markdown 表格、列表，Reporter 输出不再糊成一团。
+14. **提示词清理**：删除未被引用的 Timeline 死提示词；Reporter/Interview 不再把全量 JSON 塞给 LLM，改为精简摘要（节省 token）。
+15. **评分改进**：`skill_score` 标签归一化 + 包含关系奖励（「前端」vs「前端开发」给高分）；Interview 失败抛异常而非混入问题列表；Reporter 温度调至 0.5。
+
+### P3 打磨
+
+16. 版本号统一为 v2.0（原 README v1.2 / 代码 v1.1 / 前端 v1.0 三处不一致）。
+17. `_fallback_plan` 根据团队总产能等比缩放工时（原写死）。
+18. `edit-members` 成员变动后标记 report 已过期。
+19. requirements.txt 新增 `python-docx`、`reportlab`。
+
+### 第二轮审查修复（workbuddy 复核）
+
+20. **P0 修复 `document.document.getElementById` 笔误**（v2.0 自身引入的回归）：该 JS 笔误会让「历史计划」与「删除」按钮接线崩溃、页面图标不渲染。已修正为 `document.getElementById`。
+21. **P1 Planner 提示词弹性化**（基于队友 jiajia-hua 的 v0.3）：去掉「5-8 任务」硬下限，改为按规模 1-8 个、简单需求可 ≤3，并补充极简场景示例（聚餐/提交文档只拆 1-3 个任务）。
+22. **P2 exporters 字体跨平台**：`_register_cjk_font` 增加 Linux（Noto/WenQuanYi）、macOS（PingFang/STHeiti）候选字体及 `CJK_FONT_PATH` 环境变量覆盖，非 Windows 下 PDF 不再中文空白。
+23. **P2 CLI/Web available_hours 统一**：CLI `cmd_full` 改为按 deadline 剩余天数推算总工时，与前端算法一致（原为固定 14 天）。
+24. **P2 测试样本修正**：`test_api.py` 的 `available_hours` 从硬编码 20 改为与前端动态推算一致的值。
+25. **P3 空成员校验下沉到 schema**：`AssignmentInput` 新增 field_validator，CLI 与 Web 共用，杜绝空名成员进入规划链路。
+
+
 ## v1.2 - 进度追踪 + 突发情况处理 + 代码质量（2026-07-15）
 
 **定位：** 从「生成计划」升级为「生成 + 追踪执行」，系统有了完整的生命周期。
@@ -532,3 +579,15 @@ LLM 负责"创造性"：拆任务、分配角色、写报告
 | v1.2 | 进度追踪 + 突发情况处理 | 已完成 |
 | v1.3+ | 前端精化 / 更多提示词优化 | 规划中 |
 | v2.x | 比赛阶段扩展 | 规划中 |
+
+### 第三轮审查修复（workbuddy 复核，v2.0 补充）
+
+26. **P0 修复 `import re` 缺失**（v2.0 自身引入的回归）：`routes.py:94` 用 `re.sub` 但文件顶部没有 `import re`，导致「保存」按钮必然 500。已补 `import re`，新增 `/save` 测试防止回归。
+27. **P0 修复裸 `getElementById` 笔误**（v2.0 自身引入的回归）：`index.html` 中 `loadBtn` 接线缺少 `document.` 前缀，导致「历史计划」按钮失效。已补回 `document.`，全文已无裸 getElementById。
+28. **P1 edit-members 同步重算 available_hours**：修改每日工时时，同步按剩余天数校正总可用工时，避免超载预警阈值失真。
+29. **P1 前后端剩余天数口径统一**：`timeline.py` 的 `available_days` 从截断 `.days` 改为`math.ceil` + 下限 1，与前端 `Math.ceil` 一致，截止日很紧时不再结论矛盾。
+30. **P2 editor 重算顺序修正**：先算新 qa_matrix，再用新分配回填负责人算 timeline，避免甘特图「负责人」与 QA 矩阵不一致。
+31. **P2 README 三处漂移修复**：Planner 任务数（5-8→1-8 弹性）、timeout（60s→120s）、API 表 hours_per_day（已移除）。
+32. **P3 系数注释同步**：`scoring.py` workload 折算注释从旧的 0.5/0.25 更新为实际 0.3/0.15。
+33. **P3 test_api version 同步**：固件 version 从 1.1 更新为 2.0。
+

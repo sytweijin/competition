@@ -1,4 +1,4 @@
-﻿"""
+"""
 计划输出校验工具。
 供 Planner、B4 编辑、Coordinator 共用，确保 task id 唯一、依赖指向存在、无环。
 """
@@ -14,7 +14,7 @@ class PlanValidationError(ValueError):
     """计划校验失败。"""
 
 
-def validate_plan(plan: PlanOutput) -> PlanOutput:
+def validate_plan(plan: PlanOutput, tolerate_cycle: bool = True) -> PlanOutput:
     """校验并（必要时）修正一个计划，返回干净的计划。
 
     检查项：
@@ -74,6 +74,14 @@ def validate_plan(plan: PlanOutput) -> PlanOutput:
             if in_degree[s] == 0:
                 queue.append(s)
     if visited != len(tasks):
-        raise PlanValidationError("任务依赖中存在环，无法排期")
+        cyclic_ids = {tid for tid in in_degree if in_degree[tid] > 0}
+        if not tolerate_cycle:
+            raise PlanValidationError("任务依赖中存在环，无法排期")
+        # 环容错：断开仍在环中的任务的入环依赖（保留任务本身，不丢弃 LLM 结果）
+        tasks = [
+            t.model_copy(update={"dependencies": []})
+            if t.id in cyclic_ids else t
+            for t in tasks
+        ]
 
     return plan.model_copy(update={"tasks": tasks})

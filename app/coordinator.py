@@ -30,12 +30,11 @@ logger = logging.getLogger(__name__)
 class Coordinator:
     """总调度器，编排多 Agent 主链路。"""
 
-    def __init__(self, hours_per_day: float | None = None):
+    def __init__(self):
         self.planner = PlannerAgent()
         self.matcher = MatcherAgent()
         self.timeline = TimelineAgent()
         self.reporter = ReporterAgent()
-        self.hours_per_day = hours_per_day
 
     def run(self, inp: AssignmentInput) -> FullPlan:
         """执行完整主链路。"""
@@ -118,11 +117,10 @@ class Coordinator:
                 if a.qa_primary and a.qa_primary not in people:
                     people.append(a.qa_primary)
                 assignments[a.task_id] = people
-        kwargs: dict = {"plan": plan, "deadline": deadline,
-                        "assignments": assignments, "members": members}
-        if self.hours_per_day is not None:
-            kwargs["hours_per_day"] = self.hours_per_day
-        return self.timeline.run(**kwargs)
+        return self.timeline.run(
+            plan=plan, deadline=deadline,
+            assignments=assignments, members=members,
+        )
 
     def _step_reporter(self, plan: PlanOutput,
                        timeline: TimelineOutput,
@@ -134,8 +132,12 @@ class Coordinator:
                        error_msg: str = "") -> PlanOutput:
         """Planner LLM 不可用时的确定性兜底计划。
 
-        按 5 个标准阶段生成通用任务，确保下游链路不中断。
+        按 5 个标准阶段生成通用任务，根据团队总产能等比缩放工时，
+        确保下游链路不中断。
         """
+        # 团队总产能（默认 3 人 × 20h = 60h 作为基准）
+        total_capacity = sum(m.available_hours for m in inp.members) or 60.0
+        scale = max(0.5, min(2.0, total_capacity / 60.0))
         base_hours = {0: (4, "需求分析与调研", ["调研", "文档"]),
                       1: (6, "方案设计与技术选型", ["设计", "架构"]),
                       2: (8, "核心模块开发", ["开发", "编程"]),
@@ -144,6 +146,7 @@ class Coordinator:
         tasks: list[SubTask] = []
         for i in range(5):
             hours, name, skills = base_hours[i]
+            hours = round(hours * scale)
             deps = [tasks[i - 1].id] if i > 0 else []
             tasks.append(SubTask(
                 id=f"T{i + 1}",

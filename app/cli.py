@@ -55,7 +55,10 @@ def parse_hours_members(raw: str) -> list[TeamMember]:
                 daily_hours = 4.0
         else:
             name, daily_hours = part, 4.0
-        members.append(TeamMember(name=name.strip(), daily_available_hours=daily_hours))
+        members.append(TeamMember(
+            name=name.strip(), daily_available_hours=daily_hours,
+            available_hours=max(daily_hours, daily_hours * 14),
+        ))
     return members
 
 
@@ -134,14 +137,24 @@ def cmd_interview(args):
 def cmd_full(args):
     """Run the full pipeline via Coordinator."""
     from app.coordinator import Coordinator
-    members = parse_members(args.members)
+    members = parse_hours_members(args.members)
+    # 与 Web 前端一致：按 deadline 剩余天数校正总可用工时
+    deadline_date = date.fromisoformat(args.deadline)
+    remaining = max(1, (deadline_date - date.today()).days)
+    members = [
+        m.model_copy(update={
+            "available_hours": max(m.daily_available_hours,
+                                    m.daily_available_hours * remaining),
+        })
+        for m in members
+    ]
     inp = AssignmentInput(
         course=CourseInfo(name=args.course, description=args.desc),
         members=members,
         deadline=date.fromisoformat(args.deadline),
         additional_requirements=args.extra or "",
     )
-    coord = Coordinator(hours_per_day=args.hours_per_day)
+    coord = Coordinator()
     result = coord.run(inp)
     print_result(result, "FullPlan")
 
@@ -206,10 +219,9 @@ def build_parser():
     p_full = sub.add_parser("full", help="Run the full Coordinator pipeline")
     p_full.add_argument("--course", required=True)
     p_full.add_argument("--desc", default="")
-    p_full.add_argument("--members", required=True)
+    p_full.add_argument("--members", required=True, help="Members: name:hours,name2:hours2")
     p_full.add_argument("--deadline", required=True)
     p_full.add_argument("--extra", default="")
-    p_full.add_argument("--hours-per-day", type=float, default=None)
     p_full.set_defaults(func=cmd_full)
 
     return parser

@@ -6,14 +6,16 @@ Timeline Agent
 纯算法，不依赖 LLM。用拓扑排序 + Forward/Backward pass 计算关键路径，
 从截止日倒推起始日。
 
-v0.3 改进：
-- 支持按任务负责人各自的每日可用工时折算天数（不再硬编码每人每天4小时）
-- 无负责人时使用团队平均每日可用工时
-- 对依赖环做容错
+v0.4 改进：
+- CPM 以「半天」为最小粒度（内部用 half-day 整数运算），小任务不再被强制占满 1 整天
+- 相邻任务日期不再重叠（结束日 = 开始日 + 工期 - 1 天，符合自然日语义）
+- 起始日不会排到过去（若倒推后早于今天，则从今天起正排并提示延期）
+- 支持按任务负责人各自的每日可用工时折算
 """
 
 from __future__ import annotations
 
+import math
 from collections import deque
 from datetime import date, timedelta
 
@@ -35,7 +37,6 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
         self.llm = None
 
     def run(self, plan: PlanOutput, deadline: str,
-            hours_per_day: float | None = None,
             assignments: dict[str, list[str]] | None = None,
             members: list[TeamMember] | None = None) -> TimelineOutput:
         """根据任务依赖和工时，用 CPM 算法生成倒排时间线。
@@ -43,8 +44,6 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
         Args:
             plan: Planner 输出的计划。
             deadline: 截止日期 ISO 字符串。
-            hours_per_day: 全局每人每天有效工时（向后兼容）。
-                           如果传入了 members，则优先使用成员的 daily_available_hours。
             assignments: {task_id: [成员名]}，可选，用于回填负责人。
             members: 团队成员列表，用于获取每人每天可用工时。
         """
@@ -58,10 +57,7 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
             for m in members:
                 member_daily[m.name] = max(0.5, m.daily_available_hours)
 
-        # 全局默认值：优先用传入的 hours_per_day，否则用成员平均值，最后兜底 DEFAULT
-        if hours_per_day is not None:
-            global_daily = max(0.5, float(hours_per_day))
-        elif member_daily:
+        if member_daily:
             global_daily = sum(member_daily.values()) / len(member_daily)
         else:
             global_daily = DEFAULT_HOURS_PER_DAY
@@ -108,24 +104,32 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
                 successors[tid] = []
             topo_order.extend(remaining)
 
-        # 工时→天数折算：根据每个任务的负责人计算有效每日产能
+        # 工时→工期折算：以「半天」为最小粒度（half-day 单位，1 个单位 = 0.5 天）
+        # 内部 CPM 全部用 half-day 整数运算，避免浮点误差。
         def _task_daily_capacity(task_id: str) -> float:
             """根据任务负责人计算每天可用工时。"""
             assigned = assignments.get(task_id, [])
             if not assigned or not member_daily:
                 return global_daily
-            # 取负责人的每日可用工时，求和（多人并行时产能为各人之和）
             capacity = 0.0
             for name in assigned:
                 capacity += member_daily.get(name, global_daily)
             return max(0.5, capacity)
 
-        durations = {}
+        durations: dict[str, int] = {}  # 单位：half-day（0.5 天）
+        completed_ids: set[str] = set()
         for t in tasks:
+            # 已完成的任务不占排期（工期为 0），其后续任务可立即接上
+            if t.status == "completed":
+                durations[t.id] = 0
+                completed_ids.add(t.id)
+                continue
             daily_cap = _task_daily_capacity(t.id)
-            durations[t.id] = max(1, round(t.estimated_hours / daily_cap))
+            days_needed = t.estimated_hours / daily_cap
+            # 转成 half-day 单位并向上取整，最少 1 个 half-day（即 0.5 天）
+            durations[t.id] = max(1, math.ceil(days_needed * 2))
 
-        # Forward pass: 最早开始/结束
+        # Forward pass: 最早开始/结束（单位：half-day）
         es: dict[str, int] = {}
         ef: dict[str, int] = {}
         for tid in topo_order:
@@ -135,14 +139,14 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
                 es[tid] = max(ef[p] for p in predecessors[tid])
             ef[tid] = es[tid] + durations[tid]
 
-        project_days = max(ef.values()) if ef else 0
+        project_half_days = max(ef.values()) if ef else 0
 
-        # Backward pass: 最晚开始/结束
+        # Backward pass: 最晚开始/结束（单位：half-day）
         lf: dict[str, int] = {}
         ls: dict[str, int] = {}
         for tid in reversed(topo_order):
             if not successors[tid]:
-                lf[tid] = project_days
+                lf[tid] = project_half_days
             else:
                 lf[tid] = min(ls[s] for s in successors[tid])
             ls[tid] = lf[tid] - durations[tid]
@@ -151,21 +155,35 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
         float_time = {tid: ls[tid] - es[tid] for tid in task_map}
         critical = [tid for tid in topo_order if float_time[tid] == 0]
 
-        # 从截止日倒推起始日
-        start_base = deadline_date - timedelta(days=project_days)
+        # half-day → 自然天数（向上取整，0.5 天算 1 天工期）
+        project_days = math.ceil(project_half_days / 2)
+
+        # 从截止日倒推起始日；若早于今天则改为从今天正排（避免排到过去）
+        today = date.today()
+        ideal_start = deadline_date - timedelta(days=project_days - 1)
+        forced_forward = ideal_start < today
+        if forced_forward:
+            start_base = today
+        else:
+            start_base = ideal_start
+
         timeline_tasks: list[TimelineTask] = []
         for tid in topo_order:
             t = task_map[tid]
-            s_date = start_base + timedelta(days=es[tid])
-            e_date = start_base + timedelta(days=ef[tid])
+            # half-day 偏移转成自然日：开始日 = start_base + es/2 天
+            s_date = start_base + timedelta(days=es[tid] / 2)
+            # 结束日 = 开始日 + 工期 - 1 天（含头不含尾→含头含尾的自然日语义，避免相邻重叠）
+            dur_days = math.ceil(durations[tid] / 2)
+            e_date = s_date + timedelta(days=max(0, dur_days - 1))
             timeline_tasks.append(TimelineTask(
                 task_id=tid,
                 name=t.name,
                 start_date=s_date,
                 end_date=e_date,
                 is_critical=(tid in critical),
-                float_days=max(0, float_time[tid]),
+                float_days=math.ceil(max(0, float_time[tid]) / 2),
                 assigned_to=assignments.get(tid, []),
+                status=t.status,
             ))
 
         risk = ""
@@ -175,15 +193,15 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
             risk += "（总工期为 0，请检查任务工时）"
 
         # Deadline overrun check
-        from datetime import date as _date
-        today = _date.today()
-        available_days = (deadline_date - today).days
+        available_days = max(1, math.ceil((deadline_date - today).days))
         overrun_days = project_days - available_days
-        if overrun_days > 0:
+        if forced_forward:
+            risk += f"（警告：倒推起始日早于今天，已改为从今天正排；总工期 {project_days} 天，"
+            risk += f"预计 {start_base + timedelta(days=project_days - 1)} 完成，"
+            risk += f"将晚于截止日 {deadline_date}，建议缩减任务或延长截止日期）"
+        elif overrun_days > 0:
             risk += f"（警告：总工期 {project_days} 天超过可用天数 {available_days} 天，超出 {overrun_days} 天！建议缩减任务或延长截止日期）"
-        elif available_days > 0 and overrun_days <= -3:
-            pass  # comfortable buffer, no warning needed
-        elif available_days > 0:
+        elif available_days > 0 and overrun_days > -3:
             risk += f"（注意：仅剩 {-overrun_days} 天缓冲，建议关注关键路径进度）"
 
         # 构造可读的 reasoning
@@ -195,7 +213,7 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
             cap_desc = f"按全局默认每人每天 {global_daily:g}h 折算。"
 
         reasoning = (
-            f"使用关键路径法(CPM)计算。"
+            f"使用关键路径法(CPM)计算，以半天为最小排期粒度。"
             f"共 {len(tasks)} 个任务，总工期 {project_days} 天。"
             f"{cap_desc}"
             f"关键路径：{' -> '.join(critical) or '无'}。"

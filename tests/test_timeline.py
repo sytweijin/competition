@@ -1,4 +1,4 @@
-﻿"""Timeline Agent (CPM 关键路径) 单元测试。"""
+"""Timeline Agent (CPM 关键路径) 单元测试。"""
 from datetime import date, timedelta
 
 from app.agents.timeline import TimelineAgent
@@ -36,8 +36,8 @@ def test_linear_chain_critical_path():
     assert out.critical_path == ["T1", "T2", "T3"]
     # T3 结束于截止日
     assert out.tasks[-1].end_date == date(2026, 7, 20)
-    # 起始日 = 截止日 - 总天数（T1 从第 0 天开始）
-    assert out.tasks[0].start_date == date(2026, 7, 20) - timedelta(days=out.total_days)
+    # 起始日 = 截止日 - (总天数 - 1)（含头含尾的自然日语义）
+    assert out.tasks[0].start_date == date(2026, 7, 20) - timedelta(days=out.total_days - 1)
 
 
 def test_parallel_task_has_float():
@@ -68,11 +68,18 @@ def test_cycle_is_tolerated():
     assert "环" in out.note or "环" in out.reasoning
 
 
-def test_hours_per_day_config():
-    """hours_per_day 影响 工时→天数 折算。"""
+def test_daily_capacity_affects_duration():
+    """成员每日可用工时影响 工时→天数 折算。"""
+    from app.models.schemas import TeamMember
     plan = _plan([SubTask(id="T1", name="A", estimated_hours=8)])
-    fast = TimelineAgent().run(plan, "2026-07-20", hours_per_day=8.0)
-    slow = TimelineAgent().run(plan, "2026-07-20", hours_per_day=2.0)
+    fast = TimelineAgent().run(
+        plan, "2026-07-20", assignments={"T1": ["A"]},
+        members=[TeamMember(name="A", daily_available_hours=8.0)],
+    )
+    slow = TimelineAgent().run(
+        plan, "2026-07-20", assignments={"T1": ["A"]},
+        members=[TeamMember(name="A", daily_available_hours=2.0)],
+    )
     assert fast.total_days <= slow.total_days
 
 

@@ -23,10 +23,15 @@ class InterviewSimAgent(BaseAgent):
             qa_matrix: QA 责任矩阵。
             user_requirements: 用户自定义要求，如评委关注点、重点模块等。
         """
+        task_lines = "\n".join(
+            f"- {t.id} {t.name}" for t in plan.tasks)
+        qa_lines = "\n".join(
+            f"- {a.task_name}: {a.presenter}/{a.qa_primary}"
+            for a in qa_matrix.assignments) or "无"
         user = (
             f"以下是学生的作业计划和QA分配：\n\n"
-            f"## 任务计划\n{plan.model_dump_json(indent=2)}\n\n"
-            f"## QA矩阵\n{qa_matrix.model_dump_json(indent=2)}\n\n"
+            f"## 任务计划\n{task_lines}\n\n"
+            f"## QA矩阵\n{qa_lines}\n\n"
         )
         if user_requirements.strip():
             user += f"## 用户特别要求\n{user_requirements.strip()}\n\n"
@@ -39,4 +44,5 @@ class InterviewSimAgent(BaseAgent):
         )
         if isinstance(result, str):
             return result
-        return f"[Error] {result.message}"
+        # chat_text 失败时抛异常，由上层路由返回明确错误，而非混入问题列表
+        raise RuntimeError(result.message)
