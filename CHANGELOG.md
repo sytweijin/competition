@@ -591,3 +591,9 @@ LLM 负责"创造性"：拆任务、分配角色、写报告
 32. **P3 系数注释同步**：`scoring.py` workload 折算注释从旧的 0.5/0.25 更新为实际 0.3/0.15。
 33. **P3 test_api version 同步**：固件 version 从 1.1 更新为 2.0。
 
+### 第四轮审查修补（workbuddy 全量重读确认）
+
+34. **修正 planner.py docstring**：`输出 5-8 子任务` → `输出弹性子任务（1-8 个）`，与提示词对齐。
+35. **README 测试数同步**：从 43 → 45。
+36. **README API 表补导出端点**：新增 `/api/export/markdown`、`/api/export/docx`、`/api/export/pdf`。
+

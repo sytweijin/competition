@@ -199,7 +199,7 @@ competition/
 │       ├── routes.py         # FastAPI 路由（run/edit/save/load/interview）
 │       ├── templates/index.html  # TailwindCSS + Lucide + Tab 布局
 │       └── static/style.css  # 补充样式
-├── tests/                    # 43 个单元/集成测试
+├── tests/                    # 45 个单元/集成测试
 ├── memory/                   # B2 计划持久化
 ├── docs/                     # 项目文档
 └── requirements.txt
@@ -213,6 +213,9 @@ competition/
 | POST | `/api/edit` | B4：应用编辑并重算 |
 | POST | `/api/interview` | B1：AI 答辩模拟（v0.3 新增） |
 | POST | `/api/save` | B2：保存计划到 memory |
+| POST | `/api/export/markdown` | 导出当前计划为 Markdown |
+| POST | `/api/export/docx` | 导出当前计划为 Word 文档 |
+| POST | `/api/export/pdf` | 导出当前计划为 PDF 文档 |
 | GET | `/api/plans` | B2：列出已保存计划 |
 | GET | `/api/load/{filename}` | B2：载入计划 |
 | DELETE | `/api/plans/{filename}` | B2：删除计划 |
@@ -237,7 +240,7 @@ python -m app.main     # 默认 http://127.0.0.1:8000
 ## 运行测试
 
 ```bash
-python -m pytest -v    # 43 passed
+python -m pytest -v    # 45 passed
 ```
 
 ## 分支策略
