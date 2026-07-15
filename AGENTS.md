@@ -47,3 +47,36 @@
 - 不得将详细版替换为简略版（如只写要点列表、没有代码对照）
 - 不得覆盖或删除旧版本的详细内容
 - 不得只写「做了什么」而不写「为什么」和「好在哪里」
+
+---
+
+## 前端 JS 修改强制规则（2026-07-16 新增）
+
+**修改 `app/web/templates/index.html` 后必须立刻执行以下验证，缺一不可：**
+
+1. **语法检查**：
+   ```
+   node -e "
+   const fs=require('fs');
+   const html=fs.readFileSync('app/web/templates/index.html','utf8');
+   const m=[...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
+   const js=m[m.length-1][1];
+   new Function(js);
+   console.log('OK');
+   "
+   ```
+
+2. **字符串拼接排查**：凡是在 JS 中构造 HTML 字符串的地方，必须确认变量的拼接符号 `+` 没有被写入字符串字面量内部。常见错误模式：
+   ```js
+   // ❌ 错误：变量被写进了字符串里
+   '+t.end_date.slice(5,10)(5)+'
+   
+   // ✅ 正确：变量在字符串外面用 + 拼接
+   +' ~ '+t.end_date.slice(5,10)+'
+   ```
+
+3. **Unicode 转义排查**：JS 字符串中不能使用 `\u0022` 表示双引号，必须用 `\"`。`\uXXXX` 只在 HTML 层面有效，在 JS 源码中会被提前解析破坏字符串边界。
+
+4. **运行全部测试**：`python -m pytest tests/ -q`，必须 45 passed。
+
+**以上 4 步全部通过才能提交。改完不验证就提交 = 极大概率引入 404 或页面无响应 bug。**
