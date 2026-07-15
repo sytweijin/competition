@@ -86,6 +86,8 @@ def test_member_hours_change_recomputes():
     })
     assert resp.status_code == 200
     data = resp.json()
+    # Timeline should have been recomputed (shorter with 2x Alice hours)
+    assert data["timeline"]["total_days"] < original_days,         f"Expected shorter timeline, got {data['timeline']['total_days']} >= {original_days}"
     # Alice should have updated hours
     for m in data["input"]["members"]:
         if m["name"] == "Alice":

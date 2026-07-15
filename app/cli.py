@@ -69,9 +69,18 @@ def load_json(path: str) -> dict:
 
 def cmd_planner(args):
     from app.agents.planner import PlannerAgent
+    parsed_members = parse_members(args.members)
+    # 尝试从 args 获取工时信息（如果用户传了 --hours）
+    if hasattr(args, 'hours') and args.hours:
+        from app.cli import parse_hours_members as _phm
+        hours_map = {m.name: m for m in _phm(args.hours)}
+        for m in parsed_members:
+            if m.name in hours_map:
+                m.daily_available_hours = hours_map[m.name].daily_available_hours
+                m.available_hours = hours_map[m.name].available_hours
     members_str = [
-        f"{m.name}(skills: {'; '.join(m.skill_tags) or 'N/A'})"
-        for m in parse_members(args.members)
+        f"{m.name}(skills: {'; '.join(m.skill_tags) or 'N/A'}, daily: {m.daily_available_hours}h, total: {m.available_hours}h)"
+        for m in parsed_members
     ]
     agent = PlannerAgent()
     result = agent.run(
@@ -185,6 +194,7 @@ def build_parser():
     p_planner.add_argument("--desc", default="", help="Course description")
     p_planner.add_argument("--members", required=True, help="Members: name:skill1;skill2,name2:skill3")
     p_planner.add_argument("--deadline", required=True, help="Deadline ISO date")
+    p_planner.add_argument("--hours", default="", help="Members with daily hours: name:hours,name2:hours2")
     p_planner.add_argument("--extra", default="", help="Extra requirements")
     p_planner.set_defaults(func=cmd_planner)
 

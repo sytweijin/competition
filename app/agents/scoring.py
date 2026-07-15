@@ -84,6 +84,8 @@ def assign_with_balance(plan: PlanOutput,
     assignments: list[QAAssignment] = []
 
     for t in plan.tasks:
+        if t.status == "completed":
+            continue
         # 主讲：技能分 - 负载惩罚
         scored = [
             (m.name, skill_score(m, t.required_skills) - 0.25 * load[m.name])
@@ -116,7 +118,7 @@ def assign_with_balance(plan: PlanOutput,
             presenter=presenter,
             qa_primary=primary,
             qa_support=support,
-            score=round(max(0.0, min(1.0, scored[0][1])), 3),
+            score=round(max(0.0, min(1.0, best_score)), 3),
             reasoning=reasoning,
         ))
 

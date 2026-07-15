@@ -70,7 +70,7 @@ AssignmentInput (课程 / 成员 / 截止日 / 每日工时)
 | — | 突发情况处理（成员退出/工时变更） | ✅ done | B | v1.0 实现 + v1.2 补测试 |
 | — | Planner Agent | skeleton | A | 骨架 + Planner 兜底已就位（LLM 失败时生成 5 阶段计划），Prompt 待 A 调优 |
 | — | CLI 单 Agent 调试 (`cli.py`) | ✅ done | B | v1.1 新增：planner/matcher/timeline/reporter/interview/full |
-| — | 测试 (43 个) | ✅ done | B | CPM/Scoring/Editor/Coordinator/API 全覆盖 |
+| — | 测试 (45 个) | ✅ done | B | CPM/Scoring/Editor/Coordinator/API 全覆盖 |
 
 ## 近期变更
 

@@ -516,6 +516,62 @@ var bc=t.is_critical?'bg-red-500':(t.float_days!==undefined&&t.float_days<=1?'bg
 var ol=ov?'<span class="text-red-500 ml-1">超载</span>':''
 ```
 
+
+
+### 31. score 语义统一：存纯技能匹配分
+
+**问题：** scoring.py:49 的 score 字段存的是 skill_score - 0.25 * load（被负载惩罚压低的选择分），但 QAAssignment schema 的 docstring 说它是技能匹配得分。同一列匹配度在不同路径含义不同——技能完全匹配但被过载的成员可能显示匹配度 25%，误导性很强。
+
+**修改前（scoring.py）：**
+```python
+score=round(max(0.0, min(1.0, scored[0][1])), 3),  # 被惩罚压低的分
+```
+
+**修改后：**
+```python
+score=round(max(0.0, min(1.0, best_score)), 3),  # 纯技能匹配分
+```
+
+**为什么这样改：** best_score = scored[0][1] + 0.25 * load[presenter] 已在上一行计算好，还原负载惩罚后就是纯技能匹配分。负载均衡信息保留在 reasoning 字段中。
+
+
+### 32. 已完成任务不再计入 workload / 超载预警
+
+**问题：** assign_with_balance 遍历全部 plan.tasks、不剔除 status=completed 的任务。标记任务完成后 Timeline（CPM）会缩短工期，但 QA 矩阵的负载条与负载超标预警仍把已完成任务的工时算进去——时间线和负载两个视图结论不一致。
+
+**修改前（scoring.py）：**
+```python
+for t in plan.tasks:
+    # 主讲：技能分 - 负载惩罚
+```
+
+**修改后：**
+```python
+for t in plan.tasks:
+    if t.status == "completed":
+        continue
+    # 主讲：技能分 - 负载惩罚
+```
+
+
+### 33. CLI planner 子命令传入工时
+
+**问题：** cli.py:70-84 拼的 members_str 只含 name(skills:...)，没有总可用/每日可用信息。Web 端 coordinator._step_planner 是带工时的，导致 CLI 模式下 Planner 拿到的产能信息比 Web 少，两端规划质量不一致。
+
+**修改后：** cmd_planner 新增 --hours 参数，传入 daily: Xh, total: Yh 到 members_str。示例：python -m app.cli planner --course 软件工程 --members 张三:前端 --hours 张三:4 --deadline 2026-08-01
+
+
+### 34. test_member_edit 弱测试强化
+
+**问题：** test_member_hours_change_recomputes 捕获了 original_days 却没有断言时间线真的重算。
+
+**修改后：** 新增断言 data["timeline"]["total_days"] < original_days，验证 Alice 工时翻倍后工期确实缩短。
+
+
+### 35. README 两处同步
+
+- 测试数 43->45（进度表滞后于实际）
+- API 表补 /api/edit-members 和 /api/recompute 两个端点
 队友提示词改动说明
 
 队友 **jiajia-hua** 在 `feature/planner-prompt` 分支修改了 Planner 提示词（v0.3 版）：
