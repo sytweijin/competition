@@ -22,6 +22,7 @@ from app.web.routes import router as api_router
 app.include_router(api_router, prefix="/api")
 
 # 静态文件（前端 demo 页面）
+app.mount("/static", StaticFiles(directory="app/web/static"), name="static")
 app.mount("/", StaticFiles(directory="app/web/templates", html=True),
           name="web")
 
