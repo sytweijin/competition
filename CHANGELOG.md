@@ -7,6 +7,155 @@
 ---
 
 
+## v3.4 —— 报告自动重生 + 报告表格渲染修复 + LLM 空鉴权快速兜底（2026-07-17）
+
+**定位：** 修复两个体验缺陷：编辑计划/成员变动后报告不会自动更新、报告页 Markdown 表格渲染错乱；顺带修一个隐藏的健壮性隐患（空 API key 挂死网络）。
+**审查/修改背景：** 用户反馈「改了任务时长或成员后，报告还得自己手动重新生成计划，那手动编辑还有什么意义」以及「报告页表格有一部分是乱的」。前者是三处编辑入口都只给报告加了「建议重新生成」的过期提示而不真正重算；后者是 simpleMarkdown 的表头/数据行判定依赖累积 HTML 字符串里的 `</thead>`，首行数据被错当表头。
+
+---
+
+### 关键缺陷（P0）
+
+**1. 编辑/成员变动/状态切换后报告不自动重生成（Bug1）**
+- **问题：** `edit_plan`、`/recompute`、`/edit-members` 三处重算 timeline/qa 后，报告只追加「建议重新生成」的过期提示，用户被迫手动重跑 `/run` 全链路——等于让 AI 把计划从头算一遍，手动编辑的成果被丢弃。
+- **修改前：**
+  ```python
+  # app/editor.py edit_plan 返回处
+  report=original.report.model_copy(update={"risk_note": (...+"建议重新生成)").strip()}),
+  ```
+- **修改后：** 三处都用编辑后的 plan + 重算的 timeline + qa_matrix 单独调 `ReporterAgent().run()`，不重跑 Planner/Matcher 链路，因此保留用户的手动编辑；Reporter 内部有纯文本兜底，LLM 失败也不中断：
+  ```python
+  # app/editor.py
+  try:
+      report = ReporterAgent().run(plan=new_plan, timeline=timeline, qa_matrix=qa_matrix)
+      if not isinstance(report, ReportOutput):
+          report = ReportOutput(summary="报告重生成失败", risk_note=str(report))
+  except Exception as exc:
+      report = original.report.model_copy(update={"risk_note": (...+f"报告重生成失败: {exc}").strip()})
+  ```
+- **为什么这样改：** Reporter 只做「格式化」，输入是 plan/timeline/qa 三者，与 Planner/Matcher 的 LLM 无依赖。旧代码把它当成必须重跑全链路才能产出，于是选择了「不重算、只提示」——结果用户面对过期报告，要么忍受不一致，要么手动重跑 `/run` 把编辑清零。现在在重算 timeline/qa 之后就地调 Reporter，用最新数据生成新报告，编辑成果与报告一致性兼得。
+- **收益：** ① 编辑时长/成员变动后报告自动更新，无需手动重跑；② 保留手动编辑（不重跑 Planner）；③ LLM 失败有兜底，不中断编辑流程。
+
+**2. 报告页 Markdown 表格渲染错乱（Bug2）**
+- **问题：** `simpleMarkdown` 用 `var tag=(html.indexOf('</thead>')<0)?'th':'td'` 判定表头/数据行，但 `</thead>` 是在「分隔行之后的下一行」才插入累积 HTML 的。导致紧跟分隔行的第一行数据被判定时 HTML 里还没有 `</thead>`，于是用 `<th>` 当了数据行，thead/tbody 结构错乱——表格「有一部分是乱的」。
+- **修改前：**
+  ```js
+  var tag=(html.indexOf('</thead>')<0)?'th':'td';
+  html+='<tr>'+cells.map(...)...+'</tr>';
+  ```
+- **修改后：** 用 `headerDone` 布尔状态位显式区分表头与数据行，移除脆弱的 `</thead>` 子串探测；表头行用 `<th class="bg-slate-50 font-semibold">`、数据行用 `<td>`，结构统一为一个 `<tbody>`：
+  ```js
+  var headerDone=false;
+  ...
+  var tag=headerDone?'td':'th';
+  var cls=headerDone?'...px-2 py-1':'...px-2 py-1 bg-slate-50 font-semibold';
+  html+='<tr>'+cells.map(...)...+'</tr>';
+  headerDone=true;
+  ```
+- **为什么这样改：** 根因是「靠在累积输出字符串里搜子串」来推断解析状态——这是经典的状态泄漏 bug：输出顺序和判断时机耦合，一旦顺序变化就误判。改用独立布尔标志后，状态机清晰：第一行表头→置 true→后续皆数据行。验证：2 表头格 + 4 数据格 + 0 错乱 thead。
+- **收益：** ① 报告表格表头/数据行正确区分，不再错乱；② 表头有底色加粗，可读性更好；③ 渲染逻辑去掉了脆弱的子串探测。
+
+---
+
+### 健壮性提升（P1）
+
+**3. 空 API key 时 LLM 调用挂死网络**
+- **问题：** `LLMClient` 即便 `LLM_API_KEY` 为空也会创建 `OpenAI(api_key="")` 客户端，调用时直连网络直到超时；测试/未配置环境里各 Agent 的兜底逻辑无法快速接管。
+- **修改前：** `__init__` 直接建客户端，`chat_structured`/`chat_text` 无前置检查。
+- **修改后：** `__init__` 设 `self._enabled=bool(LLM_API_KEY)`，两个调用方法开头空 key 时直接返回 `AgentError(auth_error, recoverable=False)`，让兜底即时接管。
+- **为什么这样改：** 这是报告自动重生引入测试超时时暴露的既有隐患——空配置不该挂死在网络上。显式 `_enabled` 让「不可用」成为一个快速、确定的信号。
+- **收益：** ① 空 key 时秒退走兜底而非超时；② 测试环境稳定（配合 conftest stub）；③ 生产环境配错 key 时快速报错而非假死。
+
+---
+
+### 同步修改
+
+- `tests/conftest.py`（新增）：autouse 夹具在非 `test_agents` 用例里 stub `ReporterAgent.run`，避免编辑/重算测试因自动重生报告打到真实 LLM 而挂死。
+- `app/web/templates/index.html`：版本号同步至 v3.4。
+
+---
+
+### 验证（本次新增）
+
+- 报告表格：2 表头格 `<th>` + 4 数据格 `<td>` + 0 错乱 `<thead>`（修复前表头数据混用）。
+- 全量测试：`pytest tests/ -q` → 52 passed（含 conftest stub 后的编辑/重算/成员测试）。
+
+
+## v3.3 —— 完成不重排 + 负向技能标签识别（2026-07-17）
+
+**定位：** 修复两个用户实测发现的行为缺陷：完成任务触发全员重排、负向技能标签被当成正向匹配。
+**审查/修改背景：** 用户反馈「一个人完成自己任务后被塞去帮别人后续任务」「明明标注不想做PPT却把PPT派给他」。前者是状态切换重算逻辑缺陷，后者是技能匹配把子串包含当正向信号——两者都让分工结果违背直觉。
+
+---
+
+### 关键缺陷（P0）
+
+**1. 标记任务完成会重排所有人，已完成者被塞进别人后续任务（Bug1）**
+- **问题：** `/recompute`（状态切换端点）每次都调 `assign_with_balance` 从零重算整个 QA 矩阵，完全丢弃原有分工。完成任务的人负载归零被当成「闲人」，于是被均衡算法派到别人后续任务的主讲/答辩位——与现实严重不符。
+- **修改前：**
+  ```python
+  # app/web/routes.py /recompute
+  from app.agents.scoring import assign_with_balance
+  qa_matrix = assign_with_balance(plan, members)   # 从零重排，丢弃 req.qa_matrix
+  ```
+- **修改后：** 新增 `recompute_preserve(plan, old_qa, members)`——保留原有分工，仅把已完成任务标记为 `(已完成)` 占位、负载与超载告警按现状重算；只有原矩阵缺失或主讲已离岗时才按匹配度补一个。`/recompute` 改调它，`/edit-members`（成员变动）仍走全量重排：
+  ```python
+  # app/agents/scoring.py
+  def recompute_preserve(plan, old_qa, members):
+      ...
+      for t in plan.tasks:
+          if t.status == "completed":
+              assignments.append(QAAssignment(presenter="(已完成)", ...))
+          elif old is not None and old.presenter in member_map:
+              assignments.append(old.model_copy(...))   # 保留原分工
+          else:
+              ...  # 兜底：缺失任务按匹配度补
+      work = _work_from(assignments, task_hours, members)  # 只重算负载/告警，不重排
+  ```
+- **为什么这样改：** 状态切换与成员变动语义不同。成员变了（有人退课）必须全量重排，否则悬空；但单纯「我完成了我那份」不应让别人被换走，也不应把已完成者重新派到新任务上。旧逻辑用同一个函数处理两种语义，导致「完成任务」这一高频操作产生反直觉的大面积重排。新函数把「保留」作为默认、把「补全」作为兜底，职责清晰。
+- **收益：** ① 完成任务后其他人的分工保持稳定，不再被顶替或牵连；② 已完成者不会被自动塞进后续任务；③ 成员变动走独立端点仍全量重排，两种场景各得其所。
+
+**2. 负向技能标签被当成正向匹配（Bug2）**
+- **问题：** `skill_score` 用 `_similar` 做子串包含匹配，标签「不太想做PPT」因含子串「PPT」被打 0.85 高分，于是系统把「不想做PPT」的人当成了 PPT 强项，PPT 制作任务反而派给他。
+- **修改前：**
+  ```python
+  def skill_score(member, required_skills):
+      ...
+      for req in required_skills:
+          best = max((_similar(req, tag) for tag in member.skill_tags), default=0.0)
+          total += best   # 「不太想做PPT」里的 PPT 被算成 0.85 正向匹配
+  ```
+- **修改后：** 新增 `_split_tags(tags) -> (正向, 负向回避)`，识别 `不想/不太想/不擅长/避免/拒绝` 等前缀，剥离出被回避的技能；`skill_score` 对命中负向的技能直接记 0；同时 `format_skills_for_prompt` 把标签格式化成「擅长: X; 回避: Y」喂给 LLM，让 Matcher 也读懂负向偏好：
+  ```python
+  _NEGATIVE_MARKERS = ("不想", "不太想", "不擅长", "不喜欢", "避免", "拒绝", "别让", "排斥", "怕做")
+
+  def skill_score(member, required_skills):
+      pos_tags, neg_tags = _split_tags(member.skill_tags)
+      for req in required_skills:
+          if any(_similar(req, n) >= 0.6 for n in neg_tags):
+              continue   # 明确回避 -> 记 0，不参与正向匹配
+          best = max((_similar(req, tag) for tag in pos_tags), default=0.0)
+          total += best
+  ```
+- **为什么这样改：** 根因是「相似度」无法区分意图——「做PPT」和「不做PPT」在字符层面都包含「PPT」。负向偏好是用户表达约束的方式（「我擅长前端但不想碰PPT」），必须作为独立信号处理，而不是混进正向打分。拆出负向集合后，确定性兜底（assign_with_balance）与 LLM（matcher/coordinator 的提示词）两个路径都不再把回避项当强项。
+- **收益：** ① 「不想做X」的人不再被派去做X；② 提示词显式标注回避项，LLM 也能遵守；③ 负向识别覆盖多种自然写法（不想/不太想/避免/拒绝…）。
+
+---
+
+### 同步修改
+
+- `app/agents/matcher.py`、`app/coordinator.py`：成员技能展示改用 `format_skills_for_prompt`，把负向偏好显式呈现给 LLM。
+- `app/web/templates/index.html`：版本号同步至 v3.3。
+
+---
+
+### 验证（本次新增）
+
+- 负向标签：`skill_score(小明[前端,不太想做PPT], [PPT])` 由 0.85 降为 0.0；PPT 任务改派给有 PPT 标签者。
+- 完成重排：小明完成 T1 后，T2/T3 主讲保持原分工不变（小红/小刚），小明未被塞入后续任务。
+- 全量测试：`pytest tests/ -q` → 52 passed；`app/` 全模块编译通过。
+
+
 ## v3.2 —— 用户验收六连击修复（2026-07-17）
 
 **定位：** 上一版 v3.1 交付后用户实测发现的 6 个回归/残留问题，逐条定位根因并修复。

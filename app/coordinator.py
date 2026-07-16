@@ -18,6 +18,7 @@ from app.models.schemas import (
     AgentError, AssignmentInput, FullPlan, PlanOutput,
     QAOutput, TimelineOutput, ReportOutput, SubTask,
 )
+from app.agents.scoring import format_skills_for_prompt
 from app.agents.planner import PlannerAgent
 from app.agents.matcher import MatcherAgent
 from app.agents.scoring import assign_with_balance, enhance
@@ -81,7 +82,7 @@ class Coordinator:
     def _step_planner(self, inp: AssignmentInput) -> PlanOutput | AgentError:
         # 为 Planner 提供丰富的成员信息（含技能和可用工时）
         members = [
-            f"{m.name}(技能: {', '.join(m.skill_tags) or '未标注'}; "
+            f"{m.name}(技能: {format_skills_for_prompt(m.skill_tags)}; "
             f"总可用: {m.available_hours}h; "
             f"每日可用: {m.daily_available_hours}h)"
             for m in inp.members

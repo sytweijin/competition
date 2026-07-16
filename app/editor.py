@@ -10,11 +10,12 @@ from __future__ import annotations
 
 import logging
 
+from app.agents.reporter import ReporterAgent
 from app.agents.scoring import assign_with_balance
 from app.agents.timeline import TimelineAgent
 from app.agents.validation import PlanValidationError, validate_plan
 from app.models.schemas import (
-    EditPlanRequest, FullPlan, PlanOutput, SubTask, TaskEdit,
+    EditPlanRequest, FullPlan, PlanOutput, ReportOutput, SubTask, TaskEdit,
 )
 
 logger = logging.getLogger(__name__)
@@ -101,10 +102,22 @@ def edit_plan(req: EditPlanRequest) -> FullPlan:
             members=original.input.members,
         )
 
+    # 编辑/重算后自动重生成报告：用编辑后的 plan + 重算的 timeline + qa_matrix 单独调 Reporter，
+    # 不重跑 Planner/Matcher 链路，因此保留用户的手动编辑成果。
+    # Reporter 内部有纯文本兜底，LLM 失败也不会中断。
+    try:
+        report = ReporterAgent().run(plan=new_plan, timeline=timeline, qa_matrix=qa_matrix)
+        if not isinstance(report, ReportOutput):
+            report = ReportOutput(summary="报告重生成失败", risk_note=str(report))
+    except Exception as exc:
+        logger.exception("reporter rerun failed after edit")
+        report = original.report.model_copy(update={
+            "risk_note": (original.report.risk_note + f"\n(报告重生成失败: {exc})").strip()})
+
     return FullPlan(
         input=original.input,
         plan=new_plan,
         timeline=timeline,
         qa_matrix=qa_matrix,
-        report=original.report.model_copy(update={"risk_note": (original.report.risk_note + "\n(计划已编辑，报告可能已过期，建议重新生成)").strip()}),  # 追加过期提示
+        report=report,
     )

@@ -9,6 +9,7 @@ from __future__ import annotations
 from app.agents.base import BaseAgent
 from app.llm.prompts import MATCHER_SYSTEM, MATCHER_USER_TEMPLATE
 from app.models.schemas import AgentError, PlanOutput, TeamMember, QAOutput, QAAssignment
+from app.agents.scoring import format_skills_for_prompt
 
 
 class MatcherAgent(BaseAgent[QAOutput]):
@@ -19,7 +20,7 @@ class MatcherAgent(BaseAgent[QAOutput]):
             members: list[TeamMember]) -> QAOutput | AgentError:
         """根据任务计划和成员信息生成 QA 责任矩阵。"""
         members_str = "; ".join(
-            f"{m.name}(技能: {', '.join(m.skill_tags) or '未标注'}; "
+            f"{m.name}(技能: {format_skills_for_prompt(m.skill_tags)}; "
             f"可用工时: {m.available_hours}h)"
             for m in members
         )

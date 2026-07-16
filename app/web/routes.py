@@ -177,14 +177,15 @@ async def recompute_plan(req: FullPlan):
     确保排期与分配与最新状态保持一致。
     """
     try:
-        from app.agents.scoring import assign_with_balance
+        from app.agents.scoring import recompute_preserve
         from app.agents.timeline import TimelineAgent
 
         plan = req.plan
         members = req.input.members
 
-        # 重算 Matcher（确定性，即时可见）
-        qa_matrix = assign_with_balance(plan, members)
+        # 重算 Matcher：状态切换保留原有分工（完成自己任务的人不再被重排到别人后续任务），
+        # 仅已完成任务标记为占位、负载/告警按现状重算；成员变动走 /edit-members 仍全量重排
+        qa_matrix = recompute_preserve(plan, req.qa_matrix, members)
 
         # 回填负责人，重算 Timeline（会读取 task.status）
         assignments: dict[str, list[str]] = {}
@@ -204,12 +205,21 @@ async def recompute_plan(req: FullPlan):
             members=members,
         )
 
+        # 状态切换后自动重生成报告（保留分工重算后的最新 timeline/qa）
+        try:
+            from app.agents.reporter import ReporterAgent
+            report = ReporterAgent().run(plan=plan, timeline=timeline, qa_matrix=qa_matrix)
+        except Exception as exc:
+            logger.exception("reporter rerun failed after recompute")
+            report = req.report.model_copy(update={
+                "risk_note": (req.report.risk_note + f"\n(报告重生成失败: {exc})").strip()})
+
         return FullPlan(
             input=req.input,
             plan=plan,
             timeline=timeline,
             qa_matrix=qa_matrix,
-            report=req.report.model_copy(update={"risk_note": (req.report.risk_note + "\n(计划已变动，报告可能已过期，建议重新生成)").strip()}),
+            report=report,
         )
     except Exception as e:
         logger.exception("Recompute failed")
@@ -418,14 +428,21 @@ async def edit_members_endpoint(req: MemberEditRequest):
             members=new_members,
         )
 
+        # 成员变动后自动重生成报告
+        try:
+            from app.agents.reporter import ReporterAgent
+            report = ReporterAgent().run(plan=fp.plan, timeline=timeline, qa_matrix=qa_matrix)
+        except Exception as exc:
+            logger.exception("reporter rerun failed after member edit")
+            report = fp.report.model_copy(update={
+                "risk_note": (fp.report.risk_note + f"\n（成员已变动，报告重生成失败: {exc}）").strip()})
+
         return FullPlan(
             input=new_input,
             plan=fp.plan,
             timeline=timeline,
             qa_matrix=qa_matrix,
-            report=fp.report.model_copy(update={
-                "risk_note": (fp.report.risk_note + "\n（成员已变动，此报告可能已过期，建议重新生成）").strip(),
-            }),
+            report=report,
         )
     except HTTPException:
         raise

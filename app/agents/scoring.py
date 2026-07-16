@@ -19,6 +19,49 @@ def _normalize_tag(tag: str) -> str:
     """标签归一化：去空格、转小写，便于精确匹配。"""
     return tag.strip().lower().replace(" ", "")
 
+# 负向偏好的前缀标记：命中即认为该成员「回避」其后跟随的技能。
+# 用元组而非单字符串，避免把「想做」误判为负向（正向的「想做PPT」不含这些标记）。
+_NEGATIVE_MARKERS = ("不想", "不太想", "不擅长", "不喜欢", "避免", "拒绝", "别让", "排斥", "怕做")
+
+
+def _split_tags(tags: list[str]) -> tuple[list[str], list[str]]:
+    """把技能标签拆成 (正向技能, 负向回避技能)。
+
+    - '不太想做PPT' -> 负向 'PPT'
+    - '不想做前端'   -> 负向 '前端'
+    - 'PPT' / '想做PPT' -> 正向 'PPT'
+    负向标签里的技能词必须被剥离出来单独标记，否则 _similar 的子串包含
+    会把「不太想做PPT」当成「擅长PPT」打高分（0.85）。
+    """
+    pos: list[str] = []
+    neg: list[str] = []
+    for tag in tags or []:
+        norm = tag.strip()
+        hit = None
+        for marker in _NEGATIVE_MARKERS:
+            if norm.find(marker) != -1:
+                hit = marker
+                break
+        if hit is None:
+            pos.append(norm)
+            continue
+        # 取负向标记之后的文本，剥掉常见连接词，剩下的即被回避的技能
+        rest = norm[norm.find(hit) + len(hit):].strip("做要的会了、，。 ")
+        if rest:
+            neg.append(rest)
+    return pos, neg
+
+
+def format_skills_for_prompt(tags: list[str]) -> str:
+    """把技能标签格式化为「擅长: X; 回避: Y」便于 LLM 区分正负向偏好。"""
+    pos, neg = _split_tags(tags)
+    parts = []
+    if pos:
+        parts.append("擅长: " + ", ".join(pos))
+    if neg:
+        parts.append("回避: " + ", ".join(neg))
+    return "; ".join(parts) if parts else "未标注"
+
 
 def _similar(a: str, b: str) -> float:
     """两个技能标签的相似度（大小写/空白不敏感，支持包含关系）。"""
@@ -46,14 +89,20 @@ def skill_score(member: TeamMember, required_skills: list[str]) -> float:
     """成员对所需技能的匹配分（0-1）。
 
     取每个所需技能的最佳匹配相似度后求均值；无所需技能则返回中性 0.5。
+    负向标签（如「不太想做PPT」「避免前端」）命中的技能记 0 分——
+    明确回避的技能不参与正向匹配，防止「不想做」被当成「擅长」。
     """
     if not required_skills:
         return 0.5
-    if not member.skill_tags:
+    pos_tags, neg_tags = _split_tags(member.skill_tags)
+    if not pos_tags and not neg_tags:
         return 0.0
     total = 0.0
     for req in required_skills:
-        best = max((_similar(req, tag) for tag in member.skill_tags),
+        # 负向命中：该技能被成员明确回避，直接记 0
+        if any(_similar(req, n) >= 0.6 for n in neg_tags):
+            continue
+        best = max((_similar(req, tag) for tag in pos_tags),
                    default=0.0)
         total += best
     return round(total / len(required_skills), 3)
@@ -267,6 +316,61 @@ def assign_with_balance(plan: PlanOutput,
     return QAOutput(assignments=assignments, workload=work, note=note)
 def _fmt(tags: list[str]) -> str:
     return ", ".join(tags) if tags else "未标注"
+
+
+def recompute_preserve(plan: PlanOutput, old_qa: QAOutput | None,
+                       members: list[TeamMember]) -> QAOutput:
+    """状态切换后重算：保留原有分工，只把已完成任务标记为占位，并重算负载/告警。
+
+    不从零重排——重排会把刚完成自己任务的人当成「闲人」塞到别人后续任务上，
+    与现实不符（现实中完成自己部分并不等于要再去帮别人扛后续任务）。
+    只有原矩阵里缺失的任务、或主讲已离开成员名单时，才用确定性逻辑补一个。
+    """
+    if not members or not plan.tasks:
+        return QAOutput(assignments=[], note="无任务或无成员")
+    member_map = {m.name: m for m in members}
+    task_hours = {t.id: t.estimated_hours for t in plan.tasks}
+    old_by_task = {a.task_id: a for a in (old_qa.assignments if old_qa else [])}
+
+    assignments = []
+    for t in plan.tasks:
+        old = old_by_task.get(t.id)
+        if t.status == "completed":
+            assignments.append(QAAssignment(
+                task_id=t.id, task_name=t.name, chapter="",
+                presenter="(已完成)", qa_primary="", qa_support=[],
+                score=0.0, reasoning="任务已完成",
+            ))
+            continue
+        # 保留原有分工（主讲仍在职）；否则走兜底
+        if old is not None and (old.presenter in member_map
+                                or old.presenter in ("", "(已完成)")):
+            assignments.append(old.model_copy(update={"task_name": t.name}))
+            continue
+        # 兜底：原矩阵缺失或主讲已离开成员名单——按确定性逻辑补一个
+        scored = [(m.name, skill_score(m, t.required_skills)) for m in members]
+        scored.sort(key=lambda x: -x[1])
+        presenter = scored[0][0] if scored else ""
+        rest_names = [n for n, _ in scored if n != presenter]
+        primary = rest_names[0] if rest_names else ""
+        support = rest_names[1:3]
+        score = scored[0][1] if scored else 0.0
+        assignments.append(QAAssignment(
+            task_id=t.id, task_name=t.name, chapter="",
+            presenter=presenter, qa_primary=primary, qa_support=support,
+            score=score, reasoning="状态切换后按匹配度补充分配",
+        ))
+
+    work = _work_from(assignments, task_hours, members)
+    overload = []
+    for name, hours in work.items():
+        m = member_map.get(name)
+        if m and hours > m.available_hours:
+            overload.append(f"{name} 负载 {hours:.1f}h 超过可用 {m.available_hours:.1f}h")
+    note = "状态切换重算（保留原分工）"
+    if overload:
+        note += "；超载警告: " + "; ".join(overload)
+    return QAOutput(assignments=assignments, workload=work, note=note)
 
 
 def enhance(qa: QAOutput, plan: PlanOutput,

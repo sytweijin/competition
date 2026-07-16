@@ -60,6 +60,7 @@ class LLMClient:
 
     def __init__(self, model: Optional[str] = None):
         self.model = model or LLM_MODEL
+        self._enabled = bool(LLM_API_KEY)
         self._client = OpenAI(api_key=LLM_API_KEY, base_url=LLM_BASE_URL)
 
     def chat_structured(
@@ -75,6 +76,10 @@ class LLMClient:
         策略：先尝试 structured output（response_format），失败后回退到
         普通 create + 手动 JSON 提取 + model_validate_json。
         """
+        if not self._enabled:
+            return AgentError(agent="LLMClient", error_type="auth_error",
+                              message="LLM_API_KEY 未配置，跳过 LLM 调用",
+                              recoverable=False)
         retries = max(1, max_retries)
         for attempt in range(retries):
             try:
@@ -169,6 +174,8 @@ class LLMClient:
         temperature: float = 0.7,
     ) -> str | AgentError:
         """自由文本调用（用于 B1 答辩模拟等无需严格结构化的场景）"""
+        if not self._enabled:
+            return AgentError(agent="LLMClient", error_type="auth_error", message="LLM_API_KEY 未配置，跳过调用", recoverable=False)
         try:
             resp = self._client.chat.completions.create(
                 model=self.model,
