@@ -209,7 +209,7 @@ async def recompute_plan(req: FullPlan):
             plan=plan,
             timeline=timeline,
             qa_matrix=qa_matrix,
-            report=req.report,
+            report=req.report.model_copy(update={"risk_note": (req.report.risk_note + "\n(计划已变动，报告可能已过期，建议重新生成)").strip()}),
         )
     except Exception as e:
         logger.exception("Recompute failed")
@@ -383,7 +383,14 @@ async def edit_members_endpoint(req: MemberEditRequest):
             if not nm:
                 continue
             dh = max(0.5, float(a.get("daily_available_hours", 4)))
-            new_m = TeamMember(name=nm, daily_available_hours=dh, available_hours=max(dh, dh * remaining))
+            sk = a.get("skill_tags", [])
+            if isinstance(sk, str):
+                sk = [t.strip() for t in sk.split(",") if t.strip()]
+            new_m = TeamMember(
+                name=nm, daily_available_hours=dh,
+                available_hours=max(dh, dh * remaining),
+                skill_tags=sk if sk else [],
+            )
             new_members.append(new_m)
         if not new_members:
             raise HTTPException(status_code=400, detail="不能删除所有成员")

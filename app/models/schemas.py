@@ -171,7 +171,7 @@ class FullPlan(BaseModel):
     timeline: TimelineOutput
     qa_matrix: QAOutput
     report: ReportOutput
-    version: str = "2.0"
+    version: str = "3.0"
 
 
 # ──────────── B4：协作图动态编辑 ────────────

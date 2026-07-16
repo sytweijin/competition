@@ -119,7 +119,7 @@ def assign_with_balance(plan: PlanOutput,
     # 负载差 > 1h 时继续均衡调整
     sorted_w = sorted(work.items(), key=lambda x: x[1])
     for _pass in range(30):
-        if sorted_w[-1][1] - sorted_w[0][1] <= 1.0:
+        if sorted_w[-1][1] - sorted_w[0][1] <= 0.5:
             break
         overloaded = sorted_w[-1][0]
         underloaded = sorted_w[0][0]
@@ -161,7 +161,7 @@ def assign_with_balance(plan: PlanOutput,
             )
     note = "B3确定性兜底 + 超载校正 v2.1"
     if overload_warnings:
-        note += "超载警告: " + "; ".join(overload_warnings)
+        note += " 超载警告: " + "; ".join(overload_warnings)
 
     return QAOutput(assignments=assignments, workload=work, note=note)
 def _fmt(tags: list[str]) -> str:
@@ -196,14 +196,47 @@ def enhance(qa: QAOutput, plan: PlanOutput,
             score = skill_score(member_map[a.presenter], t.required_skills)
         enhanced.append(a.model_copy(update={"score": round(score, 3)}))
 
-    # 负载失衡/超载检测，补充到 note
+    # 负载均衡转移：若最高最低差距 > 30%，转移主讲任务
+    max_w = max(work.values()) if work else 1
+    min_w = min(work.values()) if work else 0
+    if max_w > min_w * 1.2:
+        sorted_w = sorted(work.items(), key=lambda x: x[1])
+        for _pass in range(50):
+            if sorted_w[-1][1] - sorted_w[0][1] <= max_w * 0.15:
+                break
+            overloaded = sorted_w[-1][0]
+            underloaded = sorted_w[0][0]
+            candidates = [(a, task_hours.get(a.task_id, 0)) for a in enhanced
+                          if a.presenter == overloaded]
+            gap = sorted_w[-1][1] - sorted_w[0][1]
+            candidates.sort(key=lambda x: abs(x[1] - gap/2))
+            swapped = False
+            for a, h in candidates:
+                if h <= 0:
+                    continue
+                new_over = work[overloaded] - h
+                new_under = work[underloaded] + h
+                if abs(new_over - new_under) < gap:
+                    a.presenter = underloaded
+                    work[overloaded] -= h
+                    work[underloaded] += h
+                    task = task_map.get(a.task_id)
+                    if task and underloaded in member_map:
+                        a.score = round(skill_score(member_map[underloaded], task.required_skills), 3)
+                    a.reasoning += f"已转给{underloaded}平衡负载"
+                    swapped = True
+                    break
+            if not swapped:
+                break
+            sorted_w = sorted(work.items(), key=lambda x: x[1])
+    # 负载失衡/超载检测（在均衡后计算，避免过期警告）
+    note = qa.note or ""
     imbalance = []
     for name, hours in work.items():
         m = member_map.get(name)
         if m and hours > m.available_hours:
             imbalance.append(
                 f"{name} 负载 {hours:.1f}h 超过可用 {m.available_hours:.1f}h")
-    note = qa.note or ""
     if imbalance:
         note += "；负载警告：" + "；".join(imbalance)
     return qa.model_copy(update={
