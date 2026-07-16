@@ -14,7 +14,8 @@ MEMORY_DIR = BASE_DIR / "memory"
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1")
 LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-v4-flash")
-LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "1"))
+# 默认3次结构化尝试（parse_error 不重试）
+LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "3"))
 
 # App
 APP_HOST = os.getenv("APP_HOST", "127.0.0.1")

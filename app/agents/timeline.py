@@ -215,6 +215,41 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
         else:
             cap_desc = f"按全局默认每人每天 {global_daily:g}h 折算。"
 
+        # P1-6: 检查每人每日并行任务是否超出当日可用工时
+        if member_daily:
+            from collections import defaultdict
+            warn = '（警告：%s 在 %s 并行任务折算 %.1fh 超过当日可用 %.1fh，建议拆分人手或拉开日期）'
+            per_day = defaultdict(float)
+            for tt in timeline_tasks:
+                if tt.status == "completed":
+                    continue
+                s = tt.start_date.date() if hasattr(tt.start_date, "date") else tt.start_date
+                e = tt.end_date.date() if hasattr(tt.end_date, "date") else tt.end_date
+                dur_days = max(1, (e - s).days + 1)
+                assigned = tt.assigned_to or []
+                t_ref = task_map.get(tt.task_id)
+                th = t_ref.estimated_hours if t_ref else 0.0
+                for idx, nm in enumerate(assigned):
+                    cap = member_daily.get(nm)
+                    if cap is None:
+                        continue
+                    contrib = (th / dur_days) if idx == 0 else (0.5 * cap)
+                    d = s
+                    while d <= e:
+                        per_day[(nm, d)] += contrib
+                        d += timedelta(days=1)
+            worst = {}
+            for (nm, d), hrs in per_day.items():
+                cap = member_daily.get(nm, global_daily)
+                if hrs > cap + 1e-6:
+                    prev = worst.get(nm)
+                    if prev is None or hrs > prev[1]:
+                        worst[nm] = (d, hrs, cap)
+            for nm, (d, hrs, cap) in sorted(worst.items()):
+                risk += warn % (
+                    nm, d.isoformat(), hrs, cap,
+                )
+
         reasoning = (
             f"使用关键路径法(CPM)计算，以半天为最小排期粒度。"
             f"共 {len(tasks)} 个任务，总工期 {project_days} 天。"

@@ -30,6 +30,11 @@ class PlannerAgent(BaseAgent[PlanOutput]):
         result = self._call_llm(user)
         if isinstance(result, AgentError):
             return result
+        # 新生成的任务一律从「待开始」起步：LLM 偶发把 status 写成 completed/in_progress，
+        # 会导致任务一出生就被标成已完成，这里强制归零。
+        result = result.model_copy(update={
+            "tasks": [t.model_copy(update={"status": "pending"}) for t in result.tasks]
+        })
         # 兜底校验：去重 id、剔除悬空依赖、检测环
         try:
             return validate_plan(result)

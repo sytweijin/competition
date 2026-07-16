@@ -26,6 +26,149 @@ import xml.sax.saxutils as saxutils
 from app.models.schemas import FullPlan
 
 
+def _md_split_inline(text):
+    """把一行里的 **bold** / *italic* 拆成 (text, bold, italic) 片段。"""
+    import re
+    parts = []
+    pos = 0
+    for m in re.finditer(r"\*\*(.+?)\*\*|\*(.+?)\*", text):
+        if m.start() > pos:
+            parts.append((text[pos:m.start()], False, False))
+        if m.group(1) is not None:
+            parts.append((m.group(1), True, False))
+        else:
+            parts.append((m.group(2), False, True))
+        pos = m.end()
+    if pos < len(text):
+        parts.append((text[pos:], False, False))
+    return parts or [(text, False, False)]
+
+
+def _md_blocks(text):
+    """把 markdown 文本切成 (kind, content) 块：h2/h3/li/p/table。"""
+    if not text:
+        return []
+    blocks = []
+    lines = text.split("\n")
+    i = 0
+    while i < len(lines):
+        line = lines[i].rstrip()
+        if not line.strip():
+            i += 1
+            continue
+        # 表格
+        if line.strip().startswith("|") and line.strip().endswith("|"):
+            rows = []
+            while i < len(lines) and lines[i].strip().startswith("|"):
+                cells = [c.strip() for c in lines[i].strip().strip("|").split("|")]
+                # 分隔行（全是 -/:/空格）跳过，不当作数据行
+                if cells and all(set(c) <= set("-: ") for c in cells if c):
+                    i += 1
+                    continue
+                rows.append(cells)
+                i += 1
+            if rows:
+                blocks.append(("table", rows))
+            continue
+        # 标题
+        if line.startswith("### "):
+            blocks.append(("h3", line[4:].strip()))
+        elif line.startswith("## "):
+            blocks.append(("h2", line[3:].strip()))
+        elif line.startswith("# "):
+            blocks.append(("h2", line[2:].strip()))
+        elif line.startswith("- ") or line.startswith("* "):
+            blocks.append(("li", line[2:].strip()))
+        else:
+            blocks.append(("p", line.strip()))
+        i += 1
+    return blocks
+
+
+def _md_to_docx(doc, text, base_heading_level=1):
+    """把 markdown 文本渲染进 Word 文档（标题/列表/粗体斜体/表格）。"""
+    for kind, content in _md_blocks(text):
+        if kind == "h2":
+            doc.add_heading(content, level=base_heading_level)
+        elif kind == "h3":
+            doc.add_heading(content, level=base_heading_level + 1)
+        elif kind == "li":
+            p = doc.add_paragraph(style="List Bullet")
+            for txt, bold, italic in _md_split_inline(content):
+                if not txt:
+                    continue
+                r = p.add_run(txt)
+                r.bold = bold or None
+                r.italic = italic or None
+        elif kind == "table":
+            tbl = doc.add_table(rows=0, cols=len(content[0]), style="Table Grid")
+            for ridx, row in enumerate(content):
+                cells = tbl.add_row().cells
+                for cidx, cell in enumerate(row):
+                    if cidx < len(cells):
+                        cells[cidx].text = cell
+                        if ridx == 0:
+                            for run in cells[cidx].paragraphs[0].runs:
+                                run.bold = True
+        else:  # p
+            p = doc.add_paragraph()
+            for txt, bold, italic in _md_split_inline(content):
+                if not txt:
+                    continue
+                r = p.add_run(txt)
+                r.bold = bold or None
+                r.italic = italic or None
+
+
+def _md_inline_to_pdf_html(text):
+    """行内 markdown -> reportlab 可识别的 mini-HTML（先转义，再加 <b>/<i>）。"""
+    import re
+    out = []
+    for txt, bold, italic in _md_split_inline(text):
+        seg = saxutils.escape(txt)
+        if bold:
+            seg = "<b>" + seg + "</b>"
+        if italic:
+            seg = "<i>" + seg + "</i>"
+        out.append(seg)
+    return "".join(out)
+
+
+def _md_to_pdf_story(text, body_style, h2_style, h3_style, font_name):
+    """把 markdown 文本渲染成 reportlab flowable 列表。"""
+    from reportlab.platypus import Paragraph, Spacer, Table, TableStyle
+    from reportlab.lib import colors
+    from reportlab.lib.units import cm
+    story = []
+    for kind, content in _md_blocks(text):
+        if kind == "h2":
+            story.append(Paragraph(saxutils.escape(content), h2_style))
+        elif kind == "h3":
+            story.append(Paragraph(saxutils.escape(content), h3_style))
+        elif kind == "li":
+            story.append(Paragraph("• " + _md_inline_to_pdf_html(content), body_style))
+        elif kind == "table":
+            n = max(len(r) for r in content)
+            cw = 17 * cm / n
+            tbl = Table(content, colWidths=[cw] * n, repeatRows=1)
+            st = TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#4f46e5")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+                ("FONTSIZE", (0, 0), (-1, -1), 9),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+                 [colors.white, colors.HexColor("#f1f5f9")]),
+            ])
+            if font_name:
+                st.add("FONTNAME", (0, 0), (-1, -1), font_name)
+            tbl.setStyle(st)
+            story.append(tbl)
+        else:  # p
+            story.append(Paragraph(_md_inline_to_pdf_html(content), body_style))
+        story.append(Spacer(1, 4))
+    return story
+
+
 def _register_cjk_font():
     """注册中文字体（PDF 默认不支持中文），失败则回退 Helvetica。
 
@@ -92,7 +235,7 @@ def plan_to_docx(plan: FullPlan) -> bytes:
     # 概述
     if plan.plan.summary:
         doc.add_heading("一、计划概述", level=1)
-        doc.add_paragraph(plan.plan.summary)
+        _md_to_docx(doc, plan.plan.summary, base_heading_level=2)
 
     # 任务列表
     doc.add_heading("二、任务拆解", level=1)
@@ -150,12 +293,10 @@ def plan_to_docx(plan: FullPlan) -> bytes:
     # 报告与风险
     if plan.report.summary:
         doc.add_heading("五、报告总结", level=1)
-        doc.add_paragraph(plan.report.summary)
+        _md_to_docx(doc, plan.report.summary, base_heading_level=2)
     if plan.report.risk_note:
         doc.add_heading("六、风险提示", level=1)
-        p = doc.add_paragraph(plan.report.risk_note)
-        for run in p.runs:
-            run.font.color.rgb = RGBColor(0xC0, 0x00, 0x00)
+        _md_to_docx(doc, plan.report.risk_note, base_heading_level=2)
 
     buf = io.BytesIO()
     doc.save(buf)
@@ -177,6 +318,8 @@ def plan_to_pdf(plan: FullPlan) -> bytes:
                               fontName=font_name or "Helvetica", fontSize=16)
     h2_style = ParagraphStyle("H2", parent=styles["Heading2"],
                               fontName=font_name or "Helvetica", fontSize=13)
+    h3_style = ParagraphStyle("H3", parent=styles["Heading3"],
+                              fontName=font_name or "Helvetica", fontSize=11)
     story = []
 
     story.append(Paragraph(saxutils.escape(plan.input.course.name) or "项目计划", h1_style))
@@ -191,7 +334,7 @@ def plan_to_pdf(plan: FullPlan) -> bytes:
 
     if plan.plan.summary:
         story.append(Paragraph("一、计划概述", h2_style))
-        story.append(Paragraph(saxutils.escape(plan.plan.summary).replace("\n", "<br/>"), body_style))
+        story.extend(_md_to_pdf_story(plan.plan.summary, body_style, h2_style, h3_style, font_name))
         story.append(Spacer(1, 10))
 
     story.append(Paragraph("二、任务拆解", h2_style))
@@ -232,12 +375,12 @@ def plan_to_pdf(plan: FullPlan) -> bytes:
 
     if plan.report.summary:
         story.append(Paragraph("五、报告总结", h2_style))
-        story.append(Paragraph(saxutils.escape(plan.report.summary).replace("\n", "<br/>"), body_style))
+        story.extend(_md_to_pdf_story(plan.report.summary, body_style, h2_style, h3_style, font_name))
 
     if plan.report.risk_note:
         story.append(Paragraph("六、风险提示", h2_style))
         risk_style = ParagraphStyle("Risk", parent=body_style, textColor=colors.red)
-        story.append(Paragraph(saxutils.escape(plan.report.risk_note).replace("\n", "<br/>"), risk_style))
+        story.extend(_md_to_pdf_story(plan.report.risk_note, risk_style, h2_style, h3_style, font_name))
 
     doc.build(story)
     return buf.getvalue()

@@ -27,18 +27,31 @@ LLM_TIMEOUT = 120  # 秒
 
 
 def _classify_error(e: Exception) -> str:
-    """将异常分类为可操作的 error_type。"""
-    msg = str(e).lower()
-    if isinstance(e, (TimeoutError,)):
+    """将异常分类为可操作的 error_type。
+
+    优先用 OpenAI SDK 异常类型，避免关键字误判（兼容非英文报错）。
+    """
+    import openai as _oai
+    def _t(name):
+        cls = getattr(_oai, name, None)
+        return (cls,) if cls is not None else ()
+    if isinstance(e, (TimeoutError,) + _t("APITimeoutError")):
         return "timeout"
-    if "401" in msg or "unauthorized" in msg or "invalid api key" in msg:
+    if isinstance(e, _t("AuthenticationError")):
         return "auth_error"
-    if "429" in msg or "rate limit" in msg or "quota" in msg:
+    if isinstance(e, _t("RateLimitError")):
         return "rate_limit"
-    if isinstance(e, ValidationError) or "json" in msg or "parse" in msg:
-        return "parse_error"
-    if "connection" in msg or "timeout" in msg or "timed out" in msg:
+    if isinstance(e, _t("APIConnectionError")):
         return "timeout"
+    if isinstance(e, ValidationError):
+        return "parse_error"
+    if isinstance(e, _t("BadRequestError")):
+        return "parse_error"
+    if isinstance(e, _t("APIStatusError")):
+        code = getattr(getattr(e, "response", None), "status_code", None)
+        if code is not None and 500 <= code < 600:
+            return "unknown"
+        return "parse_error"
     return "unknown"
 
 
@@ -62,39 +75,35 @@ class LLMClient:
         策略：先尝试 structured output（response_format），失败后回退到
         普通 create + 手动 JSON 提取 + model_validate_json。
         """
-        for attempt in range(max_retries):
+        retries = max(1, max_retries)
+        for attempt in range(retries):
             try:
-                # 尝试 structured output
-                resp = self._try_structured(system_prompt, user_prompt,
+                return self._try_structured(system_prompt, user_prompt,
                                             response_model, temperature)
-                return resp
             except Exception as e:
                 err_type = _classify_error(e)
                 logger.warning("LLM structured attempt %d/%d (%s): %s",
-                               attempt + 1, max_retries, err_type, e)
-
-                # 非 retryable 的错误直接返回
+                               attempt + 1, retries, err_type, e)
                 if err_type == "auth_error":
                     return AgentError(agent="LLMClient", error_type=err_type,
                                      message=f"API 鉴权失败：{e}",
                                      recoverable=False)
-
-                if attempt == max_retries - 1:
-                    # 最后一次尝试：回退到普通 create
-                    try:
-                        logger.info("Falling back to plain create + validate")
-                        return self._try_plain_validate(
-                            system_prompt, user_prompt,
-                            response_model, temperature)
-                    except Exception as e2:
-                        return AgentError(
-                            agent="LLMClient",
-                            error_type=_classify_error(e2),
-                            message=f"LLM 调用失败（已尝试 {max_retries} 次结构化 + 1 次回退）：{e2}",
-                            recoverable=True,
-                        )
-        return AgentError(agent="LLMClient", error_type="unknown",
-                         message="Exhausted retries", recoverable=True)
+                if err_type == "parse_error":
+                    break  # 结构化重试无意义，直接回退 plain create
+                # rate_limit / timeout / unknown：可重试，最后一次落到 fallback
+        try:
+            logger.info("Falling back to plain create + validate")
+            return self._try_plain_validate(
+                system_prompt, user_prompt,
+                response_model, temperature)
+        except Exception as e2:
+            return AgentError(
+                agent="LLMClient",
+                error_type=_classify_error(e2),
+                message=(f"LLM 调用失败（已尝试 {retries} "
+                         f"次结构化 + 1 次回退）：{e2}"),
+                recoverable=True,
+            )
 
     def _try_structured(self, system_prompt, user_prompt,
                         response_model, temperature) -> T:
@@ -109,7 +118,13 @@ class LLMClient:
             temperature=temperature,
             timeout=LLM_TIMEOUT,
         )
-        raw = resp.choices[0].message.content
+        msg = resp.choices[0].message
+        parsed = getattr(msg, "parsed", None)
+        if parsed is not None:
+            if isinstance(parsed, response_model):
+                return parsed
+            return response_model.model_validate(parsed)
+        raw = getattr(msg, "content", None)
         if not raw:
             raise ValueError("Empty response from LLM")
         return response_model.model_validate_json(raw)

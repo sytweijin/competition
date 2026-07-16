@@ -7,6 +7,212 @@
 ---
 
 
+## v3.2 —— 用户验收六连击修复（2026-07-17）
+
+**定位：** 上一版 v3.1 交付后用户实测发现的 6 个回归/残留问题，逐条定位根因并修复。
+**审查/修改背景：** 用户反馈「改了那么多东西，是不是又把有的东西改坏了」——经核查确有 6 处需要修补：版本号不同步、新生成任务状态错乱、分工仍不均衡、Word/PDF 报告残留 Markdown、QA 矩阵匹配度栏空缺、甘特图末位任务条被裁。本版本全部修复并补齐自动化验证。
+
+---
+
+### 健壮性提升（P1）
+
+**1. 前端版本号与 CHANGELOG 不同步（Q1）**
+- **问题：** v3.1 已写入 CHANGELOG，但前端标题/副标题仍显示 v3.0，用户无法确认线上跑的是哪一版。
+- **修改前：** `<title>小组合作智能体 v3.0</title>`；副标题 `<span class="text-slate-400">v3.0</span>`。
+- **修改后：** `<title>小组合作智能体 v3.2</title>`；副标题 `<span class="text-slate-400">v3.2</span>`——与当前 CHANGELOG 版本对齐。
+- **为什么这样改：** 版本号是「这个版本改了什么」的唯一入口。CHANGELOG 与界面版本号不一致会让团队无法判断线上行为对应哪个版本，排查回归时无据可依。
+- **收益：** ① 前端与 CHANGELOG 版本对齐；② 用户一眼确认当前运行版本。
+
+**2. 新生成的任务初始状态被 LLM 写成「已完成」（Q2）**
+- **问题：** LLM 偶发把任务 `status` 字段直接写成 `completed`/`in_progress`，导致任务一出生就被标成已完成，进度条瞬间 100%、时间线把后续任务全部前移。
+- **修改前：** `result = result.model_copy(update={...})` 后直接返回，未触碰 `tasks[*].status`。
+- **修改后：** LLM 返回后强制归零——
+  ```python
+  result = result.model_copy(update={
+      "tasks": [t.model_copy(update={"status": "pending"}) for t in result.tasks]
+  })
+  ```
+- **为什么这样改：** 任务状态是「用户手工维护」的运行时数据，绝不应由生成阶段决定。LLM 的职责是拆任务，状态的语义在编辑/执行阶段才有意义；在生成出口强制归零是最可靠的兜底。
+- **收益：** ① 新计划一律从「待开始」起步；② 进度条/时间线不再被污染；③ 状态语义单一真相源。
+
+**3. 三人分工工时差仍超 1h，且不可均摊时无提示（Q3）**
+- **问题：** 上一版 v3.1 的负载均衡只搬运「辅答」，当主讲分布本身失衡时无法纠正；且当任务结构在数学上无法 3 人均摊（如 5 个 5h 任务给 3 人，必有人扛 2 个）时，静默返回失衡结果，用户不知该如何处理。
+- **修改前：** 均衡逻辑只覆盖辅答搬运，且失衡时不给任何提示。
+- **修改后：** 重写 `_balance_workload`——主讲/主答/辅答统一搬运，每步枚举所有可行搬运并用「真实重算负载」评估全局 gap，选最小者执行，gap 不再下降即停；新增 `_split_suggestion`，当均衡后 gap 仍 >1h 时在 note 追加拆分建议：
+  ```python
+  def _split_suggestion(work, assignments, task_hours, members, threshold=1.0):
+      gap = max(work.values()) - min(work.values())
+      if gap <= threshold + 1e-9:
+          return ""
+      over_name = max(work, key=lambda n: work[n])
+      # 找该成员工时最大的主讲任务，建议拆分
+      ...
+      return f" 建议拆分 {over_name} 的 {a.task_name}（{h:.1f}h），当前成员最大工时差 {gap:.1f}h 超过 1h，任务结构无法在 3 人间均摊"
+  ```
+- **为什么这样改：** 用户需求是「默认三人时长差不超过 1h」。任务结构允许时严格 ≤1h（已验证：3-task 6/6/6、4-task 8/8/4/6、6-task 交替 gap 均为 0.9）。但数学限制下（任务数无法被 3 整除）自动拆分会篡改用户计划，故改为不改数据、只在 note 给出明确拆分建议，把决定权交还用户。
+- **收益：** ① 任务结构允许时 gap 严格 ≤1h；② 不可均摊时给出可操作建议而非静默失衡；③ 快照/还原机制杜绝近似误差。
+
+---
+
+### 体验优化（P2）
+
+**4. Word/PDF 报告仍残留 Markdown 符号（Q4）**
+- **问题：** 导出的 .docx / .pdf 里 `##`、`**粗体**`、`*斜体*`、表格 `|---|` 等 Markdown 原符号直接出现在正文中，用户看到的是「源码」而非排版后的文档。
+- **修改前：** 报告正文直接用 `add_paragraph(text)` / reportlab `Paragraph(text)` 写入，Markdown 标记未解析。
+- **修改后：** 新增 `_md_blocks`（切 h2/h3/li/p/table 块）+ `_md_split_inline`（拆 `**bold**`/`*italic*` 片段）+ `_md_to_docx`（渲染进 Word，含标题/列表/粗体/表格）+ `_md_to_pdf_story`（渲染成 reportlab flowable）。导出时统一走这两个函数。
+- **为什么这样改：** 报告是给「看的人」的交付物，不是给「写 Markdown 的人」的源码。Markdown 必须解析成富文本，否则 `##` 和 `**` 就是噪声。两个导出路径共用同一套解析器，保证 Word/PDF 渲染一致。
+- **收益：** ① Word/PDF 不再出现裸 Markdown 符号；② 标题层级、粗体斜体、表格正确渲染；③ 两路导出共享解析器，行为一致。
+
+**5. QA 矩阵「匹配度」栏部分任务显示空白（Q5）**
+- **问题：** 匹配度列只渲染 `score>0` 的任务，其余任务该格什么也不输出（空白），用户以为「漏算了」或「匹配失败」。
+- **修改前：** `var sc=(typeof a.score==='number'&&a.score>0)?'<span ...>'+百分比+'</span>':'<span class="text-xs text-slate-300">-</span>';`——分数为 0 的活动任务显示 `-`，与已完成任务的占位无法区分。
+- **修改后：** 区分「已完成任务」与「活动任务」——已完成显示 `-`，活动任务 `score>0` 显示百分比、否则显式显示 `0%`：
+  ```js
+  var isDone=(a.presenter==='已完成'||a.presenter==='(已完成)');
+  var sc=isDone?'<span class="text-xs text-slate-300">-</span>'
+    :(typeof a.score==='number'&&a.score>0?'<span ...>'+(a.score*100).toFixed(0)+'%</span>'
+      :'<span class="text-xs text-slate-400">0%</span>');
+  ```
+- **为什么这样改：** 「空白」和「-」语义模糊，用户分不清是「没算」还是「算出来是 0」。活动任务显式标 `0%` 表示「确实匹配度为零，需要换人」，已完成任务标 `-` 表示「不适用」，两态不再混淆。
+- **收益：** ① 匹配度列每格都有明确值；② 活动任务 0% 与已完成 `-` 语义分离；③ 用户能一眼定位需要调换的分工。
+
+**6. 甘特图最后一个任务条右端被裁切（Q6）**
+- **问题：** 时间轴跨度 `td` 用 `mx-mn`（天数差）计算，漏了「首尾都算」的 +1；且未处理某任务 `offset+duration` 超出 `td` 的情况，导致末位任务条 width 计算偏小、右端到不了轨道尽头，被 `overflow-hidden` 裁掉一截。
+- **修改前：**
+  ```js
+  var td=Math.ceil((new Date(mx)-new Date(mn))/86400000)||1;
+  ...
+  var dur=Math.ceil((new Date(t.end_date)-new Date(t.start_date))/86400000)||1;
+  var lp=(off/td)*100;
+  var wp=Math.max(3,Math.min(100-lp,(dur/td)*100));   // 仅按 width 推导，易偏小
+  ```
+- **修改后：** 补 `+1`（首尾含端），并新增二次扫描确保 `td` 不小于任一任务的 `offset+duration`；width 改为「先算右边界再相减」，保证右端恰好到 100%：
+  ```js
+  var td=Math.ceil((new Date(mx)-new Date(mn))/86400000)+1;
+  tasks.forEach(function(t){var _o=...;var _d=Math.max(1,...+1);if(_o+_d>td)td=_o+_d;});
+  ...
+  var lp=(off/td)*100;
+  var re=Math.min(100,((off+dur)/td)*100);   // 右边界强制钳到 100%
+  var wp=Math.max((1/td)*100,re-lp);          // 宽度=右边界-左边界
+  ```
+- **为什么这样改：** 甘特图是「一眼看进度」的视图，末位任务条被裁会让人误以为「任务没排满」或「排期有断档」。根因是跨度/duration 的天数口径不一致（一个含端一个不含端），以及 width 用绝对值而非「右边界−左边界」推导。改后右端恒到 100%（已用 node 数值验证：末位任务 rightEdge=100% 三例全过）。
+- **收益：** ① 末位任务条完整可见、右端对齐轨道尽头；② 天数口径统一（首尾含端）；③ 跨度不足时自动扩展，杜绝裁切。
+
+---
+
+### 验证（本次新增自动化检查）
+
+- 前端 4 步强制验证全通过：JS 语法 OK、字符串拼接 0 处可疑、`"` 0 处、pytest 52 passed。
+- 甘特图末位任务条 rightEdge 数值验证：Case A/B/C 末位均 = 100.00。
+- Markdown 解析验证：标题/列表/粗体/斜体/表格均正确切分，无裸符号残留。
+- 负载均衡验证：可均摊场景 gap 严格 ≤1h；不可均摊场景 note 含拆分建议。
+
+
+
+## v3.1 —— workbuddy 审查复核后的选择性修复（2026-07-17）
+
+**定位：** 对队友提交的《代码全面审查报告》逐条核对代码后，修复其中确实成立且值得动手的 12 项；明确驳回/暂不改若干项并给出理由。
+**审查/修改背景：** 审查报告（史雨彤）给出 1×P0 + 8×P1 + 12×P2。经逐文件交叉验证，约 18 条成立、1 条不成立（P2-4）、数条严重度偏高。本版本只改“成立且低风险/高收益”者；纯设计取舍（负载折算口径、available_hours 语义、重算是否回退 LLM）未动代码，仅在文档说明。
+
+---
+
+### 关键缺陷（P0）
+
+**1. `interview_sim` 禁用词列表是乱码，术语清洗完全失效（对应审查 P0-1）**
+- **问题：** `bans` 列表里除 `'QA角色'` 与 ASCII 项外，其余中文字面量是被损坏的码点（GBK 被当 UTF-8 读入），`.replace()` 用乱码去匹配真实中文输出，永远匹配不到。
+- **修改前：** `bans = ['QA鐟欐帟澹?, '涓荤瓟', '杈呯瓟', ...]`（乱码）；`for term in bans: result = result.replace(term, '')`。
+- **修改后：** 拆为 `bans_zh`（与 `INTERVIEW_SYSTEM` 禁用清单逐条对齐，含裸“主讲/主答/辅答”）+ `bans_ascii`；中文用普通 `replace`，ASCII 项用 `re.sub(..., flags=re.IGNORECASE)`。
+- **为什么这样改：** 旧码点是编码损坏的产物，根因是源文件在某次保存时编码错乱；逐词 `replace` 本身可接受（答辩问题域内误伤风险低），但前提是码点正确、且能匹配大小写变体（模型常写 `Score/Load`）。
+- **收益：** ① 内部术语不再泄露到答辩问题；② ASCII 项大小写不敏感，漏网率下降；③ 禁用清单与提示词单一真相源对齐。
+
+---
+
+### 健壮性提升（P1）
+
+**2. 状态切换不触发重算，与 README 卖点不符（P1-7）**
+- **问题：** README 写“标记任务完成/阻塞会实时重算排期与分工，不再只是视觉”，但 `bindStatusEvents` 只改本地进度条，不调用 `/api/recompute`。
+- **修改前：** 状态 `change` 回调内仅更新 `currentData`、进度条 CSS。
+- **修改后：** 回调末尾调用新增的 `scheduleRecompute()`：700ms debounce → `fetch('/api/recompute')` → 成功后 `showWarnings + renderResult + switchTab(currentTab)`（保留当前标签页）。
+- **为什么这样改：** 文档承诺与代码行为背离是“假卖点”；debounce 避免连续切换打爆后端，`switchTab(currentTab)` 避免重渲染把用户踢回默认页。
+- **收益：** ① 文档与行为一致；② 完成任务后时间线/负载条真缩短；③ 重渲染不丢失当前查看的标签页。
+
+**3. “全员参与”无代码保证（P1-2）**
+- **问题：** `MATCHER_SYSTEM` 规则 5 要求“确保全员参与”，但 `assign_with_balance` 按“匹配度最高+负载最轻”选主讲，技能弱/负载已高的成员可能一个角色都拿不到。
+- **修改前：** 分配循环只看匹配度与负载，无兜底。
+- **修改后：** 分配完成后扫描 `work` 中负载为 0 的成员，给其在工时最大的活跃任务上补一个 `qa_support` 角色（按 `QA_SUPPORT_RATIO` 计入负载）。
+- **为什么这样改：** 提示词是强约束而代码无兜底，易产出与承诺不符的结果；以“辅答”兜底对负载与匹配度影响最小。
+- **收益：** ① QA 矩阵不再出现“某人完全隐身”；② 与提示词承诺一致；③ 兜底只对零负载成员生效，不干扰正常分配。
+
+**4. `enhance`/`assign_with_balance` 转移主讲后 reasoning 与分配不符（P1-4）**
+- **问题：** 负载均衡把主讲转给低负载成员后，只 `+= "；已转给X平衡负载"`，前缀“张三…匹配度1.00，综合最优”未改，与新 presenter/score 矛盾。
+- **修改前：** `a.reasoning += f"；已转给{underloaded}平衡负载"`。
+- **修改后：** 整体重写为 `f"{underloaded}：{skills} 技能匹配度 {score:.2f}（主讲经负载均衡由 {overloaded} 转入）"`。
+- **为什么这样改：** 陈旧前缀会误导用户以为主讲仍是原人；整体重写避免“理由与分配”脱节。
+- **收益：** ① reasoning 与 presenter/score 一致；② 去掉“综合最优”绝对表述；③ 两处（assign/enhance）行为统一。
+
+**5. Timeline 不检查“每日并行过载”（P1-6）**
+- **问题：** CPM 只按依赖排期，不判资源争用；同一人当天被排进多个无依赖任务、各自需满产时，系统只看总工时，当天已爆但不报警。
+- **修改前：** 仅总产能/总工时判断。
+- **修改后：** 排期后按 `(成员, 日期)` 聚合折算工时（主讲按 `hours/工期`、他人按 `0.5×日产能`，与 `_task_daily_capacity` 口径一致），超当日可用即写入 `risk` 告警（每人仅报最严重的一天）。
+- **为什么这样改：** 总量口径掩盖了“某天某人爆掉”的现实问题；折算口径与既有 capacity 假设保持一致，避免双标。
+- **收益：** ① 暴露真实的资源争用；② 用户可据此拆分人手/拉开日期；③ 不影响既有排期结果，只追加告警。
+
+**6. 前端告警 deadline 时区与后端口径不一致（P1-8）**
+- **问题：** 前端 `new Date("2026-08-20")` 按 UTC 解析，后端 `date.today()` 本地；且前端可用天数少算 1（未 `+1`）。默认 Asia/Shanghai 下恰好抵消，其他时区会前后端告警打架。
+- **修改前：** `var dl=new Date(data.input.deadline); var avail=Math.ceil((dl-td)/86400000);`。
+- **修改后：** `var dl=new Date(data.input.deadline+'T00:00:00');`（强制本地时区）+ `var avail=Math.max(1,Math.ceil((dl-td)/86400000)+1);`（与后端 `max(1,(deadline-today).days+1)` 对齐）。
+- **为什么这样改：** 单一真相源应由后端口径为准，前端解析对齐本地时区可消除 UTC 偏移；`+1` 与后端“含首尾两天”语义一致。
+- **收益：** ① 前后端超时/缓冲告警一致；② 跨时区不再误报；③ 改动局部、不触及后端。
+
+---
+
+### 工程与提示词（P2）
+
+**7. `/api/edit` 仅重算时间线会导致新任务不在 qa_matrix（P2-1）**
+- **修改前：** `if req.recompute_matcher: qa_matrix = assign_with_balance(...)`，新增任务且 `recompute_matcher=false` 时新任务无分配、时间线退回 global_daily 兜底。
+- **修改后：** `has_add = any(e.op=="add" ...); if req.recompute_matcher or has_add:` 强制重算。
+- **为什么这样改：** 接口允许只重算其一，调用方易拿到不一致状态；新增任务必然需要分配，强制重算最稳妥。
+- **收益：** ① 新任务必定进入 qa_matrix；② 接口状态自洽；③ 现有前端默认双 true，行为不变。
+
+**8. 版本号前后端/文档不一致（P2-2）**
+- **修改前：** `index.html` 写 `v2.0`，`main.py`/`schemas.py` 为 `3.0`，README 两者并存。
+- **修改后：** `index.html` 标题与副标题统一为 `v3.0`。
+- **收益：** 对外展示版本一致。
+
+**9. `main.py` 静态目录用相对路径（P2-7）**
+- **修改前：** `StaticFiles(directory="app/web/static")`；工作目录非项目根时导入即崩。
+- **修改后：** 用 `BASE_DIR` 拼绝对路径（与 `MEMORY_DIR` 一致）。
+- **收益：** ① 任意工作目录启动均可用；② 与既有 `MEMORY_DIR` 风格统一。
+
+**10. `LLMClient._try_structured` 读错字段（P2-8）**
+- **修改前：** 只读 `message.content`；真 OpenAI 的 `beta.parse` 结果在 `message.parsed`、`content` 常为 None → 每次被判空、退回普通 create，结构化保证形同虚设。
+- **修改后：** 优先 `message.parsed`（已是模型实例直接返回，是 dict 则 `model_validate`），回退到 `content` 的 JSON。
+- **收益：** ① 接真 OpenAI 时结构化路径生效；② 兼容 Aliyun 等把 JSON 放 content 的端点；③ 现网行为不变。
+
+**11. `LLM_MAX_RETRIES` 默认 1，等于无重试（P2-10）**
+- **修改前：** 默认 `"1"`（1 次结构化 + 1 次回退），且对 `parse_error` 也无意义重试。
+- **修改后：** 默认 `"3"`；`chat_structured` 改为：`parse_error` 立即 `break` 进 plain 回退，仅对 `rate_limit/timeout/unknown(5xx)` 重试。
+- **为什么这样改：** 同一 prompt 的解析失败重试无意义、只浪费配额；瞬时限流/5xx 才值得退避重试。
+- **收益：** ① 真正具备瞬态错误重试能力；② 解析类错误更快回退；③ 参数语义名副其实。
+
+**12. `_classify_error` 关键字匹配有误判风险（P2-11）**
+- **修改前：** 用 `"401"/"429"/"json"/"parse"` 等子串匹配，非英文报错（部分国产网关）会漏判。
+- **修改后：** 优先按 OpenAI SDK 异常类型（`AuthenticationError/RateLimitError/APIConnectionError/BadRequestError/APIStatusError`）`isinstance` 判断，5xx 归 `unknown`(可重试)、4xx 归 `parse_error`。
+- **收益：** ① 不依赖错误消息语言；② 5xx/429 精准识别；③ 对 SDK 版本差异用 `getattr` 兜底。
+
+**13. 测试覆盖盲区：从未走到真实 LLM 网络路径（P2-12）**
+- **修改前：** 现有测试用 `FakeLLMClient` 直接 stub `chat_structured`，真实 `LLMClient` 的 parsed/content/重试/回退路径零覆盖。
+- **修改后：** 新增 `tests/test_review_fixes.py`（7 例）：用 `SimpleNamespace` mock `_client`，覆盖 ①读 `parsed` ②读 `content` JSON ③空响应回退 ④`parse_error` 不重试 structured ⑤`_classify_error` 类型判定 ⑥P1-2 全员参与 ⑦P2-1 新增任务强制重算。
+- **收益：** ① P2-8/P2-10/P2-11 的真实路径被锁定；② 回归有据可查；③ 全量 45 → 52 passed。
+
+---
+
+### 队友改动说明
+本版本基于队友提交的《代码全面审查报告》（史雨彤，2026-07-17）。该报告为“仅审查、未修改”。本版本在其基础上：逐条核对源码后落地上述 13 项；并明确以下项的处理：
+- **未改（设计取舍，非 bug）：** P1-1（负载折算=1.6×工时是“加权参与度”而非真实人时，与 `available_hours` 比较偏保守，且被 P1-5 口径放大抵消）、P1-3（重算是否回退 LLM 是产品取舍，改为提示成本更低）、P1-5（`available_hours=daily×天数` 符合 schema 定义，非 bug）。
+- **驳回：** P2-4（PLANNER 示例给的是 30h/8h 两档、默认 20h 居中，不存在漂移，属断章取义）。
+- **审查报告笔误（无需改代码）：** P2-9 实为 3 个 LLM Agent 串行（Timeline 纯算法），非 4 个。
+
 ## v3.0 —— 七轮审查全量修复：健壮性/一致性/测试/死代码清理（2026-07-16）
 
 **定位：** 经过多轮代码审查，针对发现的10+项真实问题进行系统性修复。覆盖字符编码、依赖重映射、PDF导出、负载计算、时间线off-by-one、前端ID碰撞、提示词一致性等。
@@ -1175,5 +1381,7 @@ LLM 负责"创造性"：拆任务、分配角色、写报告
 | v1.1 | 代码质量加固 | 已完成 |
 | v1.2 | 进度追踪 + 突发情况处理 | 已完成 |
 | **v2.0** | **全面审查修复** | **已完成** |
+| v3.0 | 七轮审查全量修复 | 已完成 |
+| **v3.1** | **workbuddy 审查复核选择性修复** | **已完成** |
 | v2.x | 比赛阶段扩展 | 规划中 |
 ### 36. half-day ?????????????????**???** timeline.py:174 ? `start_base + timedelta(days=es[tid] / 2)` ???????Python ? `date + timedelta(days=0.5)` ????????0.5 ????? 0 ??????? half-day ??????????? 2h ?????? 4h/?????????????????**????timeline.py??**```pythons_date = start_base + timedelta(days=es[tid] / 2)  # 0.5 ?????```**????**```pythons_date = (datetime.combine(start_base, datetime.min.time()) + timedelta(days=es[tid] / 2)).date()```?? datetime ????????????? date?????? available_days ???? total_seconds ?? .days ????### 37. ??????????????**???** ??????????????????????????**????** ??????????????`bg-[repeating-linear-gradient(45deg,...)]`???????????????????????????????????### 38. ???????????????????????? <= 1h?**???** ???????????0.25 * ????????????? 2 ? 20h ????????? 2 ? 2h ???????????????????? 25.8h / 32.5h / 75.1h?**????scoring.py assign_with_balance ??????**- ?????????????????????????- ??????????????????????????- ??/??????????- ???????????????????**???** ????? ~31h???? 1.1h?### 39. ???? ceil ????**???** timeline.py:196 ? `(deadline_date - today).days` ???????.days ??????1.5 ?? 1 ?????? `Math.ceil`?1.5 ?? 2 ???????????????**????** ?? `total_seconds() / 86400` ? `ceil`?????????

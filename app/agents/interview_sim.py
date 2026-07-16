@@ -43,6 +43,26 @@ class InterviewSimAgent(BaseAgent):
             user_prompt=user,
         )
         if isinstance(result, str):
+            # Post-process: strip any leaked internal terminology
+            # 禁用清单与 prompts.INTERVIEW_SYSTEM 逐条对齐（含裸 主讲/主答/辅答）；码点统一 UTF-8。
+            # ASCII 项大小写不敏感替换，避免 Score/Load 漏网。
+            import re
+            bans_zh = [
+                'QA角色', '答辩角色', '责任矩阵',
+                '主讲分配', '主讲', '主答', '辅答',
+                '匹配度', '系统推荐', '算法分配', 'AI分配',
+            ]
+            bans_ascii = [
+                'B3', 'CPM', 'workload', 'load', 'score',
+                'task_id', 'assign_with_balance',
+                'Matcher', 'Planner', 'Timeline', 'Reporter', 'Scoring',
+            ]
+            for term in bans_zh:
+                result = result.replace(term, '')
+            for term in bans_ascii:
+                result = re.sub(re.escape(term), '', result, flags=re.IGNORECASE)
+            # Collapse multiple newlines
+            result = re.sub(r'\n{3,}', '\n\n', result)
             return result
         # chat_text 失败时返回错误提示文本，不抛异常
         return result.message
