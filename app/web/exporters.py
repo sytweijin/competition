@@ -21,6 +21,8 @@ from reportlab.platypus import (
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
+import xml.sax.saxutils as saxutils
+
 from app.models.schemas import FullPlan
 
 
@@ -177,19 +179,19 @@ def plan_to_pdf(plan: FullPlan) -> bytes:
                               fontName=font_name or "Helvetica", fontSize=13)
     story = []
 
-    story.append(Paragraph(plan.input.course.name or "项目计划", h1_style))
+    story.append(Paragraph(saxutils.escape(plan.input.course.name) or "项目计划", h1_style))
     story.append(Spacer(1, 12))
-    story.append(Paragraph(f"<b>课程要求：</b>{plan.input.course.description or '无'}", body_style))
+    story.append(Paragraph(f"<b>课程要求：</b>{saxutils.escape(plan.input.course.description or '无')}", body_style))
     story.append(Paragraph(f"<b>截止日期：</b>{plan.input.deadline}", body_style))
     members_str = "、".join(
         f"{m.name}({m.daily_available_hours}h/天)" for m in plan.input.members
     )
-    story.append(Paragraph(f"<b>团队成员：</b>{members_str or '无'}", body_style))
+    story.append(Paragraph(f"<b>团队成员：</b>{saxutils.escape(members_str) or '无'}", body_style))
     story.append(Spacer(1, 16))
 
     if plan.plan.summary:
         story.append(Paragraph("一、计划概述", h2_style))
-        story.append(Paragraph(plan.plan.summary.replace("\n", "<br/>"), body_style))
+        story.append(Paragraph(saxutils.escape(plan.plan.summary).replace("\n", "<br/>"), body_style))
         story.append(Spacer(1, 10))
 
     story.append(Paragraph("二、任务拆解", h2_style))
@@ -230,12 +232,12 @@ def plan_to_pdf(plan: FullPlan) -> bytes:
 
     if plan.report.summary:
         story.append(Paragraph("五、报告总结", h2_style))
-        story.append(Paragraph(plan.report.summary.replace("\n", "<br/>"), body_style))
+        story.append(Paragraph(saxutils.escape(plan.report.summary).replace("\n", "<br/>"), body_style))
 
     if plan.report.risk_note:
         story.append(Paragraph("六、风险提示", h2_style))
         risk_style = ParagraphStyle("Risk", parent=body_style, textColor=colors.red)
-        story.append(Paragraph(plan.report.risk_note.replace("\n", "<br/>"), risk_style))
+        story.append(Paragraph(saxutils.escape(plan.report.risk_note).replace("\n", "<br/>"), risk_style))
 
     doc.build(story)
     return buf.getvalue()

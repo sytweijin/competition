@@ -1,6 +1,6 @@
 # 小组合作智能体 — 课程作业
 
-**版本：v2.0** | 最后更新：2026-07-16
+**版本：v3.0** | 最后更新：2026-07-16（v3.0 七轮审查全量修复）
 
 ## v2.0 更新亮点（2026-07-16 深度审查修复）
 
@@ -215,6 +215,8 @@ competition/
 | POST | `/api/save` | B2：保存计划到 memory |
 | POST | `/api/export/markdown` | 导出当前计划为 Markdown |
 | POST | `/api/export/docx` | 导出当前计划为 Word 文档 |
+| POST | `/api/edit-members` | 成员变动处理（退出/工时变更/新增成员）并重算 |
+| POST | `/api/recompute` | 状态变更后实时重算排期与分工 |
 | POST | `/api/export/pdf` | 导出当前计划为 PDF 文档 |
 | GET | `/api/plans` | B2：列出已保存计划 |
 | GET | `/api/load/{filename}` | B2：载入计划 |

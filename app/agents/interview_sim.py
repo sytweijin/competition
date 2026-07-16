@@ -44,5 +44,5 @@ class InterviewSimAgent(BaseAgent):
         )
         if isinstance(result, str):
             return result
-        # chat_text 失败时抛异常，由上层路由返回明确错误，而非混入问题列表
-        raise RuntimeError(result.message)
+        # chat_text 失败时返回错误提示文本，不抛异常
+        return result.message

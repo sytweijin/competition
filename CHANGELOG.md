@@ -6,6 +6,69 @@
 
 ---
 
+
+## v3.0 —— 七轮审查全量修复：健壮性/一致性/测试/死代码清理（2026-07-16）
+
+**定位：** 经过多轮代码审查，针对发现的10+项真实问题进行系统性修复。覆盖字符编码、依赖重映射、PDF导出、负载计算、时间线off-by-one、前端ID碰撞、提示词一致性等。
+
+### 关键缺陷（P0）
+
+**1. scoring.py 中文字符损坏**
+- **问题：** assign_with_balance 函数内 141 个中文字符被替换为字面 `?`（U+003F），导致 reasoning 输出全是乱码
+- **修复：** 逐行重构中文字符，包括 docstring、注释、reasoning 字符串、note 字符串
+- **受益：** 所有 recompute/edit/edit-members 路径的 QA 矩阵输出恢复正常
+
+**2. validate_plan 依赖重映射 bug**
+- **问题：** `id_remap[t.id] = new_id` 在循环内被每个重复实例覆盖，所有依赖指向最后一个重复实例
+- **修复：** 删除 id_remap 赋值，首个实例保留原 ID，依赖自然指向第一个实例
+- **受益：** Planner 吐出重复 ID 时依赖关系不会错乱
+
+**3. PDF 导出 XML 未转义**
+- **问题：** 课程名/描述/成员名直接塞进 reportlab Paragraph（XML 解析器），含 `&` 或 `<` 时导出 500
+- **修复：** 所有用户输入字段用 `saxutils.escape()` 包裹
+- **受益：** PDF 导出不会因特殊字符崩溃
+
+**4. Matcher 提示词与实际行为不符**
+- **问题：** 提示词承诺“自动负载均衡校正”，实际 enhance() 只补 score/workload，不重新分配角色
+- **修复：** 提示词改为“做负载统计与超载检测，但不重新分配角色”
+- **受益：** LLM 不再被误导，行为与提示词一致
+
+### 健壮性提升（P1）
+
+- **同名成员去重：** `_at_least_one_member` 增加重名检测，抛 ValueError
+- **电脑炮·完成任务不再消失：** QA 矩阵为已完成任务生成“(已完成)”占位，不再过滤掉
+- **enhance workload 去重：** qa_support 循环增加 person 重复检查，与 timeline 侧口径一致
+- **负载转移后更新 score：** `assign_with_balance` 转移任务后重新计算 skill_score
+- **interview_sim 不再 500：** LLM 失败时 return 错误文本而非 raise RuntimeError
+- **前端新增任务 ID 碰撞：** 改为 max(现有 ID)+1，而非 children.length+1
+- **时间线 qa_support 传入：** coordinator/routes/editor 三处均包含 qa_support
+
+### 算法修正（P1）
+
+- **时间线 off-by-one：** `available_days = (deadline-today).days+1` 含头含尾，不再“刚好排满报超期”
+- **加权产能模型：** `_task_daily_capacity` 主讲全产能 + 其他人×0.5，替代全加（与 workload 口径一致）
+
+### 测试修复（P1）
+
+- **时间线测试时间耦合：** `@patch('datetime.date')` 对 `from datetime import date` 无效，改用 FakeDate 类真正冻结 today()
+
+### 代码卫生（P2/P3）
+
+- 删除死代码：`_fix.py`、`rank_members`、`name_to_skills`、`active_tasks.sort()`
+- 修复 scoring 注释误导（“避免重复计数”→“累计可能超过任务原工时”）
+- 编辑后报告追加“可能已过期”提示
+- 清理 memory/ 目录测试垃圾文件
+- 修复 routes.py/cli.py 中文损坏残留
+
+### 已确认健全的点
+
+- 前后端契约无矛盾（所有 API payload 与后端模型对得上）
+- 测试 45 passed（包含时间线测试真正冻结）
+- CPM 算法、角色匹配、validate_plan 去重、half-day 排期、PDF/DOCX/MD 导出均确认可用
+
+---
+
+
 ## v2.0 —— 深度审查修复：核心链路 / 健壮性 / 体验 / 文档（2026-07-16）
 
 **定位：** 针对四轮全量代码审查（Codex × 2 + workbuddy × 2）发现的 33 项问题进行系统性修复。覆盖前端与后端、提示词、算法与安全性、导出与报告，使系统趋近生产可用。

@@ -192,6 +192,9 @@ async def recompute_plan(req: FullPlan):
             people = [a.presenter] if a.presenter else []
             if a.qa_primary and a.qa_primary not in people:
                 people.append(a.qa_primary)
+            for s in (a.qa_support or []):
+                if s not in people:
+                    people.append(s)
             assignments[a.task_id] = people
 
         timeline = TimelineAgent().run(
@@ -349,6 +352,7 @@ class MemberEditRequest(BaseModel):
     plan: FullPlan
     removed_members: list[str] = Field(default_factory=list, description="要移除的成员名")
     updated_members: dict[str, float] = Field(default_factory=dict, description="更新的每日工时 {姓名: 新工时}")
+    added_members: list = Field(default_factory=list, description="新加入的成员 [{name, daily_available_hours}, ...]")
 
 
 @router.post("/edit-members", response_model=FullPlan)
@@ -361,20 +365,26 @@ async def edit_members_endpoint(req: MemberEditRequest):
         fp = req.plan
         # Update members
         new_members = []
+        import math
+        remaining = max(1, (fp.input.deadline - date.today()).days)
         for m in fp.input.members:
             if m.name in req.removed_members:
                 continue
             if m.name in req.updated_members:
                 new_daily = max(0.5, req.updated_members[m.name])
-                # 同步重算 available_hours（按剩余天数，与前端一致），避免超载阈值失真
-                import math
-                remaining = max(1, (fp.input.deadline - date.today()).days)
                 m = m.model_copy(update={
                     "daily_available_hours": new_daily,
                     "available_hours": max(new_daily, new_daily * remaining),
                 })
             new_members.append(m)
 
+        for a in req.added_members:
+            nm = a.get("name", "").strip()
+            if not nm:
+                continue
+            dh = max(0.5, float(a.get("daily_available_hours", 4)))
+            new_m = TeamMember(name=nm, daily_available_hours=dh, available_hours=max(dh, dh * remaining))
+            new_members.append(new_m)
         if not new_members:
             raise HTTPException(status_code=400, detail="不能删除所有成员")
 
@@ -389,6 +399,9 @@ async def edit_members_endpoint(req: MemberEditRequest):
             people = [a.presenter] if a.presenter else []
             if a.qa_primary and a.qa_primary not in people:
                 people.append(a.qa_primary)
+            for s in (a.qa_support or []):
+                if s not in people:
+                    people.append(s)
             assignments[a.task_id] = people
 
         timeline = TimelineAgent().run(

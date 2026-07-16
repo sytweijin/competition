@@ -3,6 +3,18 @@ from datetime import datetime
 from datetime import date, timedelta
 
 from app.agents.timeline import TimelineAgent
+from unittest.mock import patch
+import datetime as _dt
+
+FIXED_TODAY = _dt.date(2026, 7, 16)
+
+class _FakeDate:
+    @classmethod
+    def today(cls):
+        return FIXED_TODAY
+    @staticmethod
+    def fromisoformat(s):
+        return _dt.date.fromisoformat(s)
 from app.models.schemas import PlanOutput, SubTask
 
 
@@ -10,12 +22,14 @@ def _plan(tasks):
     return PlanOutput(tasks=tasks, summary="t")
 
 
+@patch('app.agents.timeline.date', new=_FakeDate)
 def test_empty_plan():
     out = TimelineAgent().run(_plan([]), "2026-07-20")
     assert out.total_days == 0
     assert out.tasks == []
 
 
+@patch('app.agents.timeline.date', new=_FakeDate)
 def test_single_task():
     out = TimelineAgent().run(
         _plan([SubTask(id="T1", name="A", estimated_hours=8)]),
@@ -26,6 +40,7 @@ def test_single_task():
     assert out.tasks[0].end_date == datetime(2026, 7, 20)  # 截止日倒推
 
 
+@patch('app.agents.timeline.date', new=_FakeDate)
 def test_linear_chain_critical_path():
     """T1 -> T2 -> T3 链式依赖，三者都在关键路径上。"""
     plan = _plan([

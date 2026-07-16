@@ -88,6 +88,9 @@ def edit_plan(req: EditPlanRequest) -> FullPlan:
             people = [a.presenter] if a.presenter else []
             if a.qa_primary and a.qa_primary not in people:
                 people.append(a.qa_primary)
+            for s in (a.qa_support or []):
+                if s not in people:
+                    people.append(s)
             assignments[a.task_id] = people
         timeline = TimelineAgent().run(
             plan=new_plan,
@@ -101,5 +104,5 @@ def edit_plan(req: EditPlanRequest) -> FullPlan:
         plan=new_plan,
         timeline=timeline,
         qa_matrix=qa_matrix,
-        report=original.report,  # 报告不自动重算，按需单独触发
+        report=original.report.model_copy(update={"risk_note": (original.report.risk_note + "\n(计划已编辑，报告可能已过期，建议重新生成)").strip()}),  # 追加过期提示
     )

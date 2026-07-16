@@ -68,6 +68,11 @@ class AssignmentInput(BaseModel):
         named = [m for m in v if m.name.strip()]
         if not named:
             raise ValueError("至少需要 1 名有姓名的团队成员")
+        # check for duplicate member names
+        names = [m.name for m in named]
+        dups = set(n for n in names if names.count(n) > 1)
+        if dups:
+            raise ValueError(f"duplicate member names: {chr(44).join(dups)}")
         return named
 
 

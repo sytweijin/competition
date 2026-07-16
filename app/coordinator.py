@@ -116,6 +116,9 @@ class Coordinator:
                 people = [a.presenter] if a.presenter else []
                 if a.qa_primary and a.qa_primary not in people:
                     people.append(a.qa_primary)
+                for s in (a.qa_support or []):
+                    if s not in people:
+                        people.append(s)
                 assignments[a.task_id] = people
         return self.timeline.run(
             plan=plan, deadline=deadline,

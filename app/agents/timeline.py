@@ -107,13 +107,16 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
         # 工时→工期折算：以「半天」为最小粒度（half-day 单位，1 个单位 = 0.5 天）
         # 内部 CPM 全部用 half-day 整数运算，避免浮点误差。
         def _task_daily_capacity(task_id: str) -> float:
-            """根据任务负责人计算每天可用工时。"""
+            """根据任务负责人计算每天可用工时。
+            主讲(first assigned)按全产能，其他参与者按0.5折算(部分并行假设)。"""
             assigned = assignments.get(task_id, [])
             if not assigned or not member_daily:
                 return global_daily
-            capacity = 0.0
-            for name in assigned:
-                capacity += member_daily.get(name, global_daily)
+            if len(assigned) == 1:
+                return max(0.5, member_daily.get(assigned[0], global_daily))
+            capacity = member_daily.get(assigned[0], global_daily)
+            for name in assigned[1:]:
+                capacity += 0.5 * member_daily.get(name, global_daily)
             return max(0.5, capacity)
 
         durations: dict[str, int] = {}  # 单位：half-day（0.5 天）
@@ -193,7 +196,7 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
             risk += "（总工期为 0，请检查任务工时）"
 
         # Deadline overrun check
-        available_days = max(1, math.ceil((datetime.combine(deadline_date, datetime.min.time()) - datetime.combine(today, datetime.min.time())).total_seconds() / 86400))
+        available_days = max(1, (deadline_date - today).days + 1)  # +1: include both today and deadline
         overrun_days = project_days - available_days
         if forced_forward:
             risk += f"（警告：倒推起始日早于今天，已改为从今天正排；总工期 {project_days} 天，"

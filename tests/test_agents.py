@@ -96,9 +96,9 @@ def test_planner_duplicate_ids_remapped():
     assert not isinstance(result, AgentError)
     ids = [t.id for t in result.tasks]
     assert ids == ["T1", "T1_1", "T2"]
-    # T2 deps=["T1"] should be remapped: T1 -> T1_1 (last dedup occurrence)
+    # T2 deps=["T1"] should point to first T1 instance (keeping its original ID)
     deps = result.tasks[2].dependencies
-    assert deps == ["T1_1"], f"Expected remapped deps T1_1, got {deps}"
+    assert deps == ["T1"], f"Expected deps pointing to first T1, got {deps}"
 
 
 # ──────────── Matcher ────────────

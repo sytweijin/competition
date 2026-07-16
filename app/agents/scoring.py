@@ -36,7 +36,7 @@ def _similar(a: str, b: str) -> float:
 
 
 # 角色投入系数：主讲承担任务全部工时，主答辅助参与折算 30%，辅答各折算 15%。
-# 说明：同一任务的工时按角色投入占比分配到各成员，避免重复计数导致负载虚高。
+# 说明：同一任务的工时按角色投入占比折算到各成员（主讲1.0 + 主答0.3 + 辅答0.15/人），累计可能超过任务原工时。
 PRESENTER_RATIO = 1.0
 QA_PRIMARY_RATIO = 0.3
 QA_SUPPORT_RATIO = 0.15
@@ -59,48 +59,46 @@ def skill_score(member: TeamMember, required_skills: list[str]) -> float:
     return round(total / len(required_skills), 3)
 
 
-def rank_members(task_skills: list[str],
-                 members: list[TeamMember]) -> list[tuple[TeamMember, float]]:
-    """按匹配分降序返回 (成员, 分数) 列表。"""
-    scored = [(m, skill_score(m, task_skills)) for m in members]
-    scored.sort(key=lambda x: x[1], reverse=True)
-    return scored
-
 
 def assign_with_balance(plan: PlanOutput,
                         members: list[TeamMember]) -> QAOutput:
-    """???? + ?????????v2.1??
+    """确定性任务分配 + 负载均衡 v2.1
 
-    ?????????? <= 1h?
+    负载差距 <= 1h 时停止调整
     """
     if not members or not plan.tasks:
-        return QAOutput(assignments=[], note="????????????")
+        return QAOutput(assignments=[], note="B3确定性兜底+超载校正")
 
     active_tasks = [t for t in plan.tasks if t.status != "completed"]
-    name_to_skills = {m.name: m.skill_tags for m in members}
     member_map = {m.name: m for m in members}
+    all_task_map = {t.id: t for t in plan.tasks}
     task_hours = {t.id: t.estimated_hours for t in active_tasks}
 
-    # ??????????????????
-    active_tasks.sort(key=lambda t: t.estimated_hours, reverse=True)
     work = {m.name: 0.0 for m in members}
     assignments = []
 
-    for t in active_tasks:
-        # ???????????????????????
+    for t in plan.tasks:
+        if t.status == "completed":
+            assignments.append(QAAssignment(
+                task_id=t.id, task_name=t.name, chapter="",
+                presenter="(已完成)", qa_primary="", qa_support=[],
+                score=0.0, reasoning="任务已完成",
+            ))
+            continue
+        # 按匹配度降序，同分时负载轻者优先
         scored = [(m.name, skill_score(m, t.required_skills)) for m in members]
-        scored.sort(key=lambda x: (-x[1], work[x[0]]))  # ???????????
+        scored.sort(key=lambda x: (-x[1], work[x[0]]))  # 取匹配度最高且负载最轻者
         presenter = scored[0][0]
         work[presenter] += t.estimated_hours
 
-        # ???????????
+        # 主答取剩余中最优
         rest = [(n, s) for n, s in scored if n != presenter]
         rest.sort(key=lambda x: (-x[1], work[x[0]]))
         primary = rest[0][0] if rest else presenter
         if primary != presenter:
             work[primary] += t.estimated_hours * QA_PRIMARY_RATIO
 
-        # ??????????
+        # 辅答取剩余中负载最轻的 2 人
         rest2 = [n for n, _ in rest if n != primary]
         rest2.sort(key=lambda n: work[n])
         support = rest2[:2]
@@ -109,8 +107,8 @@ def assign_with_balance(plan: PlanOutput,
 
         best_skill = scored[0][1]
         reasoning = (
-            f"{presenter} ? {_fmt(t.required_skills)} ??"
-            f"???? {best_skill:.2f}??????????"
+            f"{presenter} 的 {_fmt(t.required_skills)} 技能"
+            f"匹配度 {best_skill:.2f}，综合最优"
         )
         assignments.append(QAAssignment(
             task_id=t.id, task_name=t.name, chapter="",
@@ -118,31 +116,35 @@ def assign_with_balance(plan: PlanOutput,
             score=round(best_skill, 3), reasoning=reasoning,
         ))
 
-    # ???? > 1h?????????
+    # 负载差 > 1h 时继续均衡调整
     sorted_w = sorted(work.items(), key=lambda x: x[1])
     for _pass in range(30):
         if sorted_w[-1][1] - sorted_w[0][1] <= 1.0:
             break
         overloaded = sorted_w[-1][0]
         underloaded = sorted_w[0][0]
-        # ?? overloaded ?????????? underloaded
+        # 找 overloaded 的最轻任务转移给 underloaded
         candidates = [(a, task_hours.get(a.task_id, 0)) for a in assignments
                       if a.presenter == overloaded]
-        # ??????????????????????????
+        # 按与 gap/2 的接近程度排序
         gap = sorted_w[-1][1] - sorted_w[0][1]
-        candidates.sort(key=lambda x: abs(x[1] - gap/2))  # ??? gap/2 ???
+        candidates.sort(key=lambda x: abs(x[1] - gap/2))  # 接近 gap/2 者优先
         swapped = False
         for a, h in candidates:
             if h <= 0:
                 continue
             new_over = work[overloaded] - h
             new_under = work[underloaded] + h
-            # ????????????????????????
+            # 检查转移后负载是否更均衡
             if abs(new_over - new_under) < sorted_w[-1][1] - sorted_w[0][1]:
                 a.presenter = underloaded
                 work[overloaded] -= h
                 work[underloaded] += h
-                a.reasoning += f"???{underloaded}????????"
+                task = all_task_map.get(a.task_id)
+                if task and underloaded in member_map:
+                    new_score = skill_score(member_map[underloaded], task.required_skills)
+                    a.score = round(new_score, 3)
+                a.reasoning += f"已转给{underloaded}平衡负载"
                 swapped = True
                 break
         if not swapped:
@@ -155,11 +157,11 @@ def assign_with_balance(plan: PlanOutput,
         m = member_map.get(name)
         if m and hours > m.available_hours:
             overload_warnings.append(
-                f"{name} ?? {hours:.1f}h ???? {m.available_hours:.1f}h"
+                f"{name} 负载 {hours:.1f}h 超过可用 {m.available_hours:.1f}h"
             )
-    note = "B3????? + ???????v2.1?"
+    note = "B3确定性兜底 + 超载校正 v2.1"
     if overload_warnings:
-        note += "????" + "; ".join(overload_warnings)
+        note += "超载警告: " + "; ".join(overload_warnings)
 
     return QAOutput(assignments=assignments, workload=work, note=note)
 def _fmt(tags: list[str]) -> str:
@@ -186,7 +188,8 @@ def enhance(qa: QAOutput, plan: PlanOutput,
         if a.qa_primary and a.qa_primary != a.presenter:
             work[a.qa_primary] = work.get(a.qa_primary, 0.0) + h * QA_PRIMARY_RATIO
         for s in a.qa_support:
-            work[s] = work.get(s, 0.0) + h * QA_SUPPORT_RATIO
+            if s != a.presenter and s != a.qa_primary:
+                work[s] = work.get(s, 0.0) + h * QA_SUPPORT_RATIO
         # 补 score
         score = a.score
         if score == 0.0 and t is not None and a.presenter in member_map:
