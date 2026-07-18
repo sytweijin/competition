@@ -1,100 +1,168 @@
 <!doctype html>
 <html lang="zh-CN">
 <head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>智能分工工作台</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="stylesheet" href="/static/style.css">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>小组合作智能体 · 项目工作台</title>
+  <style>.hidden{display:none!important}</style>
+  <link rel="stylesheet" href="/static/style.css?v=4.1.1">
 </head>
-<body class="bg-slate-50 text-slate-800">
-<header class="bg-white border-b sticky top-0 z-20">
-  <div class="max-w-7xl mx-auto px-5 py-4 flex justify-between items-center">
-    <div><h1 class="font-bold text-lg">智能分工工作台</h1><p class="text-xs text-slate-400">先确认任务，再确认分工</p></div>
-    <div class="flex gap-2"><button id="loadBtn" class="btn">历史方案</button><button id="saveBtn" class="btn" disabled>保存草稿</button></div>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-mark">协</div>
+    <div><h1>小组合作智能体</h1><p>项目配置、任务拆解与智能分工工作台</p></div>
+  </div>
+  <div class="toolbar">
+    <button id="historyBtn" class="btn btn-ghost">历史方案</button>
+    <button id="saveBtn" class="btn btn-ghost" disabled>保存方案</button>
   </div>
 </header>
-<main class="max-w-7xl mx-auto px-5 py-6">
-  <nav id="steps" class="grid grid-cols-6 gap-2 mb-6"></nav>
-  <section id="page-info" class="page grid lg:grid-cols-2 gap-6">
-    <form id="projectForm" class="panel p-5 space-y-4">
-      <h2 class="font-semibold">1. 项目信息</h2>
-      <label class="block text-sm">项目名称<input id="projectName" required class="field" placeholder="暑期社会实践总结推送"></label>
-      <label class="block text-sm">项目背景<textarea id="background" required class="field" rows="5" placeholder="说明项目目标、执行过程和最终交付物"></textarea></label>
-      <label class="block text-sm">任务要求<textarea id="requirements" class="field" rows="3" placeholder="可先填写，上传文件后还可修改"></textarea></label>
-      <div class="grid grid-cols-3 gap-3">
-        <label class="text-sm">默认开始<input id="start" type="date" class="field"></label>
-        <label class="text-sm">默认截止<input id="end" type="date" required class="field"></label>
-        <label class="text-sm">每日默认工时<input id="daily" type="number" min=".5" value="4" step=".5" class="field"></label>
+
+<div class="stepbar" id="stepbar"></div>
+
+<main class="workbench">
+  <aside class="config-panel">
+    <div class="panel-heading">
+      <div><span class="eyebrow">PROJECT SETUP</span><h2>项目配置</h2></div>
+      <span class="status-dot" title="本地工作台"></span>
+    </div>
+    <form id="projectForm" class="config-form">
+      <label>项目名称<input id="projectName" required placeholder="如：暑期社会实践总结推送"></label>
+      <label>项目背景<textarea id="background" required rows="4" placeholder="说明项目目标、过程和最终交付物"></textarea></label>
+      <label>补充要求<textarea id="requirements" rows="2" placeholder="格式、评价标准、特殊限制等"></textarea></label>
+      <div class="form-grid">
+        <label>默认开始日期<input id="startDate" type="date"></label>
+        <label>默认截止日期<input id="endDate" type="date" required></label>
       </div>
-      <div><div class="flex justify-between"><span class="text-sm">团队成员</span><button type="button" id="addMemberBtn" class="text-blue-600 text-sm">+ 添加</button></div><div id="members" class="space-y-2 mt-2"></div></div>
-      <button id="continueAnalysisBtn" type="submit" class="btn-primary">继续：文件分析</button>
+      <div class="section-title"><span>团队成员</span><button type="button" id="addMemberBtn" class="text-btn">＋ 添加成员</button></div>
+      <div id="members" class="member-list"></div>
+      <div class="upload-box" id="uploadBox">
+        <input id="files" type="file" multiple hidden accept=".pdf,.docx,.txt,.md,.xlsx,.pptx">
+        <button type="button" id="chooseFileBtn" class="upload-main">上传任务要求文件</button>
+        <p>PDF / Word / TXT / Markdown / Excel / PowerPoint</p>
+        <div id="fileList" class="file-list"></div>
+      </div>
+      <button id="generateBtn" class="primary-action" type="submit">
+        <span>生成任务拆解</span><small>文件将在后台自动分析</small>
+      </button>
     </form>
-    <div class="panel p-5">
-      <h2 class="font-semibold mb-3">任务要求文件</h2>
-      <div id="drop" class="border-2 border-dashed rounded-xl p-10 text-center text-slate-500">
-        <input id="files" type="file" multiple class="hidden" accept=".pdf,.docx,.txt,.md,.xlsx,.pptx">
-        <button type="button" onclick="files.click()" class="btn">选择文件</button>
-        <p class="text-xs mt-3">PDF / Word / TXT / Markdown / Excel / PowerPoint，单文件不超过 15MB</p>
+  </aside>
+
+  <section class="workspace-panel">
+    <div id="notice" class="notice hidden"></div>
+    <div id="emptyView" class="empty-view">
+      <div class="empty-illustration"><span>01</span><span>02</span><span>03</span></div>
+      <h2>从左侧配置开始</h2>
+      <p>系统会先生成可编辑的任务拆解，确认后才进行人员分工。</p>
+      <div class="empty-features">
+        <span>专业任务拆解</span><span>时间与工时编辑</span><span>可解释分工</span><span>拖拽调整</span>
       </div>
-      <div id="fileList" class="text-sm mt-3 space-y-1"></div>
+    </div>
+
+    <div id="draftView" class="view hidden">
+      <div class="workspace-heading">
+        <div><span class="stage-chip">步骤 2</span><h2>确认任务拆解</h2><p>确认前不会分配负责人；所有修改都会经过后端业务规则校验。</p></div>
+        <div class="heading-actions">
+          <button id="addTaskBtn" class="btn">新增任务</button>
+          <button id="mergeTaskBtn" class="btn">合并选中</button>
+          <button id="redraftBtn" class="btn btn-ghost">AI 重新拆解</button>
+        </div>
+      </div>
+      <div id="draftSummary" class="summary-card"></div>
+      <div id="taskEditor" class="task-editor"></div>
+      <div class="sticky-action">
+        <div><strong id="draftTotal">0 项任务 · 0 小时</strong><span>确认后进入自动分工</span></div>
+        <button id="confirmDraftBtn" class="btn btn-primary">确认拆解并开始分工</button>
+      </div>
+    </div>
+
+    <div id="boardView" class="view hidden">
+      <div class="workspace-heading">
+        <div><span class="stage-chip">步骤 3–4</span><h2>自动分工与手动调整</h2><p>拖拽任务卡片或使用负责人下拉框，统计和提示会实时重算。</p></div>
+        <button id="restoreBtn" class="btn btn-ghost">恢复自动分工</button>
+      </div>
+      <div id="workloadSummary" class="workload-summary"></div>
+      <div id="balanceWarnings"></div>
+      <div id="board" class="assignment-board"></div>
+      <div class="sticky-action">
+        <div><strong>调整完成后确认最终方案</strong><span>建议不会阻止你保存</span></div>
+        <button id="confirmAssignmentBtn" class="btn btn-primary">确认最终分工</button>
+      </div>
+    </div>
+
+    <div id="finalView" class="view hidden">
+      <div class="workspace-heading">
+        <div><span class="stage-chip success">步骤 5</span><h2>最终项目方案</h2><p>任务、排期和负责人已经确认，可继续保存或导出。</p></div>
+        <button id="backBoardBtn" class="btn btn-ghost">返回调整</button>
+      </div>
+      <div class="result-tabs" id="resultTabs">
+        <button class="active" data-tab="tasks">任务计划</button>
+        <button data-tab="timeline">时间线</button>
+        <button data-tab="matrix">分工矩阵</button>
+        <button data-tab="report">报告</button>
+      </div>
+      <div id="resultContent" class="result-content"></div>
     </div>
   </section>
-  <section id="page-analysis" class="page hidden panel p-5">
-    <div class="flex justify-between"><div><h2 class="font-semibold">2. 文件分析</h2><p class="text-sm text-slate-500">可修改后再用于任务拆解</p></div><button id="reanalyze" class="btn">重新分析</button></div>
-    <textarea id="analysis" class="field mt-4" rows="16"></textarea>
-    <div class="flex justify-end mt-4"><button id="toDraft" class="btn-primary !w-auto px-8">生成任务拆解草案</button></div>
-  </section>
-  <section id="page-draft" class="page hidden">
-    <div class="panel p-5">
-      <div class="flex flex-wrap justify-between gap-3"><div><h2 class="font-semibold">3. 确认任务拆解</h2><p class="text-sm text-slate-500">此时尚未分配任何负责人</p></div>
-        <div class="flex gap-2"><button id="addTask" class="btn">新增任务</button><button id="mergeTask" class="btn">合并选中</button><button id="redraft" class="btn">AI 重新拆解</button></div></div>
-      <div id="taskEditor" class="space-y-3 mt-4"></div>
-      <div id="draftWarnings" class="text-amber-700 text-sm mt-3"></div>
-      <div class="flex justify-end mt-4"><button id="confirmDraft" class="btn-primary !w-auto px-8">确认拆解并开始分工</button></div>
-    </div>
-  </section>
-  <section id="page-board" class="page hidden">
-    <div class="panel p-5">
-      <div class="flex justify-between"><div><h2 class="font-semibold">4–5. 自动分工与手动调整</h2><p class="text-sm text-slate-500">拖动任务卡片即可更换负责人</p></div><button id="restore" class="btn">恢复自动分工</button></div>
-      <div id="balanceWarnings" class="mt-3"></div><div id="board" class="grid md:grid-cols-2 xl:grid-cols-3 gap-4 mt-4"></div>
-      <div class="flex justify-end mt-4"><button id="confirmAssignment" class="btn-primary !w-auto px-8">确认最终分工</button></div>
-    </div>
-  </section>
-  <section id="page-final" class="page hidden panel p-5"><h2 class="font-semibold">6. 最终方案</h2><div id="final" class="mt-4"></div></section>
 </main>
-<button id="chatOpen" class="fixed right-6 bottom-6 rounded-full bg-indigo-600 text-white w-14 h-14 shadow-lg text-xl">聊</button>
-<aside id="chat" class="hidden fixed right-6 bottom-24 w-80 bg-white border rounded-xl shadow-xl z-30 overflow-hidden">
-  <div class="p-3 bg-indigo-600 text-white font-medium">项目实时交流</div><div id="messages" class="h-72 overflow-auto p-3 text-sm space-y-2"></div>
-  <form id="chatForm" class="p-2 border-t flex gap-2"><input id="chatInput" class="field" placeholder="询问方案或调整建议"><button class="btn">发送</button></form>
+
+<button id="assistantBtn" class="assistant-button"><span>✦</span> AI 调整建议</button>
+<aside id="assistantDrawer" class="assistant-drawer hidden">
+  <div class="drawer-head"><div><strong>AI 调整建议</strong><p>询问当前方案，不会自动修改数据</p></div><button id="closeAssistant">×</button></div>
+  <div id="messages" class="messages"><div class="assistant-msg">你好，我可以分析任务拆解、工时和分工，并给出调整建议。</div></div>
+  <form id="chatForm" class="chat-form"><textarea id="chatInput" rows="2" placeholder="例如：摄影任务是不是太集中？"></textarea><button>发送</button></form>
 </aside>
+
+<div id="modal" class="modal-backdrop hidden"><div class="modal"><div class="modal-head"><h3>历史方案</h3><button id="closeModal">×</button></div><div id="planList"></div></div></div>
+
 <script>
-var state={input:null,draft:null,plan:null,auto:null,files:[]};
-var projectNameEl=document.getElementById('projectName'), backgroundEl=document.getElementById('background'), requirementsEl=document.getElementById('requirements'), startEl=document.getElementById('start'), endEl=document.getElementById('end'), filesEl=document.getElementById('files'), membersEl=document.getElementById('members');
-var stepNames=['项目信息','文件分析','任务拆解','自动分工','手动调整','最终方案'];
-function esc(s){var d=document.createElement('div');d.textContent=s==null?'':String(s);return d.innerHTML}
-function toast(s){var d=document.createElement('div');d.className='fixed top-20 right-6 bg-slate-900 text-white px-4 py-2 rounded-lg z-50';d.textContent=s;document.body.appendChild(d);setTimeout(function(){d.remove()},2200)}
-function show(name,step){document.querySelectorAll('.page').forEach(function(x){x.classList.add('hidden')});document.getElementById('page-'+name).classList.remove('hidden');renderSteps(step)}
-function renderSteps(active){steps.innerHTML=stepNames.map(function(n,i){return '<div class="rounded-lg px-2 py-2 text-center text-xs '+(i<=active?'bg-indigo-600 text-white':'bg-white border text-slate-400')+'">'+(i+1)+'. '+n+'</div>'}).join('')}
-function addMember(v){v=v||{};var d=document.createElement('div');d.className='member grid grid-cols-[1fr_2fr_90px_30px] gap-2';d.innerHTML='<input class="field mname" placeholder="姓名" value="'+esc(v.name||'')+'"><input class="field mskills" placeholder="技能，逗号分隔" value="'+esc((v.skill_tags||[]).join(','))+'"><input class="field mhours" type="number" min=".5" step=".5" value="'+(v.daily_available_hours||4)+'"><button type="button" class="text-red-400">×</button>';d.lastChild.onclick=function(){d.remove()};membersEl.appendChild(d)}
-addMember({name:'张三',skill_tags:['文案']});addMember({name:'李四',skill_tags:['摄影']});addMember({name:'王五',skill_tags:['秀米排版']});renderSteps(0);
-document.getElementById('addMemberBtn').onclick=function(){addMember()};filesEl.onchange=function(){state.files=Array.from(filesEl.files);fileList.innerHTML=state.files.map(function(f){return '<div>'+esc(f.name)+' · '+(f.size/1024).toFixed(1)+'KB</div>'}).join('')};
-function collectInput(){var ms=Array.from(document.querySelectorAll('.member')).map(function(r){var h=+r.querySelector('.mhours').value||4;return {name:r.querySelector('.mname').value.trim(),skill_tags:r.querySelector('.mskills').value.split(/[,，]/).map(function(x){return x.trim()}).filter(Boolean),daily_available_hours:h,available_hours:h*30}}).filter(function(x){return x.name});return {course:{name:projectNameEl.value,description:backgroundEl.value},members:ms,deadline:endEl.value,additional_requirements:requirementsEl.value,background:backgroundEl.value,requirements:requirementsEl.value,default_start_date:startEl.value||null,default_end_date:endEl.value,uploaded_files:state.files.map(function(f){return {name:f.name,size:f.size}}),requirement_analysis:{}}}
-projectForm.onsubmit=async function(e){e.preventDefault();var nextBtn=document.getElementById('continueAnalysisBtn');nextBtn.disabled=true;nextBtn.textContent='正在进入文件分析…';try{state.input=collectInput();if(!state.input.members.length)throw Error('请至少填写一名团队成员');show('analysis',1);if(state.files.length){analysis.value='正在上传并解析 '+state.files.length+' 个文件，请稍候…';await analyzeFiles()}else{analysis.value=JSON.stringify({project_goal:backgroundEl.value,summary:requirementsEl.value||backgroundEl.value,questions:['未上传文件，请确认以上项目要求。']},null,2)}}catch(err){show('info',0);toast('无法进入文件分析：'+err.message)}finally{nextBtn.disabled=false;nextBtn.textContent='继续：文件分析'}};
-async function analyzeFiles(){var fd=new FormData();state.files.forEach(function(f){fd.append('files',f)});fd.append('background',backgroundEl.value);reanalyze.disabled=true;reanalyze.textContent='分析中…';try{var r=await fetch('/api/analyze-files',{method:'POST',body:fd});var d=await r.json();if(!r.ok)throw Error(typeof d.detail==='string'?d.detail:JSON.stringify(d.detail));analysis.value=JSON.stringify(d.analysis,null,2);state.input.uploaded_files=d.files;if(d.errors.length)toast('部分文件未能解析')}catch(e){analysis.value='文件分析失败：'+e.message+'\n\n你可以返回项目信息重试，或直接在此处手动填写任务要求。';toast('文件分析失败：'+e.message)}finally{reanalyze.disabled=false;reanalyze.textContent='重新分析'}}
-reanalyze.onclick=analyzeFiles;
-toDraft.onclick=function(){try{state.input.requirement_analysis=JSON.parse(analysis.value);state.input.requirements=state.input.requirements+'\n'+(state.input.requirement_analysis.summary||'')}catch(e){state.input.requirements=analysis.value}createDraft()};
-async function createDraft(){toDraft.disabled=true;toast('正在生成任务草案…');try{var r=await fetch('/api/draft',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({input:state.input})}),d=await r.json();if(!r.ok)throw Error(d.detail||'生成失败');state.draft=d.plan;renderTasks();show('draft',2)}catch(e){toast(e.message)}finally{toDraft.disabled=false}}
-function blankTask(){return {id:'T'+Date.now(),name:'新任务',description:'',category:'其他',estimated_hours:2,required_skills:[],dependencies:[],execution_stage:'实践中',custom_stage:null,start_date:state.input.default_start_date,end_date:state.input.default_end_date,order:state.draft.tasks.length+1,status:'pending',assignee_id:null,collaborator_ids:[]}}
-function renderTasks(){taskEditor.innerHTML='';state.draft.tasks.sort(function(a,b){return a.order-b.order}).forEach(function(t,i){var d=document.createElement('div');d.className='task-row border rounded-xl p-3 bg-white';d.draggable=true;d.dataset.id=t.id;d.innerHTML='<div class="flex gap-2 items-center"><input type="checkbox" class="pick"><span class="cursor-move text-slate-300">↕</span><input class="field font-medium tname" value="'+esc(t.name)+'"><button class="btn split">拆分</button><button class="text-red-500 del">删除</button></div><div class="grid md:grid-cols-4 gap-2 mt-2"><input class="field tcat" placeholder="类别" value="'+esc(t.category)+'"><input class="field thours" type="number" min=".5" step=".5" value="'+t.estimated_hours+'"><select class="field tstage">'+['实践前','实践中','实践后','自定义'].map(function(s){return '<option '+(s===t.execution_stage?'selected':'')+'>'+s+'</option>'}).join('')+'</select><input class="field tcustom" placeholder="自定义阶段" value="'+esc(t.custom_stage||'')+'"><input class="field tstart" type="date" value="'+(t.start_date||'')+'"><input class="field tend" type="date" value="'+(t.end_date||'')+'"><input class="field tskills" placeholder="技能，逗号分隔" value="'+esc(t.required_skills.join(','))+'"><input class="field tdeps" placeholder="依赖ID，逗号分隔" value="'+esc(t.dependencies.join(','))+'"></div><textarea class="field mt-2 tdesc" placeholder="任务描述">'+esc(t.description)+'</textarea>';taskEditor.appendChild(d);d.querySelector('.del').onclick=function(){state.draft.tasks=state.draft.tasks.filter(function(x){return x.id!==t.id});renderTasks()};d.querySelector('.split').onclick=function(){syncTasks();var n=blankTask();n.name=t.name+'（子任务2）';n.description=t.description;n.estimated_hours=Math.max(.5,t.estimated_hours/2);t.name=t.name+'（子任务1）';t.estimated_hours=n.estimated_hours;state.draft.tasks.splice(i+1,0,n);renderTasks()};d.ondragstart=function(e){e.dataTransfer.setData('text/plain',t.id)};d.ondragover=function(e){e.preventDefault()};d.ondrop=function(e){e.preventDefault();var from=e.dataTransfer.getData('text/plain'),a=state.draft.tasks.findIndex(function(x){return x.id===from}),b=state.draft.tasks.findIndex(function(x){return x.id===t.id});var x=state.draft.tasks.splice(a,1)[0];state.draft.tasks.splice(b,0,x);state.draft.tasks.forEach(function(x,j){x.order=j+1});renderTasks()}})}
-function syncTasks(){Array.from(document.querySelectorAll('.task-row')).forEach(function(r,i){var t=state.draft.tasks.find(function(x){return x.id===r.dataset.id});if(!t)return;t.name=r.querySelector('.tname').value;t.description=r.querySelector('.tdesc').value;t.category=r.querySelector('.tcat').value;t.estimated_hours=+r.querySelector('.thours').value;t.execution_stage=r.querySelector('.tstage').value;t.custom_stage=r.querySelector('.tcustom').value||null;t.start_date=r.querySelector('.tstart').value||null;t.end_date=r.querySelector('.tend').value||null;t.required_skills=r.querySelector('.tskills').value.split(/[,，]/).map(function(x){return x.trim()}).filter(Boolean);t.dependencies=r.querySelector('.tdeps').value.split(/[,，]/).map(function(x){return x.trim()}).filter(Boolean);t.order=i+1})}
-addTask.onclick=function(){syncTasks();state.draft.tasks.push(blankTask());renderTasks()};mergeTask.onclick=function(){syncTasks();var ids=Array.from(document.querySelectorAll('.task-row')).filter(function(r){return r.querySelector('.pick').checked}).map(function(r){return r.dataset.id});if(ids.length<2)return toast('请至少选择两项');var picked=state.draft.tasks.filter(function(t){return ids.includes(t.id)}),first=picked[0];first.name=picked.map(function(t){return t.name}).join(' + ');first.description=picked.map(function(t){return t.description}).join('；');first.estimated_hours=picked.reduce(function(s,t){return s+t.estimated_hours},0);first.required_skills=Array.from(new Set(picked.flatMap(function(t){return t.required_skills})));state.draft.tasks=state.draft.tasks.filter(function(t){return !ids.includes(t.id)||t.id===first.id});renderTasks()};redraft.onclick=createDraft;
-confirmDraft.onclick=async function(){syncTasks();var bad=state.draft.tasks.find(function(t){return !t.name||t.estimated_hours<=0||(t.start_date&&t.end_date&&t.end_date<t.start_date)});if(bad)return toast('请检查任务名称、工时和日期');confirmDraft.disabled=true;try{var r=await fetch('/api/confirm-draft',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({input:state.input,plan:state.draft})}),d=await r.json();if(!r.ok)throw Error(d.detail||'分工失败');state.plan=d;state.auto=JSON.parse(JSON.stringify(d));saveBtn.disabled=false;renderBoard();show('board',4)}catch(e){toast(e.message)}finally{confirmDraft.disabled=false}};
-function renderBoard(){var mems=state.plan.input.members.map(function(m){return m.name}),groups={};mems.concat(['未分配']).forEach(function(n){groups[n]=[]});state.plan.plan.tasks.forEach(function(t){groups[t.assignee_id||'未分配'].push(t)});board.innerHTML=Object.keys(groups).map(function(n){var hours=groups[n].reduce(function(s,t){return s+t.estimated_hours},0);return '<div class="board-col border rounded-xl bg-slate-50 p-3 min-h-48" data-owner="'+esc(n)+'"><div class="font-medium">'+esc(n)+' <span class="text-xs text-slate-400">'+groups[n].length+'项 / '+hours.toFixed(1)+'h</span></div><div class="space-y-2 mt-3">'+groups[n].map(function(t){return '<div draggable="true" data-task="'+t.id+'" class="drag-card bg-white border rounded-lg p-3 cursor-move" title="拖拽更换负责人；双击设置协作者"><b class="text-sm">'+esc(t.name)+'</b><div class="text-xs text-slate-500 mt-1">'+t.estimated_hours+'h · '+esc(t.execution_stage)+' · '+esc(t.required_skills.join('/'))+'</div><div class="text-[11px] text-indigo-500 mt-1">协作者：'+esc((t.collaborator_ids||[]).join('、')||'无')+'</div></div>'}).join('')+'</div></div>'}).join('');document.querySelectorAll('.drag-card').forEach(function(c){c.ondragstart=function(e){e.dataTransfer.setData('text/plain',c.dataset.task)};c.ondblclick=function(){var t=state.plan.plan.tasks.find(function(x){return x.id===c.dataset.task}),v=prompt('输入协作者姓名（逗号分隔）：',(t.collaborator_ids||[]).join(','));if(v===null)return;t.collaborator_ids=v.split(/[,，]/).map(function(x){return x.trim()}).filter(function(x){return mems.includes(x)&&x!==t.assignee_id});renderBoard()}});document.querySelectorAll('.board-col').forEach(function(c){c.ondragover=function(e){e.preventDefault()};c.ondrop=function(e){e.preventDefault();var t=state.plan.plan.tasks.find(function(x){return x.id===e.dataTransfer.getData('text/plain')});t.assignee_id=c.dataset.owner==='未分配'?null:c.dataset.owner;t.collaborator_ids=(t.collaborator_ids||[]).filter(function(x){return x!==t.assignee_id});renderBoard()}});renderWarnings()}
-function renderWarnings(){var work={},stage={};state.plan.input.members.forEach(function(m){work[m.name]=0;stage[m.name]={}});state.plan.plan.tasks.forEach(function(t){if(t.assignee_id&&work[t.assignee_id]!=null){work[t.assignee_id]+=t.estimated_hours;stage[t.assignee_id][t.execution_stage]=(stage[t.assignee_id][t.execution_stage]||0)+t.estimated_hours}});var vals=Object.values(work),avg=vals.reduce(function(a,b){return a+b},0)/Math.max(1,vals.length),w=[];Object.keys(work).forEach(function(n){if(work[n]===0)w.push(n+'尚未分配任务');if(work[n]>avg*1.35&&work[n]-avg>2)w.push(n+'总工时明显高于团队平均');Object.keys(stage[n]).forEach(function(s){if(stage[n][s]>avg)w.push(n+'在'+s+'阶段任务较集中')})});if(state.plan.plan.tasks.some(function(t){return !t.assignee_id}))w.push('存在未设置负责人的任务');balanceWarnings.innerHTML=w.length?'<div class="bg-amber-50 text-amber-700 rounded-lg p-3 text-sm">'+w.join('；')+'</div>':'<div class="bg-emerald-50 text-emerald-700 rounded-lg p-3 text-sm">当前分工较均衡</div>'}
-restore.onclick=function(){state.plan=JSON.parse(JSON.stringify(state.auto));renderBoard()};confirmAssignment.onclick=async function(){var ass={},coll={};state.plan.plan.tasks.forEach(function(t){ass[t.id]=t.assignee_id||'';coll[t.id]=t.collaborator_ids||[]});try{var r=await fetch('/api/manual-assignment',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({plan:state.plan,assignees:ass,collaborators:coll})}),d=await r.json();if(!r.ok)throw Error(d.detail);state.plan=d;renderFinal();show('final',5);toast('最终分工已确认')}catch(e){toast(e.message)}};
-function renderFinal(){final.innerHTML='<div class="grid md:grid-cols-2 gap-3">'+state.plan.plan.tasks.map(function(t){return '<article class="border rounded-lg p-3"><b>'+esc(t.name)+'</b><p class="text-sm text-slate-500">'+esc(t.assignee_id||'未分配')+' · '+t.estimated_hours+'h · '+esc(t.execution_stage)+'</p><p class="text-xs mt-1">'+esc(t.start_date||'默认日期')+' 至 '+esc(t.end_date||'默认日期')+'</p></article>'}).join('')+'</div>'}
-saveBtn.onclick=async function(){if(!state.plan)return;var r=await fetch('/api/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(state.plan)}),d=await r.json();toast(r.ok?'已保存：'+d.filename:d.detail)};
-loadBtn.onclick=async function(){var r=await fetch('/api/plans'),d=await r.json();var f=prompt('输入要载入的文件名：\n'+d.plans.map(function(x){return x.filename}).slice(0,8).join('\n'));if(!f)return;var x=await fetch('/api/load/'+encodeURIComponent(f));state.plan=await x.json();state.input=state.plan.input;state.draft=state.plan.plan;state.auto=JSON.parse(JSON.stringify(state.plan));saveBtn.disabled=false;renderBoard();show('board',4)};
-chatOpen.onclick=function(){chat.classList.toggle('hidden')};chatForm.onsubmit=async function(e){e.preventDefault();var m=chatInput.value.trim();if(!m)return;messages.innerHTML+='<div class="text-right"><span class="inline-block bg-indigo-50 p-2 rounded">'+esc(m)+'</span></div>';chatInput.value='';var r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:m,plan:state.plan})}),d=await r.json();messages.innerHTML+='<div><span class="inline-block bg-slate-100 p-2 rounded">'+esc(d.reply||d.detail)+'</span></div>';messages.scrollTop=messages.scrollHeight};
+var state={input:null,draft:null,plan:null,automatic:null,files:[],activeStep:0,resultTab:'tasks'};
+var el=function(id){return document.getElementById(id)};
+function esc(value){var d=document.createElement('div');d.textContent=value==null?'':String(value);return d.innerHTML}
+function splitTags(value){return value.split(/[,，]/).map(function(x){return x.trim()}).filter(Boolean)}
+function showNotice(message,type){var n=el('notice');n.textContent=message;n.className='notice '+(type||'info');setTimeout(function(){n.classList.add('hidden')},3500)}
+function setView(name,step){['empty','draft','board','final'].forEach(function(v){el(v+'View').classList.toggle('hidden',v!==name)});state.activeStep=step;renderSteps()}
+function renderSteps(){var names=['项目配置','任务拆解','智能分工','手动调整','最终方案'];el('stepbar').innerHTML=names.map(function(name,index){var enabled=index===0||(index===1&&state.draft)||(index>=2&&state.plan);return '<button '+(enabled?'':'disabled')+' data-step="'+index+'" class="'+(index===state.activeStep?'active':index<state.activeStep?'done':'')+'"><span>'+(index+1)+'</span>'+name+'</button>'}).join('');document.querySelectorAll('[data-step]').forEach(function(button){button.onclick=function(){var step=+button.dataset.step;if(step===0)setView('empty',0);if(step===1&&state.draft){renderDraft();setView('draft',1)}if((step===2||step===3)&&state.plan){renderBoard();setView('board',step)}if(step===4&&state.plan){renderFinal();setView('final',4)}}})}
+function addMember(member){member=member||{};var row=document.createElement('div');row.className='member-row';row.innerHTML='<input class="member-name" placeholder="姓名" value="'+esc(member.name||'')+'"><input class="member-skills" placeholder="技能标签，逗号分隔" value="'+esc((member.skill_tags||[]).join(','))+'"><div class="hours-input"><input class="member-hours" type="number" min=".5" step=".5" value="'+(member.daily_available_hours||4)+'"><span>h/天</span></div><button type="button" class="remove-member">×</button>';row.querySelector('.remove-member').onclick=function(){row.remove()};el('members').appendChild(row)}
+function collectInput(){var members=Array.from(document.querySelectorAll('.member-row')).map(function(row){var daily=+row.querySelector('.member-hours').value||4;return {name:row.querySelector('.member-name').value.trim(),skill_tags:splitTags(row.querySelector('.member-skills').value),daily_available_hours:daily,available_hours:daily*30}}).filter(function(member){return member.name});return {course:{name:el('projectName').value.trim(),description:el('background').value.trim()},members:members,deadline:el('endDate').value,additional_requirements:el('requirements').value.trim(),background:el('background').value.trim(),requirements:el('requirements').value.trim(),default_start_date:el('startDate').value||null,default_end_date:el('endDate').value||null,uploaded_files:state.files.map(function(file){return {name:file.name,size:file.size}}),requirement_analysis:{}}}
+async function jsonRequest(url,body){var response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),data=await response.json();if(!response.ok)throw Error(typeof data.detail==='string'?data.detail:JSON.stringify(data.detail||data));return data}
+async function analyzeFiles(){if(!state.files.length)return;var fd=new FormData();state.files.forEach(function(file){fd.append('files',file)});fd.append('background',state.input.background);var response=await fetch('/api/analyze-files',{method:'POST',body:fd}),data=await response.json();if(!response.ok)throw Error(data.detail||'文件分析失败');state.input.uploaded_files=data.files;state.input.requirement_analysis=data.analysis;state.input.requirements=(state.input.requirements+'\n'+(data.analysis.summary||'')).trim()}
+async function generateDraft(){var button=el('generateBtn');button.disabled=true;button.innerHTML='<span class="spinner-inline"></span><span>'+(state.files.length?'正在分析文件并拆解任务…':'正在拆解任务…')+'</span>';try{state.input=collectInput();if(!state.input.members.length)throw Error('请至少填写一名成员');if(state.files.length)await analyzeFiles();var data=await jsonRequest('/api/draft',{input:state.input});state.draft=data.plan;renderDraft();setView('draft',1);showNotice('任务草案已生成，可先修改工时和时间','success')}catch(error){showNotice(error.message,'error')}finally{button.disabled=false;button.innerHTML='<span>生成任务拆解</span><small>文件将在后台自动分析</small>'}}
+function taskFromRow(row){var old=state.draft.tasks.find(function(task){return task.id===row.dataset.id});return Object.assign({},old,{name:row.querySelector('.task-name-input').value.trim(),description:row.querySelector('.task-description').value.trim(),category:row.querySelector('.task-category').value.trim()||'其他',estimated_hours:+row.querySelector('.task-hours-input').value,execution_stage:row.querySelector('.task-stage').value,custom_stage:row.querySelector('.task-custom-stage').value.trim()||null,start_date:row.querySelector('.task-start').value||null,end_date:row.querySelector('.task-end').value||null,required_skills:splitTags(row.querySelector('.task-skills').value),dependencies:splitTags(row.querySelector('.task-dependencies').value)})}
+function collectDraftTasks(){return Array.from(document.querySelectorAll('.task-edit-card')).map(taskFromRow)}
+async function mutateDraft(operations){state.draft=await jsonRequest('/api/draft/mutate',{plan:state.draft,operations:operations});renderDraft()}
+function renderDraft(){el('draftSummary').innerHTML='<strong>'+esc(state.draft.summary)+'</strong><p>'+esc(state.draft.reasoning||'任务已按专业能力、交付流程和依赖关系拆解。')+'</p>';el('taskEditor').innerHTML=state.draft.tasks.slice().sort(function(a,b){return a.order-b.order}).map(function(task){return '<article class="task-edit-card" data-id="'+esc(task.id)+'" draggable="true"><div class="task-edit-top"><input type="checkbox" class="task-select"><span class="drag-handle">⋮⋮</span><span class="task-code">'+esc(task.id)+'</span><input class="task-name-input" value="'+esc(task.name)+'"><button class="split-task btn-small" type="button">拆分</button><button class="remove-task icon-danger" type="button">×</button></div><textarea class="task-description" rows="2">'+esc(task.description)+'</textarea><div class="task-fields"><label>类别<input class="task-category" value="'+esc(task.category||'其他')+'"></label><label>预计工时<input class="task-hours-input" type="number" min=".5" step=".5" value="'+task.estimated_hours+'"></label><label>执行阶段<select class="task-stage">'+['实践前','实践中','实践后','自定义'].map(function(stage){return '<option '+(stage===task.execution_stage?'selected':'')+'>'+stage+'</option>'}).join('')+'</select></label><label>自定义阶段<input class="task-custom-stage" value="'+esc(task.custom_stage||'')+'"></label><label>开始日期<input class="task-start" type="date" value="'+(task.start_date||'')+'"></label><label>截止日期<input class="task-end" type="date" value="'+(task.end_date||'')+'"></label><label>所需技能<input class="task-skills" value="'+esc((task.required_skills||[]).join(','))+'"></label><label>依赖任务<input class="task-dependencies" value="'+esc((task.dependencies||[]).join(','))+'"></label></div></article>'}).join('');var total=state.draft.tasks.reduce(function(sum,task){return sum+task.estimated_hours},0);el('draftTotal').textContent=state.draft.tasks.length+' 项任务 · '+total.toFixed(1)+' 小时';bindDraftCards()}
+function bindDraftCards(){document.querySelectorAll('.task-edit-card').forEach(function(card){card.querySelector('.remove-task').onclick=function(){mutateDraft([{op:'remove',task_id:card.dataset.id}]).catch(function(error){showNotice(error.message,'error')})};card.querySelector('.split-task').onclick=function(){syncDraft().then(function(){return mutateDraft([{op:'split',task_id:card.dataset.id}])}).catch(function(error){showNotice(error.message,'error')})};card.ondragstart=function(event){event.dataTransfer.setData('text/task-id',card.dataset.id)};card.ondragover=function(event){event.preventDefault()};card.ondrop=function(event){event.preventDefault();var source=event.dataTransfer.getData('text/task-id'),ids=state.draft.tasks.slice().sort(function(a,b){return a.order-b.order}).map(function(task){return task.id}),from=ids.indexOf(source),to=ids.indexOf(card.dataset.id);if(from<0||to<0||from===to)return;ids.splice(to,0,ids.splice(from,1)[0]);mutateDraft([{op:'reorder',ordered_ids:ids}]).catch(function(error){showNotice(error.message,'error')})}})}
+async function syncDraft(){var tasks=collectDraftTasks(),operations=tasks.map(function(task){return {op:'update',task_id:task.id,task:task}});state.draft=await jsonRequest('/api/draft/mutate',{plan:state.draft,operations:operations});return state.draft}
+async function confirmDraft(){var button=el('confirmDraftBtn');button.disabled=true;button.textContent='正在计算分工…';try{await syncDraft();state.plan=await jsonRequest('/api/confirm-draft',{input:state.input,plan:state.draft});state.automatic=JSON.parse(JSON.stringify(state.plan));el('saveBtn').disabled=false;await renderBoard();setView('board',2);showNotice('自动分工已完成，可拖拽调整','success')}catch(error){showNotice(error.message,'error')}finally{button.disabled=false;button.textContent='确认拆解并开始分工'}}
+async function refreshWorkload(){var snapshot=await jsonRequest('/api/workload',state.plan),members=snapshot.members;el('workloadSummary').innerHTML=Object.keys(members).map(function(name){var item=members[name];return '<div class="workload-card"><div><strong>'+esc(name)+'</strong><span>'+item.task_count+' 项 · '+item.total_hours+'h</span></div><div class="load-track"><i style="width:'+Math.min(100,item.share*100)+'%"></i></div><small>'+Math.round(item.share*100)+'% 团队工作量</small></div>'}).join('');el('balanceWarnings').innerHTML=snapshot.warnings.length?'<div class="warning-box"><strong>分工建议</strong><span>'+snapshot.warnings.map(esc).join('；')+'</span></div>':'<div class="success-box">当前技能匹配和工作量较为均衡</div>'}
+async function renderBoard(){var names=state.plan.input.members.map(function(member){return member.name}),groups={};names.concat(['未分配']).forEach(function(name){groups[name]=[]});state.plan.plan.tasks.forEach(function(task){groups[task.assignee_id||'未分配'].push(task)});el('board').innerHTML=Object.keys(groups).map(function(owner){var hours=groups[owner].reduce(function(sum,task){return sum+task.estimated_hours},0);return '<section class="member-column" data-owner="'+esc(owner)+'"><header><div class="avatar">'+esc(owner.slice(0,1))+'</div><div><strong>'+esc(owner)+'</strong><span>'+groups[owner].length+' 项任务 · '+hours.toFixed(1)+'h</span></div></header><div class="member-task-list">'+groups[owner].map(function(task){return '<article class="assignment-card" draggable="true" data-task="'+esc(task.id)+'"><div class="assignment-title"><strong>'+esc(task.name)+'</strong><span>'+task.estimated_hours+'h</span></div><div class="assignment-meta">'+esc(task.execution_stage)+' · '+esc((task.required_skills||[]).join(' / ')||'通用')+'</div><label>负责人<select class="owner-select">'+[''].concat(names).map(function(name){return '<option value="'+esc(name)+'" '+(name===task.assignee_id?'selected':'')+'>'+(name||'未分配')+'</option>'}).join('')+'</select></label><button type="button" class="collaborator-btn">协作者：'+esc((task.collaborator_ids||[]).join('、')||'无')+'</button></article>'}).join('')+'</div></section>'}).join('');bindBoard();await refreshWorkload()}
+function bindBoard(){var names=state.plan.input.members.map(function(member){return member.name});document.querySelectorAll('.assignment-card').forEach(function(card){card.ondragstart=function(event){event.dataTransfer.setData('text/task-id',card.dataset.task)};card.querySelector('.owner-select').onchange=function(){var task=state.plan.plan.tasks.find(function(item){return item.id===card.dataset.task});task.assignee_id=this.value||null;task.collaborator_ids=(task.collaborator_ids||[]).filter(function(name){return name!==task.assignee_id});renderBoard()};card.querySelector('.collaborator-btn').onclick=function(){var task=state.plan.plan.tasks.find(function(item){return item.id===card.dataset.task}),value=prompt('输入协作者姓名，用逗号分隔：',(task.collaborator_ids||[]).join(','));if(value===null)return;task.collaborator_ids=splitTags(value).filter(function(name){return names.includes(name)&&name!==task.assignee_id});renderBoard()}});document.querySelectorAll('.member-column').forEach(function(column){column.ondragover=function(event){event.preventDefault();column.classList.add('drag-over')};column.ondragleave=function(){column.classList.remove('drag-over')};column.ondrop=function(event){event.preventDefault();column.classList.remove('drag-over');var task=state.plan.plan.tasks.find(function(item){return item.id===event.dataTransfer.getData('text/task-id')});task.assignee_id=column.dataset.owner==='未分配'?null:column.dataset.owner;task.collaborator_ids=(task.collaborator_ids||[]).filter(function(name){return name!==task.assignee_id});renderBoard()}})}
+async function confirmAssignment(){var button=el('confirmAssignmentBtn'),assignees={},collaborators={};state.plan.plan.tasks.forEach(function(task){assignees[task.id]=task.assignee_id||'';collaborators[task.id]=task.collaborator_ids||[]});button.disabled=true;button.textContent='正在保存调整…';try{state.plan=await jsonRequest('/api/manual-assignment',{plan:state.plan,assignees:assignees,collaborators:collaborators});renderFinal();setView('final',4);showNotice('最终分工已确认','success')}catch(error){showNotice(error.message,'error')}finally{button.disabled=false;button.textContent='确认最终分工'}}
+function renderFinal(){renderResultTab(state.resultTab)}
+function renderResultTab(tab){state.resultTab=tab;document.querySelectorAll('#resultTabs button').forEach(function(button){button.classList.toggle('active',button.dataset.tab===tab)});var content='';if(tab==='tasks')content='<div class="final-grid">'+state.plan.plan.tasks.map(function(task){return '<article class="final-card"><div><span class="task-code">'+esc(task.id)+'</span><strong>'+esc(task.name)+'</strong></div><p>'+esc(task.description)+'</p><footer><span>'+esc(task.assignee_id||'未分配')+'</span><span>'+task.estimated_hours+'h</span><span>'+esc(task.execution_stage)+'</span></footer></article>'}).join('')+'</div>';if(tab==='timeline')content='<div class="timeline-list">'+state.plan.timeline.tasks.map(function(task){return '<div><span>'+esc(task.name)+'</span><i></i><strong>'+esc(String(task.start_date).slice(0,10))+' → '+esc(String(task.end_date).slice(0,10))+'</strong></div>'}).join('')+'</div>';if(tab==='matrix')content='<table><thead><tr><th>任务</th><th>负责人</th><th>协作者</th><th>匹配度</th></tr></thead><tbody>'+state.plan.qa_matrix.assignments.map(function(item){return '<tr><td>'+esc(item.task_name)+'</td><td>'+esc(item.presenter||'未分配')+'</td><td>'+esc([item.qa_primary].concat(item.qa_support||[]).filter(Boolean).join('、')||'无')+'</td><td>'+Math.round((item.score||0)*100)+'%</td></tr>'}).join('')+'</tbody></table>';if(tab==='report')content='<div class="report-box"><h3>方案摘要</h3><p>'+esc(state.plan.report.summary)+'</p><h3>时间线</h3><p>'+esc(state.plan.report.timeline_section)+'</p><h3>分工说明</h3><p>'+esc(state.plan.report.qa_matrix_section)+'</p></div>';el('resultContent').innerHTML=content}
+async function savePlan(){if(!state.plan)return;try{var data=await jsonRequest('/api/save',state.plan);showNotice('已保存：'+data.filename,'success')}catch(error){showNotice(error.message,'error')}}
+async function showHistory(){try{var response=await fetch('/api/plans'),data=await response.json();el('planList').innerHTML=(data.plans||[]).map(function(plan){return '<button data-file="'+esc(plan.filename)+'"><span>'+esc(plan.filename)+'</span><small>'+(plan.size/1024).toFixed(1)+' KB</small></button>'}).join('')||'<p class="modal-empty">暂无历史方案</p>';el('modal').classList.remove('hidden');document.querySelectorAll('[data-file]').forEach(function(button){button.onclick=function(){loadPlan(button.dataset.file)}})}catch(error){showNotice(error.message,'error')}}
+async function loadPlan(filename){var response=await fetch('/api/load/'+encodeURIComponent(filename)),data=await response.json();if(!response.ok)return showNotice(data.detail||'载入失败','error');state.plan=data;state.input=data.input;state.draft=data.plan;state.automatic=JSON.parse(JSON.stringify(data));el('saveBtn').disabled=false;el('modal').classList.add('hidden');renderBoard();setView('board',3)}
+function openAssistant(){el('assistantDrawer').classList.remove('hidden')}
+async function sendChat(event){event.preventDefault();var input=el('chatInput'),message=input.value.trim(),button=el('chatForm').querySelector('button');if(!message||button.disabled)return;el('messages').insertAdjacentHTML('beforeend','<div class="user-msg">'+esc(message)+'</div><div id="waitingMsg" class="assistant-msg muted">正在分析当前方案，最长等待 20 秒…</div>');input.value='';button.disabled=true;try{var data=await jsonRequest('/api/chat',{message:message,plan:state.plan}),waiting=el('waitingMsg');if(waiting)waiting.remove();el('messages').insertAdjacentHTML('beforeend','<div class="assistant-msg">'+esc(data.reply)+'</div>')}catch(error){var waiting=el('waitingMsg');if(waiting)waiting.textContent='请求失败：'+error.message}finally{button.disabled=false;el('messages').scrollTop=el('messages').scrollHeight}}
+
+el('addMemberBtn').onclick=function(){addMember()};
+el('chooseFileBtn').onclick=function(){el('files').click()};
+el('files').onchange=function(){state.files=Array.from(el('files').files);el('fileList').innerHTML=state.files.map(function(file){return '<span>✓ '+esc(file.name)+' · '+(file.size/1024).toFixed(1)+'KB</span>'}).join('')};
+el('projectForm').onsubmit=function(event){event.preventDefault();generateDraft()};
+el('addTaskBtn').onclick=function(){syncDraft().then(function(){return mutateDraft([{op:'add'}])}).catch(function(error){showNotice(error.message,'error')})};
+el('mergeTaskBtn').onclick=function(){var ids=Array.from(document.querySelectorAll('.task-edit-card')).filter(function(card){return card.querySelector('.task-select').checked}).map(function(card){return card.dataset.id});syncDraft().then(function(){return mutateDraft([{op:'merge',task_ids:ids}])}).catch(function(error){showNotice(error.message,'error')})};
+el('redraftBtn').onclick=generateDraft;
+el('confirmDraftBtn').onclick=confirmDraft;
+el('restoreBtn').onclick=function(){state.plan=JSON.parse(JSON.stringify(state.automatic));renderBoard()};
+el('confirmAssignmentBtn').onclick=confirmAssignment;
+el('backBoardBtn').onclick=function(){renderBoard();setView('board',3)};
+el('resultTabs').onclick=function(event){if(event.target.dataset.tab)renderResultTab(event.target.dataset.tab)};
+el('saveBtn').onclick=savePlan;el('historyBtn').onclick=showHistory;el('closeModal').onclick=function(){el('modal').classList.add('hidden')};
+el('assistantBtn').onclick=openAssistant;el('closeAssistant').onclick=function(){el('assistantDrawer').classList.add('hidden')};el('chatForm').onsubmit=sendChat;
+addMember({name:'张三',skill_tags:['文案']});addMember({name:'李四',skill_tags:['摄影']});addMember({name:'王五',skill_tags:['秀米排版']});renderSteps();
 </script>
-</body></html>
+</body>
+</html>

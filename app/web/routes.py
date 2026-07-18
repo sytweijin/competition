@@ -19,7 +19,11 @@ from app.agents.interview_sim import InterviewSimAgent
 from app.models.schemas import (
     AssignmentInput, CourseInfo, EditPlanRequest, FullPlan, PlanOutput, QAOutput, TeamMember,
     DraftRequest, DraftResponse, ConfirmDraftRequest, ManualAssignmentRequest,
-    RequirementAnalysis, QAAssignment,
+    RequirementAnalysis, DraftMutationRequest,
+)
+from app.services.project_service import (
+    ProjectServiceError, apply_manual_assignment, confirm_draft as confirm_draft_service,
+    generate_draft, mutate_draft, workload_snapshot,
 )
 
 logger = logging.getLogger(__name__)
@@ -29,8 +33,7 @@ router = APIRouter()
 @router.post("/analyze-files")
 async def analyze_files(files: list[UploadFile] = File(...), background: str = Form("")):
     """提取文件文字后汇总分析；仅记录文件元数据，不落盘、不输出原文日志。"""
-    from app.file_analysis import extract_text, fallback_analysis
-    from app.llm.client import LLMClient
+    from app.file_analysis import analyze_locally, extract_text
     texts, metadata, errors = [], [], []
     for upload in files[:8]:
         raw = await upload.read()
@@ -43,77 +46,93 @@ async def analyze_files(files: list[UploadFile] = File(...), background: str = F
     if not texts:
         raise HTTPException(status_code=400, detail=errors[0]["error"] if errors else "没有可分析文件")
     merged = (background + "\n" + "\n".join(texts))[:60000]
-    prompt = """请分析以下项目材料，提炼目标、核心任务、交付物、时间要求、格式要求、
-限制条件、评价标准、重要人员及待确认问题。不要复述原文，输出严格结构化结果。\n""" + merged
-    result = LLMClient().chat_structured(
-        "你是项目要求分析助手，只做信息提炼，不编造。", prompt, RequirementAnalysis, 0.1)
-    if hasattr(result, "error_type"):
-        analysis = fallback_analysis(merged)
-    else:
-        analysis = result.model_dump()
+    # 文件阶段只做本地提取、清理和事实归类；随后 Planner 只调用一次 LLM。
+    # 避免“文件分析 LLM + 任务拆解 LLM”串行造成一分钟以上等待。
+    analysis = analyze_locally(merged)
     return {"files": metadata, "errors": errors, "analysis": analysis}
 
 
 @router.post("/draft", response_model=DraftResponse)
 async def create_draft(req: DraftRequest):
     """只生成可编辑任务草案，不分工。"""
-    plan = Coordinator().draft(req.input)
+    plan = generate_draft(req.input)
     return DraftResponse(input=req.input, plan=plan)
 
 
 @router.post("/confirm-draft", response_model=FullPlan)
 async def confirm_draft(req: ConfirmDraftRequest):
     """确认拆解后才自动分工。"""
-    return Coordinator().confirm(req.input, req.plan)
+    try:
+        return confirm_draft_service(req.input, req.plan)
+    except ProjectServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/draft/mutate", response_model=PlanOutput)
+async def mutate_draft_endpoint(req: DraftMutationRequest):
+    """结构化修改草案，供网页与未来自然语言 Agent 共用。"""
+    try:
+        return mutate_draft(req.plan, req.operations)
+    except ProjectServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.post("/manual-assignment", response_model=FullPlan)
 async def manual_assignment(req: ManualAssignmentRequest):
     """保存用户拖拽后的负责人/协作者并重算排期与报告。"""
-    from app.agents.scoring import skill_score, _work_from
-    from app.agents.timeline import TimelineAgent
-    from app.agents.reporter import ReporterAgent
-    member_map = {m.name: m for m in req.plan.input.members}
-    assignments, updated_tasks = [], []
-    for task in req.plan.plan.tasks:
-        owner = req.assignees.get(task.id, task.assignee_id or "")
-        if owner and owner not in member_map:
-            raise HTTPException(status_code=400, detail=f"未知负责人：{owner}")
-        collaborators = [n for n in req.collaborators.get(task.id, task.collaborator_ids)
-                         if n in member_map and n != owner]
-        score = skill_score(member_map[owner], task.required_skills) if owner else 0.0
-        assignments.append(QAAssignment(
-            task_id=task.id, task_name=task.name, presenter=owner,
-            qa_primary=collaborators[0] if collaborators else "",
-            qa_support=collaborators[1:], score=score,
-            reasoning="用户手动调整并确认" if owner else "尚未设置负责人"))
-        updated_tasks.append(task.model_copy(update={
-            "assignee_id": owner or None, "collaborator_ids": collaborators}))
-    hours = {t.id: t.estimated_hours for t in updated_tasks}
-    workload = _work_from(assignments, hours, req.plan.input.members)
-    qa = QAOutput(assignments=assignments, workload=workload, note="用户确认的手动分工")
-    mapping = {a.task_id: [a.presenter] + ([a.qa_primary] if a.qa_primary else []) for a in assignments}
-    plan = req.plan.plan.model_copy(update={"tasks": updated_tasks})
-    timeline = TimelineAgent().run(plan, req.plan.input.deadline.isoformat(), mapping, req.plan.input.members)
-    report = ReporterAgent().run(plan, timeline, qa)
-    return FullPlan(input=req.plan.input, plan=plan, timeline=timeline, qa_matrix=qa,
-                    report=report, version=req.plan.version)
+    try:
+        return apply_manual_assignment(req)
+    except ProjectServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/workload")
+async def workload(req: FullPlan):
+    """返回统一工作量统计与建议，不让页面自行复制业务规则。"""
+    return workload_snapshot(req)
 
 
 class ChatRequest(BaseModel):
     message: str
     plan: FullPlan | None = None
+    draft: PlanOutput | None = None
+    input: AssignmentInput | None = None
 
 
 @router.post("/chat")
 async def project_chat(req: ChatRequest):
+    import asyncio
     from app.llm.client import LLMClient
-    context = req.plan.model_dump_json()[:18000] if req.plan else "尚未生成方案"
-    result = LLMClient().chat_text(
-        "你是项目协作助手。基于当前方案简洁回答，可指出冲突并给出调整建议。",
-        f"当前方案：{context}\n用户：{req.message}", 0.2)
+    if req.plan:
+        context = req.plan.model_dump_json()[:18000]
+    elif req.draft:
+        context = json.dumps({
+            "project": req.input.model_dump(mode="json") if req.input else {},
+            "draft": req.draft.model_dump(mode="json"),
+        }, ensure_ascii=False)[:18000]
+    else:
+        context = "尚未生成方案"
+    try:
+        result = await asyncio.wait_for(
+            asyncio.to_thread(
+                LLMClient().chat_text,
+                "你是项目协作助手。基于当前方案简洁回答，可指出冲突并给出调整建议。",
+                f"当前方案：{context}\n用户：{req.message}", 0.2),
+            timeout=20,
+        )
+    except TimeoutError:
+        return {"reply": "AI 响应超过 20 秒。建议先在任务拆解或分工看板中直接调整；我已停止本次等待。"}
     if hasattr(result, "error_type"):
-        return {"reply": "当前 AI 服务不可用。你仍可继续编辑任务和拖拽分工。"}
+        tasks = req.plan.plan.tasks if req.plan else (req.draft.tasks if req.draft else [])
+        total = sum(task.estimated_hours for task in tasks)
+        preview = "；".join(
+            f"{task.name}（{task.estimated_hours:g}h，建议{task.suggested_people}人）"
+            for task in tasks[:8])
+        return {"reply": (
+            f"当前模型服务不可用，但我已读取到当前{'最终方案' if req.plan else '任务草案'}："
+            f"共 {len(tasks)} 项、预计 {total:g} 小时。{preview or '暂无任务'}。"
+            "你可以继续告诉我希望重点检查工时、人数、依赖还是负责人；模型恢复后会基于同一份方案回答。"
+        )}
     return {"reply": result}
 
 
@@ -298,14 +317,14 @@ async def recompute_plan(req: FullPlan):
             members=members,
         )
 
-        # 状态切换后自动重生成报告（保留分工重算后的最新 timeline/qa）
-        try:
-            from app.agents.reporter import ReporterAgent
-            report = ReporterAgent().run(plan=plan, timeline=timeline, qa_matrix=qa_matrix)
-        except Exception as exc:
-            logger.exception("reporter rerun failed after recompute")
-            report = req.report.model_copy(update={
-                "risk_note": (req.report.risk_note + f"\n(报告重生成失败: {exc})").strip()})
+        # 状态切换是高频操作，只用本地结果更新报告，避免每次标记完成/阻塞都等待 LLM。
+        report = req.report.model_copy(update={
+            "timeline_section": timeline.note,
+            "qa_matrix_section": "\n".join(
+                f"{item.task_name}：{item.presenter or '未分配'}"
+                for item in qa_matrix.assignments),
+            "risk_note": qa_matrix.note,
+        })
 
         return FullPlan(
             input=req.input,

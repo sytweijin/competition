@@ -101,6 +101,8 @@ class SubTask(BaseModel):
     end_date: Optional[date] = None
     assignee_id: Optional[str] = None
     collaborator_ids: list[str] = Field(default_factory=list)
+    suggested_people: int = Field(default=1, ge=1, le=10,
+                                  description="建议参与人数，至少 1 人")
     order: int = 0
     status: TaskStatus = Field(default=TaskStatus.pending,
                                description="Task execution status")
@@ -217,6 +219,21 @@ class DraftResponse(BaseModel):
 class ConfirmDraftRequest(BaseModel):
     input: AssignmentInput
     plan: PlanOutput
+
+
+class DraftOperation(BaseModel):
+    """界面与未来自然语言 Agent 共用的任务修改指令。"""
+    op: str = Field(description="add/update/remove/split/merge/reorder")
+    task_id: str = ""
+    task_ids: list[str] = Field(default_factory=list)
+    task: Optional[SubTask] = None
+    tasks: list[SubTask] = Field(default_factory=list)
+    ordered_ids: list[str] = Field(default_factory=list)
+
+
+class DraftMutationRequest(BaseModel):
+    plan: PlanOutput
+    operations: list[DraftOperation]
 
 
 class ManualAssignmentRequest(BaseModel):

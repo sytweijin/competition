@@ -99,18 +99,27 @@ class Coordinator:
 
     def confirm(self, inp: AssignmentInput, plan: PlanOutput) -> FullPlan:
         """用户确认任务草案后，才执行自动分工、排期与报告。"""
-        qa_matrix = self._step_matcher(plan, inp.members)
+        # 确认阶段使用可解释的确定性评分，避免 Matcher + Reporter 两次串行 LLM 等待。
+        qa_matrix = assign_with_balance(plan, inp.members)
         timeline = self._step_timeline(plan, inp.deadline.isoformat(), qa_matrix, inp.members)
         if isinstance(timeline, AgentError):
             timeline = TimelineOutput(tasks=[], critical_path=[], total_days=0, note=timeline.message)
-        report = self._step_reporter(plan, timeline, qa_matrix)
-        if isinstance(report, AgentError):
-            report = ReportOutput(summary="报告生成失败", risk_note=report.message)
+        report = ReportOutput(
+            summary=plan.summary,
+            timeline_section=f"共 {len(timeline.tasks)} 项排期，总工期 {timeline.total_days} 天。",
+            qa_matrix_section="\n".join(
+                f"{a.task_name}：{a.presenter}（{a.reasoning}）"
+                for a in qa_matrix.assignments),
+            risk_note=qa_matrix.note,
+        )
         by_task = {a.task_id: a for a in qa_matrix.assignments}
         assigned_tasks = [
             t.model_copy(update={
                 "assignee_id": by_task[t.id].presenter if t.id in by_task else None,
-                "collaborator_ids": ([by_task[t.id].qa_primary] if t.id in by_task and by_task[t.id].qa_primary else [])
+                "collaborator_ids": (
+                    ([by_task[t.id].qa_primary] if by_task[t.id].qa_primary else [])
+                    + list(by_task[t.id].qa_support or [])
+                )[:max(0, t.suggested_people - 1)] if t.id in by_task else []
             }) for t in plan.tasks
         ]
         return FullPlan(input=inp, plan=plan.model_copy(update={"tasks": assigned_tasks}),
@@ -206,11 +215,29 @@ class Coordinator:
                 tasks.append(SubTask(
                     id=f"T{i+1}", name=name, description=f"完成{name}并形成可验收成果",
                     category=category, estimated_hours=hours, required_skills=skills,
-                    execution_stage=stage, dependencies=deps, order=i+1))
+                    execution_stage=stage, dependencies=deps, order=i+1,
+                    suggested_people=2 if "摄影" in name else 1))
             return PlanOutput(
                 tasks=tasks,
                 summary="按内容、摄影、资料、排版、审核和发布等专业流程拆解的推送任务草案。",
                 reasoning="LLM 不可用时启用秀米推送专用兜底，仍不分配负责人。")
+
+        # 根据已提取的要求和常见交付流程生成领域化兜底，不再只返回通用 5 阶段。
+        specs = _domain_fallback_specs(text, inp.requirement_analysis)
+        if specs:
+            tasks = []
+            for i, spec in enumerate(specs):
+                deps = [f"T{i}"] if i > 0 and spec[4] != "实践中" else []
+                tasks.append(SubTask(
+                    id=f"T{i+1}", name=spec[0],
+                    description=f"完成{spec[0]}，形成可检查、可交付的成果",
+                    category=spec[1], estimated_hours=spec[2],
+                    required_skills=spec[3], execution_stage=spec[4],
+                    dependencies=deps, suggested_people=spec[5], order=i+1))
+            return PlanOutput(
+                tasks=tasks,
+                summary="模型暂时不可用，已根据项目背景、交付物和专业流程生成可编辑的领域化草案。",
+                reasoning="本地兜底按动作、专业能力、执行阶段和交付物拆解；请在确认前调整工时、日期和人数。")
 
         # 团队总产能（默认 3 人 × 20h = 60h 作为基准）
         total_capacity = sum(m.available_hours for m in inp.members) or 60.0
@@ -241,3 +268,79 @@ class Coordinator:
             reasoning=("LLM 规划失败，按需求→设计→开发→测试→文档的标准"
                        "瀑布模型生成默认计划，确保下游可用。"),
         )
+
+
+def _domain_fallback_specs(text: str, analysis: dict) -> list[tuple]:
+    """从项目文本生成 5-12 项专业化任务：(名称, 类别, 工时, 技能, 阶段, 人数)。"""
+    lowered = text.lower()
+    specs: list[tuple] = []
+
+    def add(name, category, hours, skills, stage, people=1):
+        if name not in {item[0] for item in specs}:
+            specs.append((name, category, hours, skills, stage, people))
+
+    # 通用起始工作
+    add("确认项目目标与交付标准", "策划", 2, ["需求分析", "沟通"], "实践前")
+    if any(word in lowered for word in ("调研", "问卷", "访谈", "调查")):
+        add("设计调研方案与问题清单", "调研", 3, ["调研设计"], "实践前")
+        add("开展调研与资料采集", "调研", 6, ["访谈", "资料收集"], "实践中", 2)
+        add("整理并分析调研数据", "分析", 5, ["数据分析"], "实践后")
+    if any(word in lowered for word in ("活动", "实践", "现场", "志愿")):
+        add("制定现场执行与记录方案", "策划", 3, ["活动策划"], "实践前")
+        add("现场执行与过程协调", "执行", 6, ["组织协调"], "实践中", 3)
+        add("活动过程记录与资料归档", "记录", 4, ["资料整理"], "实践中", 2)
+    if any(word in lowered for word in ("摄影", "照片", "拍摄", "视频")):
+        add("制定拍摄清单与素材规范", "摄影", 2, ["摄影策划"], "实践前")
+        add("现场摄影与视频素材采集", "摄影", 6, ["摄影", "摄像"], "实践中", 2)
+        add("素材筛选与后期处理", "设计", 5, ["图片处理", "视频剪辑"], "实践后")
+    if any(word in lowered for word in ("报告", "总结", "论文", "文档")):
+        add("搭建报告结构与内容提纲", "文案", 2.5, ["内容策划"], "实践前")
+        add("撰写报告或总结正文", "文案", 6, ["文案撰写"], "实践后")
+        add("数据、图表与附件整理", "资料", 4, ["数据可视化", "资料整理"], "实践后")
+    if any(word in lowered for word in ("ppt", "答辩", "汇报", "展示")):
+        add("设计汇报结构与演示逻辑", "策划", 2.5, ["汇报策划"], "实践后")
+        add("制作演示文稿与视觉排版", "设计", 5, ["PPT", "视觉设计"], "实践后")
+        add("答辩演练与问题准备", "答辩", 3, ["表达", "应答"], "实践后", 2)
+    if any(word in lowered for word in ("开发", "系统", "网站", "程序", "小程序")):
+        add("梳理功能需求与验收标准", "产品", 3, ["需求分析"], "实践前")
+        add("完成核心功能设计与实现", "开发", 10, ["技术开发"], "实践中", 2)
+        add("功能测试、修复与联调", "测试", 6, ["测试", "调试"], "实践后", 2)
+
+    # 文件提取出的核心任务用于补充领域词汇，最多补 4 项。
+    for item in (analysis or {}).get("core_tasks", [])[:4]:
+        name = item[:36].strip()
+        if 4 <= len(name) <= 36:
+            add(name, "执行", _estimate_hours(name), _infer_skills(name), _infer_stage(name),
+                _infer_people(name))
+    add("成果审核、修改与最终提交", "审核", 3, ["质量审核"], "实践后", 2)
+    return specs[:12]
+
+
+def _estimate_hours(name: str) -> float:
+    rules = [
+        (("开发", "实现", "现场执行"), 8), (("拍摄", "采集", "调研"), 6),
+        (("撰写", "制作", "排版", "分析"), 5), (("整理", "处理", "测试"), 4),
+        (("审核", "演练", "方案"), 3), (("发布", "提交", "确认"), 2),
+    ]
+    return next((hours for words, hours in rules if any(word in name for word in words)), 3)
+
+
+def _infer_skills(name: str) -> list[str]:
+    mapping = {
+        "拍摄": "摄影", "摄影": "摄影", "撰写": "文案撰写", "排版": "视觉设计",
+        "开发": "技术开发", "测试": "测试", "分析": "数据分析", "调研": "调研",
+        "答辩": "表达", "审核": "质量审核",
+    }
+    return list(dict.fromkeys(skill for word, skill in mapping.items() if word in name)) or ["组织执行"]
+
+
+def _infer_stage(name: str) -> str:
+    if any(word in name for word in ("方案", "标准", "设计", "准备")):
+        return "实践前"
+    if any(word in name for word in ("现场", "采集", "开展", "执行")):
+        return "实践中"
+    return "实践后"
+
+
+def _infer_people(name: str) -> int:
+    return 2 if any(word in name for word in ("现场", "拍摄", "采集", "联调", "演练")) else 1

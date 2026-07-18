@@ -60,3 +60,48 @@ def fallback_analysis(text: str) -> dict:
         "questions": ["请确认系统提取的项目目标，并补充交付物、时间与评价标准。"],
         "summary": snippet,
     }
+
+
+def analyze_locally(text: str) -> dict:
+    """毫秒级提炼常见要求，避免文件分析与任务拆解串行调用两次 LLM。
+
+    这里负责抽取事实和压缩原文；Planner 随后只调用一次 LLM 完成专业任务拆解。
+    """
+    cleaned = re.sub(r"\s+", " ", text).strip()
+    sentences = [
+        part.strip(" ：:;；,.，。")
+        for part in re.split(r"[。！？\n;；]+", cleaned)
+        if part.strip()
+    ][:120]
+
+    def matched(*keywords: str, limit: int = 8) -> list[str]:
+        values = [
+            sentence for sentence in sentences
+            if any(keyword in sentence.lower() for keyword in keywords)
+        ]
+        return list(dict.fromkeys(values))[:limit]
+
+    goals = matched("目标", "目的", "旨在", "需要完成", "项目背景", limit=4)
+    deliverables = matched("交付", "提交", "成果", "报告", "推送", "作品", "文档", limit=10)
+    times = matched("截止", "日期", "时间", "之前", "实践前", "实践中", "实践后", limit=10)
+    formats = matched("格式", "字数", "页数", "pdf", "word", "ppt", "秀米", "排版", limit=10)
+    constraints = matched("必须", "不得", "限制", "要求", "禁止", "至少", "不超过", limit=10)
+    criteria = matched("评分", "评价", "考核", "标准", "占比", limit=10)
+    people = matched("负责人", "成员", "老师", "导师", "联系人", "团队", limit=8)
+    core = matched("任务", "完成", "制作", "撰写", "拍摄", "收集", "发布", "设计", limit=12)
+    summary_parts = (goals + deliverables + times + formats + constraints)[:16]
+    summary = "；".join(summary_parts) if summary_parts else cleaned[:2200]
+    return {
+        "project_goal": "；".join(goals) or cleaned[:300],
+        "core_tasks": core,
+        "deliverables": deliverables,
+        "time_requirements": times,
+        "format_requirements": formats,
+        "constraints": constraints,
+        "evaluation_criteria": criteria,
+        "important_people": people,
+        "questions": [] if goals and deliverables else [
+            "请确认项目目标和最终交付物是否完整。"
+        ],
+        "summary": summary[:4000],
+    }

@@ -42,3 +42,5 @@ def test_file_analysis_txt():
     )
     assert response.status_code == 200
     assert response.json()["files"][0]["status"] == "ok"
+    assert response.json()["analysis"]["time_requirements"]
+    assert "发布总结推送" in response.json()["analysis"]["summary"]

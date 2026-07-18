@@ -28,6 +28,7 @@ PLANNER_SYSTEM = """你是一位经验丰富的项目管理专家，擅长将项
 ## 每项任务必须输出
 id、name、description、category、estimated_hours、required_skills、dependencies、
 execution_stage（实践前/实践中/实践后/自定义）、custom_stage、start_date、end_date、order。
+同时输出 suggested_people（建议参与人数，通常 1；摄影、现场执行、联调等可为 2-4）。
 日期不确定可为 null；工时必须大于 0。对不确定内容写入 reasoning，提出 assumptions/questions。
 严禁输出负责人或直接完成分工。
 

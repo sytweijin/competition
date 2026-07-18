@@ -17,13 +17,12 @@ from typing import Optional, TypeVar
 from openai import OpenAI
 from pydantic import BaseModel, ValidationError
 
-from app.config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, LLM_MAX_RETRIES
+from app.config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, LLM_MAX_RETRIES, LLM_TIMEOUT
 from app.models.schemas import AgentError
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
 
-LLM_TIMEOUT = 120  # 秒
 
 
 def _classify_error(e: Exception) -> str:
@@ -43,7 +42,7 @@ def _classify_error(e: Exception) -> str:
         return "rate_limit"
     if isinstance(e, _t("APIConnectionError")):
         return "timeout"
-    if isinstance(e, ValidationError):
+    if isinstance(e, (ValidationError, ValueError)):
         return "parse_error"
     if isinstance(e, _t("BadRequestError")):
         return "parse_error"
@@ -81,12 +80,15 @@ class LLMClient:
                               message="LLM_API_KEY 未配置，跳过 LLM 调用",
                               recoverable=False)
         retries = max(1, max_retries)
+        last_error_type = "unknown"
+        last_error: Exception | None = None
         for attempt in range(retries):
             try:
                 return self._try_structured(system_prompt, user_prompt,
                                             response_model, temperature)
             except Exception as e:
                 err_type = _classify_error(e)
+                last_error_type, last_error = err_type, e
                 logger.warning("LLM structured attempt %d/%d (%s): %s",
                                attempt + 1, retries, err_type, e)
                 if err_type == "auth_error":
@@ -96,6 +98,15 @@ class LLMClient:
                 if err_type == "parse_error":
                     break  # 结构化重试无意义，直接回退 plain create
                 # rate_limit / timeout / unknown：可重试，最后一次落到 fallback
+        # 网络超时或服务端错误时，重复走 plain 接口只会再等待一个完整超时。
+        # 直接返回错误，让上层立即使用确定性兜底。
+        if last_error_type in ("timeout", "rate_limit", "unknown"):
+            return AgentError(
+                agent="LLMClient",
+                error_type=last_error_type,
+                message=f"LLM 调用失败：{last_error}",
+                recoverable=True,
+            )
         try:
             logger.info("Falling back to plain create + validate")
             return self._try_plain_validate(

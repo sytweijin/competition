@@ -1642,3 +1642,137 @@ LLM 负责"创造性"：拆任务、分配角色、写报告
    ```
 4. **为什么这样改：** 文件解析是异步操作，必须先呈现明确的阶段切换和加载状态，并在异常时保留可编辑的错误信息。
 5. **收益：** 点击立即有响应；重复提交被禁用；分析失败后用户仍可手动填写要求继续操作。
+
+#### 7. 手动调整、对话和等待时间优化
+
+1. **问题：** 步骤条只是静态展示；聊天无等待状态；确认分工会再次串行调用多个模型。
+2. **修改前：**
+   ```javascript
+   steps.innerHTML = '<div>手动调整</div>'
+   ```
+3. **修改后：**
+   ```javascript
+   steps.innerHTML = '<button data-step="3">手动调整</button>'
+   ```
+4. **为什么这样改：** 导航必须绑定到已有草案/方案状态；技能匹配与负载均衡已有确定性算法，无需在确认阶段重复等待模型。
+5. **收益：** 手动调整可点击返回；文件分析在后台完成；聊天最长等待 20 秒；模型默认超时由 120 秒降至可配置的 35 秒；确认分工由分钟级降至秒级。
+
+#### 8. 本地首页被外部样式 CDN 阻塞
+
+1. **问题：** Tailwind CDN 在网络较慢或不可达时同步阻塞 HTML 解析，本地页面也会长时间白屏。
+2. **修改前：**
+   ```html
+   <script src="https://cdn.tailwindcss.com"></script>
+   ```
+3. **修改后：**
+   ```html
+   <script async src="https://cdn.tailwindcss.com"></script>
+   ```
+4. **为什么这样改：** 外部装饰性资源不应阻塞本地应用首屏；关键布局样式改由本地 `style.css` 提供。
+5. **收益：** 断网也能立即打开；CDN 失败不影响操作；页面保留本地响应式布局。
+## v4.1 —— 恢复工作台视觉与共享业务服务（2026-07-18）
+
+**定位：** 恢复成熟的左右工作台布局，并让网页与未来清小搭适配层共享同一套项目业务逻辑。
+
+---
+
+### 关键缺陷（P0）
+
+#### 1. 核心任务修改只存在于页面脚本
+
+1. **问题：** 拆分、合并、排序和负责人调整由页面直接改 JSON，未来自然语言入口无法复用。
+2. **修改前：**
+   ```javascript
+   state.draft.tasks.splice(index, 1)
+   task.assignee_id = owner
+   ```
+3. **修改后：**
+   ```python
+   mutate_draft(plan, operations)
+   apply_manual_assignment(request)
+   ```
+4. **为什么这样改：** 界面行为不是业务规则的可靠载体；将规则下沉到无 FastAPI 依赖的服务层后，Web、CLI 和未来 OpenAI 兼容适配层均可调用。
+5. **收益：** 任务操作统一校验；自然语言入口可复用；前后端规则不再漂移。
+
+### 健壮性提升（P1）
+
+#### 2. 工作量统计由页面重复实现
+
+1. **问题：** 页面自行统计工时和失衡提示，后续其他入口容易产生不同结果。
+2. **修改前：**
+   ```javascript
+   work[owner] += task.estimated_hours
+   ```
+3. **修改后：**
+   ```python
+   snapshot = workload_snapshot(full_plan)
+   ```
+4. **为什么这样改：** 工时占比、阶段负载和提示属于领域逻辑，应由服务端统一计算。
+5. **收益：** 拖拽后统计可信；网页和未来清小搭回复一致；规则可独立测试。
+
+### 体验优化（P2）
+
+#### 3. 多个全屏步骤破坏原工作台结构
+
+1. **问题：** 新页面丢失原版左侧配置、右侧结果区的成熟操作习惯，视觉也过于简陋。
+2. **修改前：**
+   ```html
+   <section id="page-info" class="page">...</section>
+   <section id="page-draft" class="page hidden">...</section>
+   ```
+3. **修改后：**
+   ```html
+   <main class="workbench">
+     <aside class="config-panel">...</aside>
+     <section class="workspace-panel">...</section>
+   </main>
+   ```
+4. **为什么这样改：** 项目配置需要持续可见，任务拆解、分工和结果应在同一工作区渐进呈现。
+5. **收益：** 恢复原版视觉语言；功能位置稳定；桌面和移动端均可使用。
+
+#### 4. 外部 CDN 影响打开速度
+
+1. **问题：** 运行时 Tailwind CDN 在网络不可达时造成页面白屏或样式延迟。
+2. **修改前：**
+   ```html
+   <script src="https://cdn.tailwindcss.com"></script>
+   ```
+3. **修改后：**
+   ```html
+   <link rel="stylesheet" href="/static/style.css">
+   ```
+4. **为什么这样改：** 核心工作台不应依赖外部网络资源。
+5. **收益：** 页面离线可用；本地首屏稳定；实际首页返回 200。
+
+#### 5. 新 HTML 与旧 CSS 缓存导致历史弹窗自动显示
+
+1. **问题：** 浏览器保留旧样式时，新页面的 `hidden` 类失效，历史方案遮罩会在首页自动出现。
+2. **修改前：**
+   ```html
+   <link rel="stylesheet" href="/static/style.css">
+   ```
+3. **修改后：**
+   ```html
+   <style>.hidden{display:none!important}</style>
+   <link rel="stylesheet" href="/static/style.css?v=4.1.1">
+   ```
+4. **为什么这样改：** HTML 与 CSS 的缓存版本不同步；关键隐藏规则必须随 HTML 一起生效，并通过资源版本号淘汰旧缓存。
+5. **收益：** 首页不再误显示历史弹窗；样式升级立即生效；后续缓存切换更稳定。
+
+### 性能优化（P1）
+
+#### 6. 文件分析和任务拆解串行调用两次大模型
+
+1. **问题：** 上传文件后先等待要求分析模型，再等待 Planner，超时和重试可能累计超过一分钟。
+2. **修改前：**
+   ```python
+   analysis = LLMClient().chat_structured(...)
+   plan = generate_draft(input)
+   ```
+3. **修改后：**
+   ```python
+   analysis = analyze_locally(extracted_text)
+   plan = generate_draft(input)  # 全流程唯一一次 LLM
+   ```
+4. **为什么这样改：** 文件阶段主要是事实提取和文本压缩，可用确定性规则快速完成；创造性的专业拆解才需要模型。
+5. **收益：** 普通文件分析通常在数秒内完成；模型默认最长等待 25 秒；超时后立即进入确定性兜底。

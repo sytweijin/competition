@@ -12,7 +12,33 @@
 - 只有点击“确认拆解并开始分工”后才会执行人员分配。
 - 分工看板支持跨成员拖拽，实时显示任务数、总工时、阶段集中和不均衡提示。
 - 上传支持 PDF、DOCX、TXT、Markdown、XLSX、PPTX，单文件上限 15MB；扫描版 PDF 和图片 OCR 暂未支持。
+- 文件阶段使用本地文本提取与规则归类，不单独调用大模型；整个首步只在任务拆解时调用一次模型。
 - 右下角“聊”按钮可围绕当前方案实时询问调整建议。
+
+## v4.1 工作台与核心服务分层
+
+前端恢复为成熟的“左侧项目配置 + 右侧结果工作区”结构。文件要求在后台分析，
+右侧依次承载任务拆解编辑、分工看板和最终结果 Tabs，不再切换多个全屏页面。
+
+核心业务已下沉到 `app/services/project_service.py`：
+
+- `generate_draft`：生成任务草案；
+- `mutate_draft`：统一处理新增、修改、删除、拆分、合并和排序；
+- `confirm_draft`：校验草案并开始自动分工；
+- `apply_manual_assignment`：保存负责人和协作者调整并重算排期；
+- `workload_snapshot`：生成统一工作量统计与建议。
+
+Web 页面仅负责展示和把用户操作转换成结构化业务指令。未来接入清小搭时，
+OpenAI 兼容适配层可把自然语言转换为同一组 `DraftOperation` 或分工请求，
+与当前网页共享 Agent 核心逻辑，不需要复制业务规则。
+
+规划中的分层边界：
+
+```text
+网页工作台 ─┐
+            ├─> Project Service ─> Planner / Scoring / Timeline / State
+清小搭适配层 ┘          （未来实现 /v1/models 与 /v1/chat/completions）
+```
 
 ## v2.0 更新亮点（2026-07-16 深度审查修复）
 
@@ -226,6 +252,8 @@ competition/
 | POST | `/api/draft` | 仅生成任务拆解草案，不分工 |
 | POST | `/api/confirm-draft` | 确认草案后自动分工 |
 | POST | `/api/manual-assignment` | 保存手动拖拽后的负责人和协作者 |
+| POST | `/api/draft/mutate` | 结构化修改任务草案（网页与未来 Agent 共用） |
+| POST | `/api/workload` | 统一计算成员负载、占比和分工建议 |
 | POST | `/api/chat` | 基于当前方案实时问答 |
 | POST | `/api/edit` | B4：应用编辑并重算 |
 | POST | `/api/interview` | B1：AI 答辩模拟（v0.3 新增） |
