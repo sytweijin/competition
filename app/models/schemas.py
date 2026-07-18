@@ -208,6 +208,7 @@ class FullPlan(BaseModel):
 
 class DraftRequest(BaseModel):
     input: AssignmentInput
+    use_ai: bool = Field(default=True, description="是否调用 LLM；false 时使用快速领域化草案")
 
 
 class DraftResponse(BaseModel):

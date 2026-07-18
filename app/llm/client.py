@@ -17,7 +17,10 @@ from typing import Optional, TypeVar
 from openai import OpenAI
 from pydantic import BaseModel, ValidationError
 
-from app.config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, LLM_MAX_RETRIES, LLM_TIMEOUT
+from app.config import (
+    LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, LLM_MAX_RETRIES, LLM_TIMEOUT,
+    LLM_PREFER_PLAIN,
+)
 from app.models.schemas import AgentError
 
 logger = logging.getLogger(__name__)
@@ -60,7 +63,12 @@ class LLMClient:
     def __init__(self, model: Optional[str] = None):
         self.model = model or LLM_MODEL
         self._enabled = bool(LLM_API_KEY)
-        self._client = OpenAI(api_key=LLM_API_KEY, base_url=LLM_BASE_URL)
+        self._prefer_plain = LLM_PREFER_PLAIN
+        # 禁用 SDK 隐式重试；否则应用层 12s 超时会被默认 2 次重试放大到 30s+。
+        self._client = OpenAI(
+            api_key=LLM_API_KEY, base_url=LLM_BASE_URL,
+            max_retries=0,
+        )
 
     def chat_structured(
         self,
@@ -79,6 +87,14 @@ class LLMClient:
             return AgentError(agent="LLMClient", error_type="auth_error",
                               message="LLM_API_KEY 未配置，跳过 LLM 调用",
                               recoverable=False)
+        if self._prefer_plain:
+            try:
+                return self._try_plain_validate(
+                    system_prompt, user_prompt, response_model, temperature)
+            except Exception as exc:
+                return AgentError(
+                    agent="LLMClient", error_type=_classify_error(exc),
+                    message=f"LLM JSON 调用失败：{exc}", recoverable=True)
         retries = max(1, max_retries)
         last_error_type = "unknown"
         last_error: Exception | None = None
@@ -157,6 +173,7 @@ class LLMClient:
                 {"role": "user", "content": user_prompt},
             ],
             temperature=temperature,
+            max_tokens=3000,
             timeout=LLM_TIMEOUT,
         )
         raw = resp.choices[0].message.content or ""

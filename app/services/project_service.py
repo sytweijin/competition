@@ -20,8 +20,10 @@ class ProjectServiceError(ValueError):
     pass
 
 
-def generate_draft(inp: AssignmentInput) -> PlanOutput:
-    return Coordinator().draft(inp)
+def generate_draft(inp: AssignmentInput, use_ai: bool = True) -> PlanOutput:
+    if use_ai:
+        return Coordinator().draft(inp)
+    return Coordinator._fallback_plan(inp, "快速模式")
 
 
 def mutate_draft(plan: PlanOutput, operations: list[DraftOperation]) -> PlanOutput:

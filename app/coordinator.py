@@ -135,12 +135,16 @@ class Coordinator:
             f"每日可用: {m.daily_available_hours}h)"
             for m in inp.members
         ]
+        extracted = inp.requirement_analysis.get("summary", "") if inp.requirement_analysis else ""
+        extra = "\n".join(
+            item for item in (inp.additional_requirements, inp.requirements, extracted)
+            if item and item.strip())
         return self.planner.run(
             course_name=inp.course.name,
             course_description=inp.course.description,
             members=members,
             deadline=inp.deadline.isoformat(),
-            extra=inp.additional_requirements,
+            extra=extra,
         )
 
     def _step_matcher(self, plan: PlanOutput,
@@ -224,7 +228,7 @@ class Coordinator:
 
         # 根据已提取的要求和常见交付流程生成领域化兜底，不再只返回通用 5 阶段。
         specs = _domain_fallback_specs(text, inp.requirement_analysis)
-        if specs:
+        if len(specs) > 2:
             tasks = []
             for i, spec in enumerate(specs):
                 deps = [f"T{i}"] if i > 0 and spec[4] != "实践中" else []
@@ -236,8 +240,10 @@ class Coordinator:
                     dependencies=deps, suggested_people=spec[5], order=i+1))
             return PlanOutput(
                 tasks=tasks,
-                summary="模型暂时不可用，已根据项目背景、交付物和专业流程生成可编辑的领域化草案。",
-                reasoning="本地兜底按动作、专业能力、执行阶段和交付物拆解；请在确认前调整工时、日期和人数。")
+                summary=("已根据项目背景、交付物和专业流程生成可编辑的快速草案。"
+                         if error_msg == "快速模式" else
+                         "模型暂时不可用，已根据项目背景、交付物和专业流程生成可编辑的领域化草案。"),
+                reasoning="本地规则按动作、专业能力、执行阶段和交付物拆解；请在确认前调整工时、日期和人数。")
 
         # 团队总产能（默认 3 人 × 20h = 60h 作为基准）
         total_capacity = sum(m.available_hours for m in inp.members) or 60.0

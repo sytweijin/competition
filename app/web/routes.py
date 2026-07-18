@@ -55,7 +55,7 @@ async def analyze_files(files: list[UploadFile] = File(...), background: str = F
 @router.post("/draft", response_model=DraftResponse)
 async def create_draft(req: DraftRequest):
     """只生成可编辑任务草案，不分工。"""
-    plan = generate_draft(req.input)
+    plan = generate_draft(req.input, use_ai=req.use_ai)
     return DraftResponse(input=req.input, plan=plan)
 
 

@@ -36,6 +36,7 @@ def _make_client(parse_fn=None, create_fn=None):
 
 def _client_with(parse_fn=None, create_fn=None):
     c = LLMClient()
+    c._prefer_plain = False
     c._client = _make_client(parse_fn, create_fn)
     return c
 
