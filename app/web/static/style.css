@@ -169,6 +169,21 @@ input::placeholder, textarea::placeholder { color: var(--text-3); }
 
 textarea { resize: vertical; min-height: 48px; }
 
+.field {
+  width: 100%;
+  margin-top: 0.3rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: #fff;
+  color: var(--text);
+}
+.field:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-glow); }
+.board-col { transition: background .15s, border-color .15s; }
+.board-col:hover { border-color: var(--primary); background: var(--primary-soft); }
+.drag-card { transition: transform .15s, box-shadow .15s; }
+.drag-card:hover { transform: translateY(-1px); box-shadow: var(--shadow-md); }
+
 /* ──── Member rows ──── */
 .member-list { display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 0.5rem; }
 

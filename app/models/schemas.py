@@ -13,7 +13,7 @@ from datetime import date, datetime
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 # ──────────── 枚举 / 常量 ────────────
@@ -47,6 +47,7 @@ class TeamMember(BaseModel):
         default=4.0,
         description="每人每天可用工时（小时），用于时间线折算。现实中不同成员可用时间不同。",
     )
+    available_stages: list[str] = Field(default_factory=list)
     @field_validator('available_hours', 'daily_available_hours')
     @classmethod
     def _clamp_hours(cls, v: float) -> float:
@@ -60,6 +61,12 @@ class AssignmentInput(BaseModel):
     members: list[TeamMember]
     deadline: date = Field(description="作业截止日期")
     additional_requirements: str = ""
+    background: str = ""
+    requirements: str = ""
+    default_start_date: Optional[date] = None
+    default_end_date: Optional[date] = None
+    uploaded_files: list[dict] = Field(default_factory=list)
+    requirement_analysis: dict = Field(default_factory=dict)
 
     @field_validator("members")
     @classmethod
@@ -87,8 +94,31 @@ class SubTask(BaseModel):
     dependencies: list[str] = Field(default_factory=list,
                                     description="依赖的其他任务 ID 列表")
     required_skills: list[str] = Field(default_factory=list)
+    category: str = "其他"
+    execution_stage: str = "实践中"
+    custom_stage: Optional[str] = None
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    assignee_id: Optional[str] = None
+    collaborator_ids: list[str] = Field(default_factory=list)
+    order: int = 0
     status: TaskStatus = Field(default=TaskStatus.pending,
                                description="Task execution status")
+
+    @field_validator("estimated_hours")
+    @classmethod
+    def _positive_hours(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("预计工时必须大于 0")
+        return round(float(value), 2)
+
+    @model_validator(mode="after")
+    def _valid_dates(self):
+        if self.start_date and self.end_date and self.end_date < self.start_date:
+            raise ValueError("截止日期不能早于开始日期")
+        if self.execution_stage == "自定义" and not (self.custom_stage or "").strip():
+            raise ValueError("自定义执行阶段必须填写名称")
+        return self
 
 
 class PlanOutput(BaseModel):
@@ -172,6 +202,40 @@ class FullPlan(BaseModel):
     qa_matrix: QAOutput
     report: ReportOutput
     version: str = "3.0"
+
+
+class DraftRequest(BaseModel):
+    input: AssignmentInput
+
+
+class DraftResponse(BaseModel):
+    input: AssignmentInput
+    plan: PlanOutput
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ConfirmDraftRequest(BaseModel):
+    input: AssignmentInput
+    plan: PlanOutput
+
+
+class ManualAssignmentRequest(BaseModel):
+    plan: FullPlan
+    assignees: dict[str, str] = Field(default_factory=dict)
+    collaborators: dict[str, list[str]] = Field(default_factory=dict)
+
+
+class RequirementAnalysis(BaseModel):
+    project_goal: str = ""
+    core_tasks: list[str] = Field(default_factory=list)
+    deliverables: list[str] = Field(default_factory=list)
+    time_requirements: list[str] = Field(default_factory=list)
+    format_requirements: list[str] = Field(default_factory=list)
+    constraints: list[str] = Field(default_factory=list)
+    evaluation_criteria: list[str] = Field(default_factory=list)
+    important_people: list[str] = Field(default_factory=list)
+    questions: list[str] = Field(default_factory=list)
+    summary: str = ""
 
 
 # ──────────── B4：协作图动态编辑 ────────────

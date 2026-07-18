@@ -77,6 +77,45 @@ class Coordinator:
             report=report,
         )
 
+    def draft(self, inp: AssignmentInput) -> PlanOutput:
+        """仅生成任务拆解，严格不触发 Matcher/Timeline/Reporter。"""
+        plan = self._step_planner(inp)
+        if isinstance(plan, AgentError):
+            plan = self._fallback_plan(inp, plan.message)
+        start = inp.default_start_date
+        end = inp.default_end_date or inp.deadline
+        tasks = []
+        for index, task in enumerate(plan.tasks, 1):
+            stage = task.execution_stage or "实践中"
+            tasks.append(task.model_copy(update={
+                "order": task.order or index,
+                "start_date": task.start_date or start,
+                "end_date": task.end_date or end,
+                "execution_stage": stage,
+                "assignee_id": None,
+                "collaborator_ids": [],
+            }))
+        return plan.model_copy(update={"tasks": tasks})
+
+    def confirm(self, inp: AssignmentInput, plan: PlanOutput) -> FullPlan:
+        """用户确认任务草案后，才执行自动分工、排期与报告。"""
+        qa_matrix = self._step_matcher(plan, inp.members)
+        timeline = self._step_timeline(plan, inp.deadline.isoformat(), qa_matrix, inp.members)
+        if isinstance(timeline, AgentError):
+            timeline = TimelineOutput(tasks=[], critical_path=[], total_days=0, note=timeline.message)
+        report = self._step_reporter(plan, timeline, qa_matrix)
+        if isinstance(report, AgentError):
+            report = ReportOutput(summary="报告生成失败", risk_note=report.message)
+        by_task = {a.task_id: a for a in qa_matrix.assignments}
+        assigned_tasks = [
+            t.model_copy(update={
+                "assignee_id": by_task[t.id].presenter if t.id in by_task else None,
+                "collaborator_ids": ([by_task[t.id].qa_primary] if t.id in by_task and by_task[t.id].qa_primary else [])
+            }) for t in plan.tasks
+        ]
+        return FullPlan(input=inp, plan=plan.model_copy(update={"tasks": assigned_tasks}),
+                        timeline=timeline, qa_matrix=qa_matrix, report=report)
+
     # ──────────── 各步骤 ────────────
 
     def _step_planner(self, inp: AssignmentInput) -> PlanOutput | AgentError:
@@ -139,6 +178,40 @@ class Coordinator:
         按 5 个标准阶段生成通用任务，根据团队总产能等比缩放工时，
         确保下游链路不中断。
         """
+        text = f"{inp.course.description} {inp.background} {inp.requirements} {inp.additional_requirements}"
+        if "秀米" in text or ("推送" in text and ("实践" in text or "公众号" in text)):
+            specs = [
+                ("确定推送主题和内容框架", "策划", 3, ["内容策划"], "实践前"),
+                ("制定摄影和素材收集要求", "摄影", 2, ["摄影策划"], "实践前"),
+                ("实践过程摄影", "摄影", 6, ["摄影"], "实践中"),
+                ("活动记录与资料整理", "资料", 4, ["资料整理"], "实践中"),
+                ("收集成员感想", "采访", 3, ["采访沟通"], "实践中"),
+                ("推送文案撰写", "文案", 6, ["文案撰写"], "实践后"),
+                ("图片筛选与处理", "设计", 4, ["图片处理"], "实践后"),
+                ("秀米排版", "排版", 5, ["秀米排版"], "实践后"),
+                ("内容审核与修改", "审核", 3, ["内容审核"], "实践后"),
+                ("推送发布与数据反馈", "发布", 2, ["平台发布", "数据分析"], "实践后"),
+            ]
+            tasks = []
+            for i, (name, category, hours, skills, stage) in enumerate(specs):
+                deps = []
+                if i == 5:
+                    deps = ["T4", "T5"]
+                elif i == 6:
+                    deps = ["T3"]
+                elif i == 7:
+                    deps = ["T6", "T7"]
+                elif i > 7:
+                    deps = [f"T{i}"]
+                tasks.append(SubTask(
+                    id=f"T{i+1}", name=name, description=f"完成{name}并形成可验收成果",
+                    category=category, estimated_hours=hours, required_skills=skills,
+                    execution_stage=stage, dependencies=deps, order=i+1))
+            return PlanOutput(
+                tasks=tasks,
+                summary="按内容、摄影、资料、排版、审核和发布等专业流程拆解的推送任务草案。",
+                reasoning="LLM 不可用时启用秀米推送专用兜底，仍不分配负责人。")
+
         # 团队总产能（默认 3 人 × 20h = 60h 作为基准）
         total_capacity = sum(m.available_hours for m in inp.members) or 60.0
         scale = max(0.5, min(2.0, total_capacity / 60.0))

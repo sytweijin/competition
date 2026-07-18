@@ -84,6 +84,14 @@ PRESENTER_RATIO = 1.0
 QA_PRIMARY_RATIO = 0.3
 QA_SUPPORT_RATIO = 0.15
 
+# 集中定义，便于后续调参。最终分数越高越优。
+ASSIGNMENT_WEIGHTS = {
+    "skill": 0.55,
+    "total_load": 0.20,
+    "stage_load": 0.15,
+    "capacity": 0.10,
+}
+
 
 def skill_score(member: TeamMember, required_skills: list[str]) -> float:
     """成员对所需技能的匹配分（0-1）。
@@ -241,6 +249,7 @@ def assign_with_balance(plan: PlanOutput,
     task_hours = {t.id: t.estimated_hours for t in active_tasks}
 
     work = {m.name: 0.0 for m in members}
+    stage_work = {m.name: {} for m in members}
     assignments = []
 
     for t in plan.tasks:
@@ -251,14 +260,28 @@ def assign_with_balance(plan: PlanOutput,
                 score=0.0, reasoning="任务已完成",
             ))
             continue
-        # 按匹配度降序，同分时负载轻者优先
-        scored = [(m.name, skill_score(m, t.required_skills)) for m in members]
-        scored.sort(key=lambda x: (-x[1], work[x[0]]))  # 取匹配度最高且负载最轻者
+        # 可解释评分：技能 + 总负载 + 同阶段负载 + 剩余产能。
+        scored = []
+        for m in members:
+            skill = skill_score(m, t.required_skills)
+            total_ratio = work[m.name] / max(m.available_hours, 0.5)
+            stage_ratio = stage_work[m.name].get(t.execution_stage, 0.0) / max(m.available_hours, 0.5)
+            capacity = max(0.0, 1.0 - (work[m.name] + t.estimated_hours) / max(m.available_hours, 0.5))
+            score = (ASSIGNMENT_WEIGHTS["skill"] * skill
+                     - ASSIGNMENT_WEIGHTS["total_load"] * total_ratio
+                     - ASSIGNMENT_WEIGHTS["stage_load"] * stage_ratio
+                     + ASSIGNMENT_WEIGHTS["capacity"] * capacity)
+            if m.available_stages and t.execution_stage not in m.available_stages:
+                score -= 0.35
+            scored.append((m.name, skill, score))
+        scored.sort(key=lambda x: (-x[2], work[x[0]]))
         presenter = scored[0][0]
         work[presenter] += t.estimated_hours
+        stage_work[presenter][t.execution_stage] = (
+            stage_work[presenter].get(t.execution_stage, 0.0) + t.estimated_hours)
 
         # 主答：剩余成员中「负载最轻」者优先（匹配度作同负载时的次序）
-        rest = [(n, sc) for n, sc in scored if n != presenter]
+        rest = [(n, skill) for n, skill, _ in scored if n != presenter]
         rest.sort(key=lambda x: (work[x[0]], -x[1]))
         primary = rest[0][0] if rest else ""
         if primary and primary != presenter:
@@ -273,8 +296,9 @@ def assign_with_balance(plan: PlanOutput,
 
         best_skill = scored[0][1]
         reasoning = (
-            f"{presenter}：{_fmt(t.required_skills)} 技能"
-            f"匹配度 {best_skill:.2f}，综合最优"
+            f"{presenter} 的 {_fmt(t.required_skills)} 技能匹配度 {best_skill:.2f}；"
+            f"分配前总负载 {work[presenter]-t.estimated_hours:.1f}h，"
+            f"{t.execution_stage}阶段负载较低，综合评分最高"
         )
         assignments.append(QAAssignment(
             task_id=t.id, task_name=t.name, chapter="",
@@ -295,8 +319,8 @@ def assign_with_balance(plan: PlanOutput,
             target.qa_support.append(n)
             work[n] += task_hours.get(target.task_id, 0.0) * QA_SUPPORT_RATIO
 
-    # 负载均衡：主讲/主答/辅答统一搬运，目标 max-min<=1h
-    work = _balance_workload(assignments, task_hours, members, threshold=1.0)
+    # 保留专业匹配结果，不做会破坏技能匹配的强制 1h 拉平。
+    work = _work_from(assignments, task_hours, members)
 
 
     # overload detection

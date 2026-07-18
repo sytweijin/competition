@@ -8,7 +8,7 @@ import re
 from datetime import date, datetime
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
@@ -18,10 +18,103 @@ from app.editor import EditError, edit_plan
 from app.agents.interview_sim import InterviewSimAgent
 from app.models.schemas import (
     AssignmentInput, CourseInfo, EditPlanRequest, FullPlan, PlanOutput, QAOutput, TeamMember,
+    DraftRequest, DraftResponse, ConfirmDraftRequest, ManualAssignmentRequest,
+    RequirementAnalysis, QAAssignment,
 )
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+@router.post("/analyze-files")
+async def analyze_files(files: list[UploadFile] = File(...), background: str = Form("")):
+    """提取文件文字后汇总分析；仅记录文件元数据，不落盘、不输出原文日志。"""
+    from app.file_analysis import extract_text, fallback_analysis
+    from app.llm.client import LLMClient
+    texts, metadata, errors = [], [], []
+    for upload in files[:8]:
+        raw = await upload.read()
+        try:
+            text = extract_text(upload.filename or "upload", raw)
+            texts.append(text)
+            metadata.append({"name": upload.filename, "size": len(raw), "status": "ok"})
+        except ValueError as exc:
+            errors.append({"name": upload.filename, "error": str(exc)})
+    if not texts:
+        raise HTTPException(status_code=400, detail=errors[0]["error"] if errors else "没有可分析文件")
+    merged = (background + "\n" + "\n".join(texts))[:60000]
+    prompt = """请分析以下项目材料，提炼目标、核心任务、交付物、时间要求、格式要求、
+限制条件、评价标准、重要人员及待确认问题。不要复述原文，输出严格结构化结果。\n""" + merged
+    result = LLMClient().chat_structured(
+        "你是项目要求分析助手，只做信息提炼，不编造。", prompt, RequirementAnalysis, 0.1)
+    if hasattr(result, "error_type"):
+        analysis = fallback_analysis(merged)
+    else:
+        analysis = result.model_dump()
+    return {"files": metadata, "errors": errors, "analysis": analysis}
+
+
+@router.post("/draft", response_model=DraftResponse)
+async def create_draft(req: DraftRequest):
+    """只生成可编辑任务草案，不分工。"""
+    plan = Coordinator().draft(req.input)
+    return DraftResponse(input=req.input, plan=plan)
+
+
+@router.post("/confirm-draft", response_model=FullPlan)
+async def confirm_draft(req: ConfirmDraftRequest):
+    """确认拆解后才自动分工。"""
+    return Coordinator().confirm(req.input, req.plan)
+
+
+@router.post("/manual-assignment", response_model=FullPlan)
+async def manual_assignment(req: ManualAssignmentRequest):
+    """保存用户拖拽后的负责人/协作者并重算排期与报告。"""
+    from app.agents.scoring import skill_score, _work_from
+    from app.agents.timeline import TimelineAgent
+    from app.agents.reporter import ReporterAgent
+    member_map = {m.name: m for m in req.plan.input.members}
+    assignments, updated_tasks = [], []
+    for task in req.plan.plan.tasks:
+        owner = req.assignees.get(task.id, task.assignee_id or "")
+        if owner and owner not in member_map:
+            raise HTTPException(status_code=400, detail=f"未知负责人：{owner}")
+        collaborators = [n for n in req.collaborators.get(task.id, task.collaborator_ids)
+                         if n in member_map and n != owner]
+        score = skill_score(member_map[owner], task.required_skills) if owner else 0.0
+        assignments.append(QAAssignment(
+            task_id=task.id, task_name=task.name, presenter=owner,
+            qa_primary=collaborators[0] if collaborators else "",
+            qa_support=collaborators[1:], score=score,
+            reasoning="用户手动调整并确认" if owner else "尚未设置负责人"))
+        updated_tasks.append(task.model_copy(update={
+            "assignee_id": owner or None, "collaborator_ids": collaborators}))
+    hours = {t.id: t.estimated_hours for t in updated_tasks}
+    workload = _work_from(assignments, hours, req.plan.input.members)
+    qa = QAOutput(assignments=assignments, workload=workload, note="用户确认的手动分工")
+    mapping = {a.task_id: [a.presenter] + ([a.qa_primary] if a.qa_primary else []) for a in assignments}
+    plan = req.plan.plan.model_copy(update={"tasks": updated_tasks})
+    timeline = TimelineAgent().run(plan, req.plan.input.deadline.isoformat(), mapping, req.plan.input.members)
+    report = ReporterAgent().run(plan, timeline, qa)
+    return FullPlan(input=req.plan.input, plan=plan, timeline=timeline, qa_matrix=qa,
+                    report=report, version=req.plan.version)
+
+
+class ChatRequest(BaseModel):
+    message: str
+    plan: FullPlan | None = None
+
+
+@router.post("/chat")
+async def project_chat(req: ChatRequest):
+    from app.llm.client import LLMClient
+    context = req.plan.model_dump_json()[:18000] if req.plan else "尚未生成方案"
+    result = LLMClient().chat_text(
+        "你是项目协作助手。基于当前方案简洁回答，可指出冲突并给出调整建议。",
+        f"当前方案：{context}\n用户：{req.message}", 0.2)
+    if hasattr(result, "error_type"):
+        return {"reply": "当前 AI 服务不可用。你仍可继续编辑任务和拖拽分工。"}
+    return {"reply": result}
 
 
 def _safe_filepath(filename: str) -> Path:
