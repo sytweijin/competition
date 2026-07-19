@@ -97,6 +97,34 @@ def test_parse_error_skips_structured_retry():
     assert calls["create"] == 1, "应回退到 plain create 一次"
 
 
+def test_plain_response_locally_repairs_plan_fields_and_constraint_task():
+    """AI JSON 可读但字段不规范时，本地修复而不是整份退回规则草案。"""
+    raw = """{
+      "task_list": [
+        {
+          "title": "实现文件加密功能（制作命令行界面即可，不要求使用图形界面）",
+          "hours": "4小时",
+          "skills": "Python, 密码学"
+        },
+        {
+          "title": "制作界面即可，不要求使用图形界面）",
+          "hours": 1
+        }
+      ]
+    }"""
+    client = _client_with(create_fn=lambda **kw: _resp(content=raw))
+    client._prefer_plain = True
+    out = client.chat_structured("sys", "usr", PlanOutput)
+    assert isinstance(out, PlanOutput)
+    assert len(out.tasks) == 1
+    task = out.tasks[0]
+    assert task.name == "实现文件加密功能"
+    assert task.estimated_hours == 4
+    assert task.required_skills == ["Python", "密码学"]
+    assert "不要求使用图形界面" in task.description
+    assert "）" not in task.name
+
+
 # ──────────── P2-11: _classify_error 按异常类型分类 ────────────
 
 def test_classify_error_basic_types():

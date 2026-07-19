@@ -13,6 +13,7 @@ v0.3 改进：
 from __future__ import annotations
 
 import logging
+import re
 
 from app.models.schemas import (
     AgentError, AssignmentInput, FullPlan, PlanOutput,
@@ -25,6 +26,7 @@ from app.agents.scoring import assign_with_balance, enhance
 from app.agents.timeline import TimelineAgent
 from app.agents.reporter import ReporterAgent
 from app.agents.reflection import ReflectionAgent
+from app.file_analysis import _classify_requirement_unit, _strip_dangling_brackets
 
 logger = logging.getLogger(__name__)
 
@@ -142,7 +144,8 @@ class Coordinator:
             f"每日可用: {m.daily_available_hours}h)"
             for m in inp.members
         ]
-        extracted = inp.requirement_analysis.get("summary", "") if inp.requirement_analysis else ""
+        extracted = _format_requirement_analysis(
+            inp.requirement_analysis, inp.uploaded_files)
         extra = "\n".join(
             item for item in (inp.additional_requirements, inp.requirements, extracted)
             if item and item.strip())
@@ -214,8 +217,21 @@ class Coordinator:
         按 5 个标准阶段生成通用任务，根据团队总产能等比缩放工时，
         确保下游链路不中断。
         """
-        text = f"{inp.course.description} {inp.background} {inp.requirements} {inp.additional_requirements}"
-        if "秀米" in text or ("推送" in text and ("实践" in text or "公众号" in text)):
+        analysis_text = " ".join(
+            str(value)
+            for key, raw in (inp.requirement_analysis or {}).items()
+            for value in ([raw] if isinstance(raw, str) else (raw or []))
+            if key != "questions" and str(value).strip())
+        text = (
+            f"{inp.course.description} {inp.background} {inp.requirements} "
+            f"{inp.additional_requirements} {analysis_text}")
+        blueprint_plan = _fallback_blueprint_plan(inp, error_msg)
+        if blueprint_plan is not None:
+            return blueprint_plan
+        if (not _specific_requirement_items(inp.requirement_analysis)
+                and ("秀米" in text
+                     or ("推送" in text
+                         and ("实践" in text or "公众号" in text)))):
             specs = [
                 ("确定推送主题和内容框架", "策划", 3, ["内容策划"], "实践前"),
                 ("制定摄影和素材收集要求", "摄影", 2, ["摄影策划"], "实践前"),
@@ -250,14 +266,16 @@ class Coordinator:
                 reasoning="LLM 不可用时启用秀米推送专用兜底，仍不分配负责人。")
 
         # 根据已提取的要求和常见交付流程生成领域化兜底，不再只返回通用 5 阶段。
-        specs = _domain_fallback_specs(text, inp.requirement_analysis)
+        specs = _domain_fallback_specs(
+            text, inp.requirement_analysis, inp.course.name)
         if len(specs) > 2:
             tasks = []
             for i, spec in enumerate(specs):
                 deps = [f"T{i}"] if i > 0 and spec[4] != "实践中" else []
                 tasks.append(SubTask(
                     id=f"T{i+1}", name=spec[0],
-                    description=f"完成{spec[0]}，形成可检查、可交付的成果",
+                    description=_fallback_description(
+                        spec[0], spec[1], spec[6], inp),
                     category=spec[1], estimated_hours=spec[2],
                     required_skills=spec[3], execution_stage=spec[4],
                     dependencies=deps, suggested_people=spec[5], order=i+1))
@@ -265,8 +283,13 @@ class Coordinator:
                 tasks=tasks,
                 summary=("已根据项目背景、交付物和专业流程生成可编辑的快速草案。"
                          if error_msg == "快速模式" else
-                         "模型暂时不可用，已根据项目背景、交付物和专业流程生成可编辑的领域化草案。"),
-                reasoning="本地规则按动作、专业能力、执行阶段和交付物拆解；请在确认前调整工时、日期和人数。")
+                         "AI 拆解本次未成功，系统已根据文件和项目要求生成可编辑草案。"),
+                reasoning=(
+                    "文件解析正常；本地规则按动作、专业能力、执行阶段和交付物拆解，"
+                    "未增加第二次模型等待。"
+                    if error_msg == "快速模式" else
+                    f"{_friendly_fallback_cause(error_msg)}；文件解析正常，"
+                    "系统已自动使用本地规则继续生成，未丢失上传文件。"))
 
         # 团队总产能（默认 3 人 × 20h = 60h 作为基准）
         total_capacity = sum(m.available_hours for m in inp.members) or 60.0
@@ -299,25 +322,47 @@ class Coordinator:
         )
 
 
-def _domain_fallback_specs(text: str, analysis: dict) -> list[tuple]:
-    """从项目文本生成 5-12 项专业化任务：(名称, 类别, 工时, 技能, 阶段, 人数)。"""
+def _domain_fallback_specs(
+        text: str, analysis: dict, project_name: str = "项目") -> list[tuple]:
+    """生成 5-12 项专业化任务。
+
+    每项为（名称、类别、工时、技能、阶段、人数、对应文件原文）。
+    本地快速模式直接复用文件提炼结果，不增加任何模型调用。
+    """
     lowered = text.lower()
     specs: list[tuple] = []
 
-    def add(name, category, hours, skills, stage, people=1):
+    def add(name, category, hours, skills, stage, people=1, source=""):
         if name not in {item[0] for item in specs}:
-            specs.append((name, category, hours, skills, stage, people))
+            specs.append((
+                name, category, hours, skills, stage, people, source))
 
     # 通用起始工作
     add("确认项目目标与交付标准", "策划", 2, ["需求分析", "沟通"], "实践前")
+
+    # 先落地文件中明确写出的动作/交付物，避免被通用行业模板淹没。
+    for item in _specific_requirement_items(analysis)[:6]:
+        name = _requirement_task_name(item)
+        if name:
+            add(name, _infer_category(name), _estimate_hours(name),
+                _infer_skills(name), _infer_stage(name),
+                _infer_people(name),
+                _requirement_source_with_constraints(item, analysis))
+
     if any(word in lowered for word in ("调研", "问卷", "访谈", "调查")):
         add("设计调研方案与问题清单", "调研", 3, ["调研设计"], "实践前")
         add("开展调研与资料采集", "调研", 6, ["访谈", "资料收集"], "实践中", 2)
         add("整理并分析调研数据", "分析", 5, ["数据分析"], "实践后")
     if any(word in lowered for word in ("活动", "实践", "现场", "志愿")):
-        add("制定现场执行与记录方案", "策划", 3, ["活动策划"], "实践前")
-        add("现场执行与过程协调", "执行", 6, ["组织协调"], "实践中", 3)
-        add("活动过程记录与资料归档", "记录", 4, ["资料整理"], "实践中", 2)
+        focus = _project_focus(project_name)
+        has_file_execution = any(
+            spec[4] == "实践中" and spec[6] for spec in specs)
+        add(f"制定{focus}现场任务清单", "策划", 3, ["活动策划"], "实践前")
+        if not has_file_execution:
+            add(f"开展{focus}现场任务", "执行", 6,
+                ["组织协调"], "实践中", 3)
+        add(f"整理{focus}过程证据", "记录", 4,
+            ["资料整理"], "实践中", 2)
     if any(word in lowered for word in ("摄影", "照片", "拍摄", "视频")):
         add("制定拍摄清单与素材规范", "摄影", 2, ["摄影策划"], "实践前")
         add("现场摄影与视频素材采集", "摄影", 6, ["摄影", "摄像"], "实践中", 2)
@@ -335,14 +380,257 @@ def _domain_fallback_specs(text: str, analysis: dict) -> list[tuple]:
         add("完成核心功能设计与实现", "开发", 10, ["技术开发"], "实践中", 2)
         add("功能测试、修复与联调", "测试", 6, ["测试", "调试"], "实践后", 2)
 
-    # 文件提取出的核心任务用于补充领域词汇，最多补 4 项。
-    for item in (analysis or {}).get("core_tasks", [])[:4]:
-        name = item[:36].strip()
-        if 4 <= len(name) <= 36:
-            add(name, "执行", _estimate_hours(name), _infer_skills(name), _infer_stage(name),
-                _infer_people(name))
     add("成果审核、修改与最终提交", "审核", 3, ["质量审核"], "实践后", 2)
     return specs[:12]
+
+
+def _fallback_blueprint_plan(
+        inp: AssignmentInput, error_msg: str) -> PlanOutput | None:
+    """把文件分析器给出的任务蓝图直接转为草案，不依赖 LLM。"""
+    blueprint = (inp.requirement_analysis or {}).get("task_blueprint", [])
+    if not blueprint:
+        return None
+
+    tasks: list[SubTask] = []
+    key_to_ids: dict[str, list[str]] = {}
+    for item in blueprint[:36]:
+        key = str(item.get("key", "")).strip()
+        people_value = item.get("suggested_people", 1)
+        members = inp.members if people_value == "all" else [None]
+        created_ids: list[str] = []
+        for member in members:
+            task_id = f"T{len(tasks) + 1}"
+            created_ids.append(task_id)
+            dependencies = [
+                dependency_id
+                for dependency_key in item.get("depends_on", [])
+                for dependency_id in key_to_ids.get(str(dependency_key), [])
+            ]
+            base_name = str(item.get("name", "文件要求任务")).strip()
+            name = (
+                f"{member.name}撰写个人总结报告"
+                if member is not None and key == "personal_reports"
+                else base_name)
+            level = str(item.get("requirement_level", "必须")).strip()
+            level_text = {
+                "必须": "课程硬性要求",
+                "建议": "手册建议项",
+                "鼓励": "手册鼓励项",
+            }.get(level, level)
+            description = str(item.get("description", "")).strip()
+            tasks.append(SubTask(
+                id=task_id,
+                name=name,
+                description=f"{level_text}：{description}",
+                category=str(item.get("category", "执行")),
+                estimated_hours=max(
+                    0.5, float(item.get("estimated_hours", 3))),
+                required_skills=[
+                    str(skill) for skill in item.get("required_skills", [])
+                ],
+                execution_stage=str(
+                    item.get("execution_stage", "实践中")),
+                dependencies=dependencies,
+                suggested_people=(
+                    1 if member is not None
+                    else max(1, min(10, int(people_value)))),
+                order=len(tasks) + 1,
+            ))
+        if key:
+            key_to_ids[key] = created_ids
+
+    if error_msg == "快速模式":
+        summary = (
+            "已直接根据上传文件中的必须项、建议项和数量要求生成分层任务草案。")
+        reasoning = (
+            "文件解析成功；复杂成果已继续拆成策划、素材、文案、排版、"
+            "剪辑、审核和提交等可执行步骤，全程未调用模型。")
+    else:
+        summary = (
+            "AI 拆解本次未成功，系统已直接按上传文件中的明确要求生成任务草案。")
+        reasoning = (
+            f"{_friendly_fallback_cause(error_msg)}；这不代表文件解析失败。"
+            "系统已使用文件任务蓝图继续生成，并区分课程硬性要求、建议项和鼓励项。")
+    return PlanOutput(tasks=tasks, summary=summary, reasoning=reasoning)
+
+
+def _friendly_fallback_cause(error_msg: str) -> str:
+    """把内部 Agent 错误改写为用户能理解且不泄露配置细节的说明。"""
+    lowered = (error_msg or "").lower()
+    if "未配置" in error_msg or "auth" in lowered or "鉴权" in error_msg:
+        return "原因：AI 服务鉴权未通过或访问凭据不可用"
+    if any(word in lowered for word in ("timeout", "connection", "connect")) \
+            or any(word in error_msg for word in ("超时", "连接")):
+        return "原因：AI 服务连接或响应超时"
+    if any(word in lowered for word in ("parse", "json", "validation")) \
+            or any(word in error_msg for word in ("格式", "解析", "校验")):
+        return (
+            "原因：AI 已返回内容，但其中存在缺少必填字段、字段类型错误或"
+            "JSON 不完整，系统无法安全采用")
+    return "原因：AI 服务本次没有返回可用的任务草案"
+
+
+def _format_requirement_analysis(analysis: dict, files: list[dict]) -> str:
+    """把本地文件提炼结果压缩成 Planner 易映射的结构化上下文。"""
+    if not analysis:
+        return ""
+    sections = (
+        ("项目目标", "project_goal", 2),
+        ("核心任务", "core_tasks", 8),
+        ("必须交付物", "required_deliverables", 8),
+        ("建议/鼓励成果", "recommended_deliverables", 6),
+        ("交付物", "deliverables", 8),
+        ("时间要求", "time_requirements", 6),
+        ("格式要求", "format_requirements", 6),
+        ("限制条件", "constraints", 6),
+        ("评价标准", "evaluation_criteria", 6),
+    )
+    names = "、".join(
+        str(item.get("name", "")).strip()
+        for item in files if item.get("name")) or "已上传文件"
+    lines = [f"## 文件要求提炼（来源：{names}）"]
+    blueprint = analysis.get("task_blueprint", []) or []
+    task_requirements = analysis.get("task_requirements", []) or []
+    if blueprint:
+        lines.append("- 拆解规则：必须项不得遗漏；建议项和鼓励项需明确标注，不能冒充硬性要求。")
+        lines.append("- 可执行任务蓝图：")
+        for item in blueprint[:30]:
+            level = str(item.get("requirement_level", "必须"))
+            stage = str(item.get("execution_stage", ""))
+            name = re.sub(r"\s+", " ", str(item.get("name", ""))).strip()
+            description = re.sub(
+                r"\s+", " ", str(item.get("description", ""))).strip()
+            lines.append(
+                f"  - [{level}][{stage}] {name}：{description[:180]}")
+            if sum(len(line) for line in lines) >= 4800:
+                break
+    elif task_requirements:
+        lines.append("- 任务与附属限制（限制只能写入任务说明，禁止单独生成任务）：")
+        for mapping in task_requirements[:16]:
+            task = re.sub(
+                r"\s+", " ", str(mapping.get("task", ""))).strip()
+            constraints = "；".join(
+                re.sub(r"\s+", " ", str(value)).strip()
+                for value in mapping.get("constraints", []) or []
+                if str(value).strip())
+            line = f"  - 任务：{task}"
+            if constraints:
+                line += f"；附属限制：{constraints}"
+            lines.append(line[:500])
+    for label, key, limit in sections:
+        if blueprint and key in (
+                "project_goal", "core_tasks", "deliverables"):
+            continue
+        if task_requirements and key == "core_tasks":
+            continue
+        raw = analysis.get(key, [])
+        values = [raw] if isinstance(raw, str) else list(raw or [])
+        cleaned = [re.sub(r"\s+", " ", str(value)).strip()[:220]
+                   for value in values if str(value).strip()]
+        if cleaned:
+            lines.append(f"- {label}：" + "；".join(cleaned[:limit]))
+        if sum(len(line) for line in lines) >= 5600:
+            break
+    if len(lines) == 1 and str(analysis.get("summary", "")).strip():
+        lines.append(
+            "- 其他原文要求：" +
+            re.sub(r"\s+", " ", str(analysis["summary"])).strip()[:4000])
+    return "\n".join(lines)[:6000]
+
+
+def _specific_requirement_items(analysis: dict) -> list[str]:
+    values: list[str] = []
+    for key in ("core_tasks", "deliverables"):
+        for item in (analysis or {}).get(key, []) or []:
+            cleaned = re.sub(r"\s+", " ", str(item)).strip()
+            if cleaned and cleaned not in values:
+                values.append(cleaned)
+    return values
+
+
+def _requirement_source_with_constraints(item: str, analysis: dict) -> str:
+    for mapping in (analysis or {}).get("task_requirements", []) or []:
+        if str(mapping.get("task", "")).strip() != item:
+            continue
+        constraints = [
+            str(value).strip()
+            for value in mapping.get("constraints", []) or []
+            if str(value).strip()
+        ]
+        if constraints:
+            return f"{item}；相关限制：" + "；".join(constraints)
+    return item
+
+
+def _requirement_task_name(item: str) -> str:
+    """从要求句中保留“动作 + 对象”，不凭空补造数量或成果。"""
+    classified, _ = _classify_requirement_unit(item)
+    if not classified:
+        return ""
+    cleaned = re.sub(
+        r"^(?:核心)?(?:任务|要求|交付物|成果|目标)\s*[：:]\s*", "", item)
+    cleaned = classified or cleaned
+    cleaned = re.sub(r"^(?:需(?:要)?|必须|应当|应|请|负责)\s*", "", cleaned)
+    actions = (
+        "实现", "完成", "开发", "制作", "撰写", "编写", "拍摄", "收集",
+        "发布", "设计", "开展", "组织", "召开", "形成", "提交", "整理",
+        "分析", "排版", "审核", "录制", "搭建", "调研", "访谈", "宣讲",
+        "测试", "部署", "演示",
+    )
+    positions = [cleaned.find(action) for action in actions
+                 if cleaned.find(action) >= 0]
+    if positions:
+        cleaned = cleaned[min(positions):]
+    cleaned = re.split(r"[；;。]", cleaned, maxsplit=1)[0]
+    cleaned = _strip_dangling_brackets(cleaned.strip(" ，,：:"))
+    cleaned = re.sub(r"[（(][^）)]*[）)]", "", cleaned)
+    cleaned = _strip_dangling_brackets(cleaned)
+    if len(cleaned) < 4 or not any(action in cleaned for action in actions):
+        return ""
+    return cleaned[:32].rstrip("，,、")
+
+
+def _project_focus(project_name: str) -> str:
+    cleaned = re.sub(r"\s+", "", project_name or "项目")
+    cleaned = re.sub(r"(课程|作业|项目)$", "", cleaned)
+    return (cleaned or "项目")[:12]
+
+
+def _fallback_description(
+        name: str, category: str, source: str, inp: AssignmentInput) -> str:
+    if source:
+        requirement = re.sub(r"\s+", " ", source).strip()[:140]
+        return (
+            f"依据文件要求“{requirement}”完成{name}；产出可复核的{category}成果，"
+            "并逐项核对其中的对象、数量、格式、时间和质量条件。")
+    # 已建立“任务 -> 附属限制”映射时，不把某一任务的限制污染到所有通用任务。
+    constraints = (
+        [] if (inp.requirement_analysis or {}).get("task_requirements")
+        else (inp.requirement_analysis or {}).get("constraints", [])[:2]
+    )
+    standard = "；".join(str(item) for item in constraints if str(item).strip())
+    if standard:
+        return (
+            f"围绕“{inp.course.name}”完成{name}，产出可检查的{category}成果；"
+            f"验收时对照文件限制：{standard[:160]}。")
+    return (
+        f"围绕“{inp.course.name}”完成{name}，明确处理对象并产出可检查的"
+        f"{category}成果；提交前核对项目要求。")
+
+
+def _infer_category(name: str) -> str:
+    mapping = (
+        (("拍摄", "摄影", "录制"), "摄影"),
+        (("撰写", "文案"), "文案"),
+        (("排版", "设计", "制作"), "设计"),
+        (("调研", "访谈", "收集"), "调研"),
+        (("分析",), "分析"),
+        (("开发", "搭建"), "开发"),
+        (("测试", "审核"), "审核"),
+        (("发布", "提交"), "发布"),
+    )
+    return next((category for words, category in mapping
+                 if any(word in name for word in words)), "执行")
 
 
 def _estimate_hours(name: str) -> float:
@@ -364,6 +652,9 @@ def _infer_skills(name: str) -> list[str]:
 
 
 def _infer_stage(name: str) -> str:
+    if any(word in name for word in (
+            "提交", "发布", "审核", "总结", "分析", "撰写", "排版", "后期")):
+        return "实践后"
     if any(word in name for word in ("方案", "标准", "设计", "准备")):
         return "实践前"
     if any(word in name for word in ("现场", "采集", "开展", "执行")):
