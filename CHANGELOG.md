@@ -1837,3 +1837,84 @@ LLM 负责"创造性"：拆任务、分配角色、写报告
    ```
 4. **为什么这样改：** 首次工作流必须稳定可用；领域化规则可立即生成可编辑草案，模型增强改为用户主动触发。
 5. **收益：** 首次拆解不再等待模型；“AI 重新拆解”仍保留；模型失败不会阻断后续分工。
+
+---
+
+## v4.3 —— 修复：首次提交不走"快速模式"，默认调 AI（2026-07-19）
+
+**定位：** 覆盖 v4.2 的"快速模式优先"策略，让首次表单提交直接走 LLM。
+
+**审查/修改背景：** v4.2 设计目标是首屏秒出——前端的 `generateDraft(false)` 配合后端的 `_fallback_plan`，确保第一次点击"生成草案"立即出结果，AI 增强留给"重新拆解"按钮。但实际体验上，首次生成"快速草案"后用户还要手动点"重新拆解"才能看到 LLM 效果，流程多了一步；且"快速模式"产物是模板化的瀑布兜底，无法体现 LLM 的理解能力。
+
+---
+
+### 关键缺陷（P0）
+
+#### 1. 前端硬编码 `false` 导致首次生成不走 AI
+
+1. **问题：** `index.html` 表单提交事件绑定了 `generateDraft(false)`，传参匹配了后端 v4.2 的 `use_ai=False` 调用，但用户首次生成时期望直接看到 AI 拆解结果，而不是先看模板再看 AI。
+2. **修改前：**
+   ```js
+   // app/web/templates/index.html:159
+   el('projectForm').onsubmit=function(event){event.preventDefault();generateDraft(false)};
+   ```
+3. **修改后：**
+   ```js
+   // app/web/templates/index.html:159
+   el('projectForm').onsubmit=function(event){event.preventDefault();generateDraft(true)};
+   ```
+4. **为什么这样改：** v4.2 的"快速模式优先"策略在用户体验上多了一步冗余操作——用户每次都要点两次（生成 + 重新拆解）才能看到 AI 效果。更合理的策略是默认走 AI，若 AI 超时后端自动兜底（`Coordinator` 内已内置超时降级），不需要前端手动挡掉 LLM。
+5. **收益：** 首次生成即看到 LLM 拆解效果；AI 超时时后端自带兜底，前端的 `use_ai=true` 不会导致白屏；"重新拆解"仍保留供用户迭代。
+
+---
+
+## v4.4 —— AI 调整建议按钮可拖拽 + 生成按钮反馈修复（2026-07-19）
+
+**定位：** 修复两个实际体验问题：AI 调整建议按钮无法拖动且拖拽后误触抽屉弹出；AI 生成时 spinner 跑到了不可见的按钮上。
+
+**审查/修改背景：** v4.4 初版（19日13:38）实现了基础拖拽逻辑，但有两个隐藏问题：`onclick` 绑定方式导致拖拽松手后 click 仍触发弹出抽屉；`generateDraft(true)` 调用按钮参数指向 draft view 中的 `redraftBtn`（不可见），用户看不到加载反馈。本版是 v4.4 的完整修复版。
+
+---
+
+### 关键缺陷（P0）
+
+#### 1. 拖拽后 click 事件仍触发抽屉弹出
+
+1. **问题：** `onclick=openAssistant` 绑定 + `mousedown` 拖拽是两条独立事件路径。拖拽松手后浏览器仍会触发 click 事件，抽屉弹出，用户无法靠拖拽移开按钮。
+2. **修改前：**
+   ```js
+   el('assistantBtn').onclick=openAssistant;
+   // onEnd 中试图 btn.click=function(){} 覆盖 .click() 方法（无效）
+   ```
+3. **修改后：**
+   ```js
+   // 移除 onclick，在 IIFE 中用 addEventListener 统一管理点击
+   btn.addEventListener('click',function(e){
+       if(dragging){e.stopPropagation();e.preventDefault();dragging=false}
+       else{openAssistant()}
+   });
+   ```
+4. **为什么这样改：** `onclick` 属性无法被其他事件处理器条件拦截；`addEventListener('click')` 配合 `dragging` 状态标志可精确控制：拖拽时 `preventDefault`，非拖拽时正常调用 `openAssistant`。
+5. **收益：** 拖拽松手不再弹出抽屉；点击行为不受影响。
+
+#### 2. 表单提交时加载 spinner 跑到了不可见的 `redraftBtn` 上
+
+1. **问题：** `generateDraft(true)` 内 `var button=useAi===true?el('redraftBtn'):el('generateBtn')`，表单提交走 `true` 分支找 `redraftBtn`，该按钮在 draft view 中（不可见），用户看到的 `generateBtn` 无任何反馈。
+2. **修改前：**
+   ```js
+   el('projectForm').onsubmit=function(event){event.preventDefault();generateDraft(true)};
+   async function generateDraft(useAi){
+       var button=useAi===true?el('redraftBtn'):el('generateBtn');
+       // 在不可见的 redraftBtn 上显示 spinner...
+   }
+   ```
+3. **修改后：**
+   ```js
+   el('projectForm').onsubmit=function(event){event.preventDefault();generateDraft(true,el('generateBtn'))};
+   async function generateDraft(useAi,btn){
+       var button=btn||(useAi===true?el('redraftBtn'):el('generateBtn'));
+       // 在用户可见的 generateBtn 上显示 spinner
+   }
+   ```
+4. **为什么这样改：** 表单提交是用户视角的"首次生成"，反馈必须出现在用户点击的那个按钮上；`redraftBtn` 调用不传 btn，函数自动退回到 `redraftBtn` 自身——单一接口兼容两处调用。
+5. **收益：** 首次生成时 `generateBtn` 正确显示 "AI 正在生成…" spinner；"重新拆解"按钮 spinner 行为不变。

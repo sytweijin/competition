@@ -38,3 +38,4 @@ editor_sdk.log
 .ipynb_checkpoints/
 _fix*.py
 
+.workbuddy/

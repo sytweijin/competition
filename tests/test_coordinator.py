@@ -46,3 +46,10 @@ def test_coordinator_with_mock(monkeypatch):
     assert result.plan.summary == "两个任务"
     assert len(result.plan.tasks) == 2
     assert result.timeline.total_days == 5
+
+    # ── Reflection 字段断言 ──
+    # conftest.py 已 stub ReflectionAgent.run → 返回 overall_score=8.0
+    assert result.reflection is not None, "FullPlan 应包含 reflection 字段"
+    assert result.reflection.passed is True
+    assert result.reflection.overall_score == 8.0
+    assert isinstance(result.reflection.issues, list)

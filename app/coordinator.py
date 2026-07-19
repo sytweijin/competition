@@ -16,7 +16,7 @@ import logging
 
 from app.models.schemas import (
     AgentError, AssignmentInput, FullPlan, PlanOutput,
-    QAOutput, TimelineOutput, ReportOutput, SubTask,
+    QAOutput, TimelineOutput, ReportOutput, ReflectionOutput, SubTask,
 )
 from app.agents.scoring import format_skills_for_prompt
 from app.agents.planner import PlannerAgent
@@ -24,6 +24,7 @@ from app.agents.matcher import MatcherAgent
 from app.agents.scoring import assign_with_balance, enhance
 from app.agents.timeline import TimelineAgent
 from app.agents.reporter import ReporterAgent
+from app.agents.reflection import ReflectionAgent
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,7 @@ class Coordinator:
         self.matcher = MatcherAgent()
         self.timeline = TimelineAgent()
         self.reporter = ReporterAgent()
+        self.reflector = ReflectionAgent()
 
     def run(self, inp: AssignmentInput) -> FullPlan:
         """执行完整主链路。"""
@@ -68,6 +70,10 @@ class Coordinator:
                 risk_note=report.message,
             )
 
+        # Step 5: Reflection（C4）
+        total_capacity = sum(m.available_hours for m in inp.members)
+        reflection = self._step_reflection(plan, timeline, qa_matrix, total_capacity)
+
         logger.info("Coordinator completed")
         return FullPlan(
             input=inp,
@@ -75,6 +81,7 @@ class Coordinator:
             timeline=timeline,
             qa_matrix=qa_matrix,
             report=report,
+            reflection=reflection,
         )
 
     def draft(self, inp: AssignmentInput) -> PlanOutput:
@@ -183,6 +190,22 @@ class Coordinator:
                        qa_matrix: QAOutput) -> ReportOutput | AgentError:
         return self.reporter.run(plan=plan, timeline=timeline,
                                  qa_matrix=qa_matrix)
+
+    def _step_reflection(self, plan: PlanOutput, timeline: TimelineOutput,
+                         qa_matrix: QAOutput,
+                         total_capacity: float = 0.0) -> ReflectionOutput:
+        """执行 Reflection 审查，永远不抛异常，失败时用确定性兜底。"""
+        try:
+            return self.reflector.run(
+                plan=plan,
+                timeline=timeline,
+                qa_matrix=qa_matrix,
+                total_capacity=total_capacity,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("ReflectionAgent unexpected error, use fallback: %s", exc)
+            return self.reflector._deterministic_reflect(plan, timeline, qa_matrix, total_capacity)
+
     @staticmethod
     def _fallback_plan(inp: AssignmentInput,
                        error_msg: str = "") -> PlanOutput:

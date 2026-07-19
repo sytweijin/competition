@@ -194,6 +194,30 @@ class ReportOutput(BaseModel):
     risk_note: str = ""
 
 
+# ──────────── Reflection 输出 ────────────
+
+class ReflectionIssue(BaseModel):
+    """Reflection Agent 发现的单条问题"""
+    level: str = Field(description="严重程度：error / warning / suggestion")
+    dimension: str = Field(description="所属维度：任务拆解 / 工时估算 / 负载均衡 / 时间线 / 分工合理性 / 风险")
+    description: str = Field(description="问题描述")
+    suggestion: str = Field(default="", description="改进建议")
+    affected_tasks: list[str] = Field(default_factory=list, description="受影响的任务 ID")
+
+
+class ReflectionOutput(BaseModel):
+    """Reflection Agent 的完整输出"""
+    issues: list[ReflectionIssue] = Field(default_factory=list, description="发现的问题列表")
+    overall_score: float = Field(default=0.0, ge=0.0, le=10.0,
+                                  description="计划整体质量评分（0-10）")
+    overall_comment: str = Field(default="", description="整体评价（100-200字）")
+    improvement_priority: list[str] = Field(
+        default_factory=list,
+        description="按优先级排列的改进方向（最多5条）",
+    )
+    passed: bool = Field(default=True, description="计划是否通过质量检查（无 error 级别问题）")
+
+
 # ──────────── Coordinator 最终输出 ────────────
 
 class FullPlan(BaseModel):
@@ -203,6 +227,7 @@ class FullPlan(BaseModel):
     timeline: TimelineOutput
     qa_matrix: QAOutput
     report: ReportOutput
+    reflection: Optional[ReflectionOutput] = Field(default=None, description="Reflection Agent 的自我审查结果")
     version: str = "3.0"
 
 
