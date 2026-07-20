@@ -207,6 +207,12 @@ async def save_plan(plan: FullPlan):
         course_name = re.sub(r'[^\w\u4e00-\u9fff._-]', "_", raw_name).strip("_") or "plan"
         filename = f"{ts}_{course_name}.json"
         filepath = MEMORY_DIR / filename
+        # 同名课程同一秒保存时追加计数后缀，避免覆盖历史计划
+        n = 1
+        while filepath.exists():
+            filename = f"{ts}_{course_name}_{n}.json"
+            filepath = MEMORY_DIR / filename
+            n += 1
         filepath.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
         logger.info("Plan saved to %s", filepath)
         return {"status": "ok", "filename": filename}

@@ -60,7 +60,7 @@ class InterviewSimAgent(BaseAgent):
             for term in bans_zh:
                 result = result.replace(term, '')
             for term in bans_ascii:
-                result = re.sub(re.escape(term), '', result, flags=re.IGNORECASE)
+                result = re.sub(r'\b' + re.escape(term) + r'\b', '', result, flags=re.IGNORECASE)
             # Collapse multiple newlines
             result = re.sub(r'\n{3,}', '\n\n', result)
             return result

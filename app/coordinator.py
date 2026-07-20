@@ -299,8 +299,10 @@ class Coordinator:
                       2: (8, "核心模块开发", ["开发", "编程"]),
                       3: (6, "测试与联调", ["测试", "调试"]),
                       4: (4, "文档撰写与答辩准备", ["文档", "PPT"])}
+        # 按团队总产能自适应阶段数：小团队砍掉测试/文档，保留核心链路
+        num_stages = 3 if total_capacity <= 30 else (4 if total_capacity <= 60 else 5)
         tasks: list[SubTask] = []
-        for i in range(5):
+        for i in range(num_stages):
             hours, name, skills = base_hours[i]
             hours = round(hours * scale)
             deps = [tasks[i - 1].id] if i > 0 else []
@@ -314,9 +316,10 @@ class Coordinator:
             ))
         return PlanOutput(
             tasks=tasks,
-            summary=("Planner 不可用，已生成确定性兜底计划（5 个标准阶段）。"
+            summary=("Planner 不可用，已生成确定性兜底计划"
+                     f"（{num_stages} 个标准阶段）。"
                      f"错误信息：{error_msg}" if error_msg
-                     else "确定性兜底计划（5 个标准阶段）"),
+                     else f"确定性兜底计划（{num_stages} 个标准阶段）"),
             reasoning=("LLM 规划失败，按需求→设计→开发→测试→文档的标准"
                        "瀑布模型生成默认计划，确保下游可用。"),
         )

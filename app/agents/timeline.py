@@ -34,7 +34,7 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
     response_model = None  # 不用 LLM
 
     def __init__(self, llm=None):
-        self.llm = None
+        self.llm = llm
 
     def run(self, plan: PlanOutput, deadline: str,
             assignments: dict[str, list[str]] | None = None,

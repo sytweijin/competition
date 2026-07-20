@@ -78,13 +78,13 @@ def _similar(a: str, b: str) -> float:
     return SequenceMatcher(None, na, nb).ratio()
 
 
-# 角色投入系数：主讲承担任务全部工时，主答辅助参与折算 30%，辅答各折算 15%。
-# 说明：同一任务的工时按角色投入占比折算到各成员（主讲1.0 + 主答0.3 + 辅答0.15/人），累计可能超过任务原工时。
+# 角色投入系数：负责人承担任务全部工时，主要协助参与折算 30%，辅助协助各折算 15%。
+# 说明：同一任务的工时按角色投入占比折算到各成员（负责人1.0 + 主要协助0.3 + 辅助协助0.15/人），累计可能超过任务原工时。
 PRESENTER_RATIO = 1.0
 QA_PRIMARY_RATIO = 0.3
 QA_SUPPORT_RATIO = 0.15
 
-# 集中定义，便于后续调参。最终分数越高越优。
+# 多因子初始打分权重：技能匹配 + 总负载 + 阶段负载 + 剩余产能
 ASSIGNMENT_WEIGHTS = {
     "skill": 0.55,
     "total_load": 0.20,
@@ -117,10 +117,31 @@ def skill_score(member: TeamMember, required_skills: list[str]) -> float:
 
 
 
-def _work_from(assignments, task_hours, members):
-    """按最终分配精确计算每人负载。"""
+def _is_avoiding(member: TeamMember, required_skills: list[str]) -> bool:
+    """成员是否对所需技能中的某项明确回避（负向标签命中）。
+
+    只判断'明确不想做'这类负向偏好，不判断'单纯不擅长'。
+    用于负载均衡搬运时排除明确回避者，同时允许不擅长但未回避者承接任务以维持均衡。
+    """
+    if not required_skills:
+        return False
+    _, neg_tags = _split_tags(member.skill_tags)
+    if not neg_tags:
+        return False
+    return any(any(_similar(req, n) >= 0.6 for n in neg_tags) for req in required_skills)
+
+
+def _work_from(assignments, task_hours, members, completed_ids=None):
+    """按最终分配精确计算每人负载。
+
+    completed_ids 里的任务直接跳过（不计入负载）——用于已完成任务
+    保留原分工但不占产能的场景。
+    """
+    completed_ids = completed_ids or set()
     w = {m.name: 0.0 for m in members}
     for a in assignments:
+        if a.task_id in completed_ids:
+            continue
         h = task_hours.get(a.task_id, 0.0)
         if h <= 0 or a.presenter in ("", "(已完成)"):
             continue
@@ -133,13 +154,24 @@ def _work_from(assignments, task_hours, members):
     return w
 
 
-def _balance_workload(assignments, task_hours, members, threshold=1.0, max_passes=500):
-    """统一负载均衡：主讲/主答/辅答均可搬运，目标 max-min<=threshold。
+def _balance_workload(assignments, task_hours, members, threshold=1.0, max_passes=500,
+                         task_skills=None, member_map=None):
+    """统一负载均衡：负责人/主要协助/辅助协助均可搬运，目标 max-min<=threshold。
 
     每步枚举所有可行搬运，用「真实重算负载」评估搬运后的全局 gap，选最小者执行；
     gap 不再下降即停。每次搬运前快照、评估后还原，杜绝近似误差。
     """
     names = [m.name for m in members]
+    # 负责人搬运时的回避门槛：对每个任务，预先算出非回避的合格候选人；
+    # 若某任务全员都回避（极端情况），则该任务不过滤，退回纯 gap 逻辑。
+    # 注意：只排除'明确不想做'的回避者，不排除'单纯不擅长'者——后者排除会破坏均衡。
+    qualified = {}
+    if task_skills and member_map:
+        for tid, skills in task_skills.items():
+            ok = [m.name for m in members if not _is_avoiding(m, skills)]
+            qualified[tid] = set(ok) if ok else None
+    else:
+        qualified = {}
 
     def gap_of(w):
         vals = list(w.values())
@@ -152,6 +184,7 @@ def _balance_workload(assignments, task_hours, members, threshold=1.0, max_passe
         a.presenter, a.qa_primary, sup = snap[0], snap[1], list(snap[2])
         a.qa_support = sup
 
+    rebalance_guard = 4  # 全局重排最多触发这么多次（贪心+重排交替迭代），防止死循环
     for _ in range(max_passes):
         gap = gap_of(_work_from(assignments, task_hours, members))
         if gap <= threshold + 1e-9:
@@ -163,16 +196,21 @@ def _balance_workload(assignments, task_hours, members, threshold=1.0, max_passe
                 continue
             snap = snapshot(a)
             cur_p, cur_q, cur_s = snap
-            # 主讲换人
+            # 负责人换人
             for t in names:
                 if t == cur_p:
+                    continue
+                # 负责人回避门槛：候选人对该任务明确回避（负向标签命中）时跳过，
+                # 不擅长但未回避者仍可承接以维持均衡；全员回避时 qualified 为 None，退回纯 gap 逻辑。
+                qset = qualified.get(a.task_id)
+                if qset is not None and t not in qset:
                     continue
                 a.presenter = t
                 ng = gap_of(_work_from(assignments, task_hours, members))
                 if ng < best_gap - 1e-12:
                     best_gap, best = ng, (a, "presenter", t)
                 restore(a, snap)
-            # 主答换人
+            # 主要协助换人
             if cur_q:
                 for t in names:
                     if t in (cur_p, cur_q):
@@ -184,7 +222,7 @@ def _balance_workload(assignments, task_hours, members, threshold=1.0, max_passe
                     if ng < best_gap - 1e-12:
                         best_gap, best = ng, (a, "primary", t)
                     restore(a, snap)
-            # 辅答换人
+            # 辅助协助换人
             for owner in cur_s:
                 for t in names:
                     if t in (cur_p, cur_q) or t in cur_s:
@@ -195,10 +233,33 @@ def _balance_workload(assignments, task_hours, members, threshold=1.0, max_passe
                         best_gap, best = ng, (a, "support", (owner, t))
                     restore(a, snap)
         if best is None:
+            # 贪心卡在局部最优（单角色搬运粒度 > 需要的转移量，无法精细转移负载）。
+            # 做一次全局重排（联合枚举负责人+主要协助）跳出局部最优。重排后新的
+            # 协助位结构可能解锁更优解，所以改善就回到循环顶部让贪心+重排再迭代
+            # 一轮；连续两次重排都不再改善才确认收敛。rebalance_guard 防止死循环。
+            cur = _work_from(assignments, task_hours, members)
+            cur_gap = (max(cur.values()) - min(cur.values())) if cur else 0.0
+            if cur_gap <= threshold + 1e-9:
+                break
+            if rebalance_guard <= 0:
+                break
+            rebalance_guard -= 1
+            new_gap = _rebalance_presenters(assignments, task_hours, members,
+                                            task_skills, member_map, cur_gap)
+            if new_gap < cur_gap - 1e-9:
+                continue  # 重排改善了，新状态下贪心可能继续降 gap
             break
         a, kind, payload = best
         if kind == "presenter":
+            # 搬运负责人后清理角色自指：新负责人若仍留在 qa_primary/qa_support，
+            # 会出现「小红负责、小红协助」——workload 计算会漏算或重复，
+            # 前端责任矩阵也显示异常。把旧负责人补到 qa_primary，保持三人不丢。
+            old_p = a.presenter
             a.presenter = payload
+            if a.qa_primary == payload:
+                a.qa_primary = old_p if old_p and old_p != payload else ""
+            if payload in (a.qa_support or []):
+                a.qa_support = [x for x in a.qa_support if x != payload]
         elif kind == "primary":
             if payload in (a.qa_support or []):
                 a.qa_support = [x for x in a.qa_support if x != payload]
@@ -207,6 +268,107 @@ def _balance_workload(assignments, task_hours, members, threshold=1.0, max_passe
             owner, t = payload
             a.qa_support = [x for x in (a.qa_support or []) if x != owner] + [t]
     return _work_from(assignments, task_hours, members)
+
+
+def _rebalance_presenters(assignments, task_hours, members, task_skills, member_map, cur_gap):
+    """全局重分配：联合枚举负责人 + 主要协助，找让总负载 gap 最小的组合。
+
+    _balance_workload 的单角色贪心搬运在「最小搬运粒度 > 需要的转移量」时会卡在
+    局部最优（如负责人整数工时任务下，单次搬运转移量过大，无法精细调节）。
+    把负责人(权重1.0)和主要协助(权重0.3)都当成可重排变量做联合枚举，能跳出
+    单步贪心够不着的解（实测把卡死的 1.4h gap 降到 0.85h 以内）。
+
+    固定辅助协助位(qa_support 不变)，枚举每个任务的负责人与主要协助组合
+    （尊重回避门槛），选总负载 gap 最小且严格优于 cur_gap 的应用；无改善则
+    保持原状。组合数过大(>1e6)时退回只枚举负责人，仍过大则贪心近似。
+    """
+    import itertools
+    names = [m.name for m in members]
+    active = [a for a in assignments if a.presenter not in ("", "(已完成)")]
+    if not active:
+        return cur_gap
+    cand_p = {}
+    for a in active:
+        skills = (task_skills or {}).get(a.task_id, [])
+        ok = [n for n in names if member_map.get(n) and not _is_avoiding(member_map[n], skills)]
+        cand_p[a.task_id] = ok if ok else list(names)
+    p_lists = [cand_p[a.task_id] for a in active]
+    q_lists = [list(names) for _ in active]
+
+    size = 1
+    for c in p_lists:
+        size *= len(c)
+    joint = size
+    for c in q_lists:
+        joint *= len(c)
+        if joint > 1_000_000:
+            break
+
+    snaps = [(a.presenter, a.qa_primary) for a in active]
+    best_choice = None
+    best_gap = cur_gap
+    if joint <= 1_000_000:
+        # 联合枚举 presenter + qa_primary
+        for p_choice in itertools.product(*p_lists):
+            for q_choice in itertools.product(*q_lists):
+                # 跳过退化组合（某任务负责人==主要协助）：qa_primary 语义上是协助者，
+                # 不应等于负责人；且 p==q 时 _apply_role_remap 会把 qa_primary 回填成
+                # 旧负责人，导致枚举预算负载与真实应用后不一致。
+                if any(pp == qq for pp, qq in zip(p_choice, q_choice)):
+                    continue
+                load = {n: 0.0 for n in names}
+                for a, p, q in zip(active, p_choice, q_choice):
+                    h = task_hours.get(a.task_id, 0.0)
+                    load[p] += h
+                    if q and q != p:
+                        load[q] += h * QA_PRIMARY_RATIO
+                    for sx in (a.qa_support or []):
+                        if sx != p and sx != q:
+                            load[sx] += h * QA_SUPPORT_RATIO
+                gap = max(load.values()) - min(load.values())
+                if gap < best_gap - 1e-12:
+                    best_gap = gap
+                    best_choice = (p_choice, q_choice)
+    elif size <= 1_000_000:
+        # 只枚举负责人，协助位保持
+        for p_choice in itertools.product(*p_lists):
+            load = {n: 0.0 for n in names}
+            for a, p in zip(active, p_choice):
+                h = task_hours.get(a.task_id, 0.0)
+                load[p] += h
+                if a.qa_primary and a.qa_primary != p:
+                    load[a.qa_primary] += h * QA_PRIMARY_RATIO
+                for s in (a.qa_support or []):
+                    if s != p and s != a.qa_primary:
+                        load[s] += h * QA_SUPPORT_RATIO
+            gap = max(load.values()) - min(load.values())
+            if gap < best_gap - 1e-12:
+                best_gap = gap
+                best_choice = (p_choice, None)
+
+    if best_choice is not None:
+        p_choice, q_choice = best_choice
+        _apply_role_remap(active, p_choice, q_choice, members)
+    new_work = _work_from(assignments, task_hours, members)
+    return (max(new_work.values()) - min(new_work.values())) if new_work else cur_gap
+
+
+def _apply_role_remap(active, p_choice, q_choice, members):
+    """应用一组负责人/主要协助选择，并清理角色自指与重复占位。"""
+    names = {m.name for m in members}
+    for a, new_p, new_q in zip(active, p_choice, (q_choice or [None] * len(active))):
+        old_p = a.presenter
+        a.presenter = new_p
+        if new_p in (a.qa_support or []):
+            a.qa_support = [x for x in a.qa_support if x != new_p]
+        if new_q is not None:
+            a.qa_primary = new_q
+            if new_q in (a.qa_support or []):
+                a.qa_support = [x for x in a.qa_support if x != new_q]
+            if new_q == new_p:
+                a.qa_primary = old_p if (old_p and old_p != new_p and old_p in names) else ""
+
+
 
 def _split_suggestion(work, assignments, task_hours, members, threshold=1.0):
     """均衡后 gap 仍超阈值时，给"建议拆分超载成员最大任务"的提示。
@@ -232,7 +394,31 @@ def _split_suggestion(work, assignments, task_hours, members, threshold=1.0):
     if h <= 0:
         return ""
     return (f" 建议拆分 {over_name} 的 {a.task_name}（{h:.1f}h），"
-            f"当前成员最大工时差 {gap:.1f}h 超过 1h，任务结构无法在 3 人间均摊")
+            f"当前成员最大工时差 {gap:.1f}h 超过 1h，任务结构无法在 {len(members)} 人间均摊")
+
+
+def _resync_scores(assignments, plan, members):
+    """均衡搬运后重算 score/reasoning，使其与最终 presenter 一致。
+
+    _balance_workload 会就地修改 presenter/qa_primary/qa_support，
+    但不会更新 score 和 reasoning，导致前端和导出文档展示错误的匹配度。
+    """
+    member_map = {m.name: m for m in members}
+    task_map = {t.id: t for t in plan.tasks}
+    for a in assignments:
+        if a.presenter in ("", "(已完成)"):
+            continue
+        t = task_map.get(a.task_id)
+        m = member_map.get(a.presenter)
+        if t is None or m is None:
+            continue
+        sc = skill_score(m, t.required_skills)
+        a.score = round(sc, 3)
+        a.reasoning = (
+            f"{a.presenter}：{_fmt(t.required_skills)} 技能"
+            f"匹配度 {sc:.2f}，均衡后综合最优"
+        )
+
 
 def assign_with_balance(plan: PlanOutput,
                         members: list[TeamMember]) -> QAOutput:
@@ -260,10 +446,12 @@ def assign_with_balance(plan: PlanOutput,
                 score=0.0, reasoning="任务已完成",
             ))
             continue
-        # 可解释评分：技能 + 总负载 + 同阶段负载 + 剩余产能。
+        # 多因子打分：技能匹配 + 总负载 + 阶段负载 + 剩余产能；回避者（对该任务明确不想做）垫底，
+        # 与 enhance 的负向纠偏对称——只在全员都回避时才可能选中回避者。
         scored = []
         for m in members:
             skill = skill_score(m, t.required_skills)
+            avoiding = _is_avoiding(m, t.required_skills)
             total_ratio = work[m.name] / max(m.available_hours, 0.5)
             stage_ratio = stage_work[m.name].get(t.execution_stage, 0.0) / max(m.available_hours, 0.5)
             capacity = max(0.0, 1.0 - (work[m.name] + t.estimated_hours) / max(m.available_hours, 0.5))
@@ -273,21 +461,21 @@ def assign_with_balance(plan: PlanOutput,
                      + ASSIGNMENT_WEIGHTS["capacity"] * capacity)
             if m.available_stages and t.execution_stage not in m.available_stages:
                 score -= 0.35
-            scored.append((m.name, skill, score))
-        scored.sort(key=lambda x: (-x[2], work[x[0]]))
+            scored.append((m.name, skill, avoiding, score))
+        scored.sort(key=lambda x: (x[2], -x[3], work[x[0]]))  # 回避者排末位，然后多因子降序
         presenter = scored[0][0]
         work[presenter] += t.estimated_hours
         stage_work[presenter][t.execution_stage] = (
             stage_work[presenter].get(t.execution_stage, 0.0) + t.estimated_hours)
 
-        # 主答：剩余成员中「负载最轻」者优先（匹配度作同负载时的次序）
-        rest = [(n, skill) for n, skill, _ in scored if n != presenter]
+        # 主要协助：剩余成员中「负载最轻」者为先（匹配度作同负载时的次序）
+        rest = [(n, skill) for n, skill, _av, _sc in scored if n != presenter]
         rest.sort(key=lambda x: (work[x[0]], -x[1]))
         primary = rest[0][0] if rest else ""
         if primary and primary != presenter:
             work[primary] += t.estimated_hours * QA_PRIMARY_RATIO
 
-        # 辅答：再从剩余（排除主讲、主答）中取负载最轻的 2 人，避免同人占两席
+        # 辅助协助：再从剩余（排除负责人、主要协助）中取负载最轻的 2 人，避免同人占两席
         rest2 = [n for n, _ in rest if n != primary]
         rest2.sort(key=lambda n: work[n])
         support = rest2[:2]
@@ -296,9 +484,9 @@ def assign_with_balance(plan: PlanOutput,
 
         best_skill = scored[0][1]
         reasoning = (
-            f"{presenter} 的 {_fmt(t.required_skills)} 技能匹配度 {best_skill:.2f}；"
-            f"分配前总负载 {work[presenter]-t.estimated_hours:.1f}h，"
-            f"{t.execution_stage}阶段负载较低，综合评分最高"
+            f"{presenter}：{_fmt(t.required_skills)} 技能匹配度 {best_skill:.2f}，"
+            f"当前负载 {work[presenter]-t.estimated_hours:.1f}h，"
+            f"执行阶段 {t.execution_stage}"
         )
         assignments.append(QAAssignment(
             task_id=t.id, task_name=t.name, chapter="",
@@ -306,7 +494,7 @@ def assign_with_balance(plan: PlanOutput,
             score=round(best_skill, 3), reasoning=reasoning,
         ))
 
-    # P1-2: 全员参与兜底——0 负载成员先补一个辅答角色，再进入均衡（避免兜底破坏均衡结果）
+    # P1-2: 全员参与兜底——0 负载成员先补一个辅助协助角色，再进入均衡（避免兜底破坏均衡结果）
     zero_load = [n for n, h in work.items() if h <= 0]
     for n in zero_load:
         active = [a for a in assignments if a.presenter != "(已完成)" and n not in (a.qa_support or [])]
@@ -319,9 +507,13 @@ def assign_with_balance(plan: PlanOutput,
             target.qa_support.append(n)
             work[n] += task_hours.get(target.task_id, 0.0) * QA_SUPPORT_RATIO
 
-    # 保留专业匹配结果，不做会破坏技能匹配的强制 1h 拉平。
-    work = _work_from(assignments, task_hours, members)
+    # 负载均衡：负责人/主要协助/辅助协助统一搬运，目标 max-min<=1h
+    task_skills = {t.id: t.required_skills for t in plan.tasks}
+    work = _balance_workload(assignments, task_hours, members, threshold=1.0,
+                             task_skills=task_skills, member_map=member_map)
 
+    # B1: 均衡后重算 score/reasoning，使其与最终 presenter 一致
+    _resync_scores(assignments, plan, members)
 
     # overload detection
     overload_warnings = []
@@ -348,7 +540,7 @@ def recompute_preserve(plan: PlanOutput, old_qa: QAOutput | None,
 
     不从零重排——重排会把刚完成自己任务的人当成「闲人」塞到别人后续任务上，
     与现实不符（现实中完成自己部分并不等于要再去帮别人扛后续任务）。
-    只有原矩阵里缺失的任务、或主讲已离开成员名单时，才用确定性逻辑补一个。
+    只有原矩阵里缺失的任务、或负责人已离开成员名单时，才用确定性逻辑补一个。
     """
     if not members or not plan.tasks:
         return QAOutput(assignments=[], note="无任务或无成员")
@@ -356,22 +548,41 @@ def recompute_preserve(plan: PlanOutput, old_qa: QAOutput | None,
     task_hours = {t.id: t.estimated_hours for t in plan.tasks}
     old_by_task = {a.task_id: a for a in (old_qa.assignments if old_qa else [])}
 
+    completed_ids = {t.id for t in plan.tasks if t.status == "completed"}
     assignments = []
     for t in plan.tasks:
         old = old_by_task.get(t.id)
         if t.status == "completed":
-            assignments.append(QAAssignment(
-                task_id=t.id, task_name=t.name, chapter="",
-                presenter="(已完成)", qa_primary="", qa_support=[],
-                score=0.0, reasoning="任务已完成",
-            ))
+            # 完成状态由 task.status 表达；分工/score/reasoning 完全保留原值，
+            # 这样切回 pending 时是无损还原——上版误把 score 清零、reasoning 覆盖，
+            # 导致来回切换后匹配度列从 80% 变 0%
+            if old is not None and old.presenter in member_map:
+                qa_p = old.qa_primary if old.qa_primary in member_map else ""
+                qa_s = [s for s in (old.qa_support or []) if s in member_map]
+                assignments.append(old.model_copy(update={
+                    "task_name": t.name,
+                    "qa_primary": qa_p,
+                    "qa_support": qa_s,
+                }))
+            else:
+                assignments.append(QAAssignment(
+                    task_id=t.id, task_name=t.name, chapter="",
+                    presenter="(已完成)", qa_primary="", qa_support=[],
+                    score=0.0, reasoning="任务已完成",
+                ))
             continue
-        # 保留原有分工（主讲仍在职）；否则走兜底
-        if old is not None and (old.presenter in member_map
-                                or old.presenter in ("", "(已完成)")):
-            assignments.append(old.model_copy(update={"task_name": t.name}))
+        # 保留原有分工（负责人仍在职）；否则走兜底
+        if old is not None and old.presenter in member_map:
+            # 清理已移除成员的协助角色
+            qa_p = old.qa_primary if old.qa_primary in member_map else ""
+            qa_s = [s for s in (old.qa_support or []) if s in member_map]
+            assignments.append(old.model_copy(update={
+                "task_name": t.name,
+                "qa_primary": qa_p,
+                "qa_support": qa_s,
+            }))
             continue
-        # 兜底：原矩阵缺失或主讲已离开成员名单——按确定性逻辑补一个
+        # 兜底：原矩阵缺失或负责人已离开成员名单——按确定性逻辑补一个
         scored = [(m.name, skill_score(m, t.required_skills)) for m in members]
         scored.sort(key=lambda x: -x[1])
         presenter = scored[0][0] if scored else ""
@@ -385,7 +596,7 @@ def recompute_preserve(plan: PlanOutput, old_qa: QAOutput | None,
             score=score, reasoning="状态切换后按匹配度补充分配",
         ))
 
-    work = _work_from(assignments, task_hours, members)
+    work = _work_from(assignments, task_hours, members, completed_ids=completed_ids)
     overload = []
     for name, hours in work.items():
         m = member_map.get(name)
@@ -398,26 +609,39 @@ def recompute_preserve(plan: PlanOutput, old_qa: QAOutput | None,
 
 
 def enhance(qa: QAOutput, plan: PlanOutput,
-            members: list[TeamMember]) -> QAOutput:
-    """对 Matcher(LLM) 的输出做后处理：补 score、补 workload。
+            members: list[TeamMember],
+            threshold: float = 1.0) -> QAOutput:
+    """对 Matcher(LLM) 的输出做后处理：补 score、补 workload、跳过已完成任务。
 
-    保留 LLM 的人选，只补可解释的数值字段。
+    保留 LLM 的分配人选，但当成员间负载差超过 threshold 时（LLM 常无视
+    提示词的均衡要求），用确定性负载均衡做兜底——这才是「LLM 负责、
+    确定性算法保底」的异构设计。任务结构本身无法均摊时给出拆分建议。
     """
-    work: dict[str, float] = {m.name: 0.0 for m in members}
-    task_hours = {t.id: t.estimated_hours for t in plan.tasks}
+    active_tasks = [t for t in plan.tasks if t.status != "completed"]
+    task_hours = {t.id: t.estimated_hours for t in active_tasks}
     member_map = {m.name: m for m in members}
     task_map = {t.id: t for t in plan.tasks}
+    work: dict[str, float] = {m.name: 0.0 for m in members}
 
     enhanced: list[QAAssignment] = []
     for a in qa.assignments:
         t = task_map.get(a.task_id)
+        # 已完成任务保持占位，不计入负载
+        if t and t.status == "completed":
+            enhanced.append(QAAssignment(
+                task_id=a.task_id, task_name=a.task_name, chapter=a.chapter,
+                presenter="(已完成)", qa_primary="", qa_support=[],
+                score=0.0, reasoning="任务已完成",
+            ))
+            continue
         h = task_hours.get(a.task_id, 0.0)
-        # 折算工时到 workload
-        work[a.presenter] = work.get(a.presenter, 0.0) + h
-        if a.qa_primary and a.qa_primary != a.presenter:
+        # 折算工时到 workload（仅活任务）
+        if a.presenter and a.presenter not in ("", "(已完成)"):
+            work[a.presenter] = work.get(a.presenter, 0.0) + h
+        if a.qa_primary and a.qa_primary != a.presenter and a.qa_primary in member_map:
             work[a.qa_primary] = work.get(a.qa_primary, 0.0) + h * QA_PRIMARY_RATIO
-        for s in a.qa_support:
-            if s != a.presenter and s != a.qa_primary:
+        for s in (a.qa_support or []):
+            if s not in (a.presenter, a.qa_primary) and s in member_map:
                 work[s] = work.get(s, 0.0) + h * QA_SUPPORT_RATIO
         # 补 score
         score = a.score
@@ -425,12 +649,54 @@ def enhance(qa: QAOutput, plan: PlanOutput,
             score = skill_score(member_map[a.presenter], t.required_skills)
         enhanced.append(a.model_copy(update={"score": round(score, 3)}))
 
-    # 负载均衡：主讲/主答/辅答统一搬运，目标 max-min<=1h
-    work = _balance_workload(enhanced, task_hours, members, threshold=1.0)
+    # 负向纠偏：若 LLM 把某任务的负责人交给明确回避者（如'不想做PPT'），
+    # 先换成非回避、负载最轻的成员，再进入均衡。这纠正 LLM 的初始误判，
+    # 避免后续均衡因初始就错而无法纠正（均衡只做局部搬运，不会主动搬走高负载者的任务）。
+    avoid_fixed = False
+    for a in enhanced:
+        if a.presenter in ("", "(已完成)"):
+            continue
+        t = task_map.get(a.task_id)
+        if t is None:
+            continue
+        cur_member = member_map.get(a.presenter)
+        if cur_member is None or not _is_avoiding(cur_member, t.required_skills):
+            continue
+        # 在非回避者中选 skill_score 最高、当前负载最轻的
+        cands = [m for m in members if m.name != a.presenter and not _is_avoiding(m, t.required_skills)]
+        if not cands:
+            continue  # 全员回避，交给均衡兜底
+        cands.sort(key=lambda m: (-skill_score(m, t.required_skills), work[m.name]))
+        new_p = cands[0].name
+        old_p = a.presenter
+        # 同步更新 work：旧负责人减去该任务工时，新负责人加上，
+        # 保证后续多个回避任务纠偏时排序用的是最新负载而非初始累加值。
+        h = task_hours.get(a.task_id, 0.0)
+        work[old_p] = work.get(old_p, 0.0) - h
+        work[new_p] = work.get(new_p, 0.0) + h
+        a.presenter = new_p
+        # 去重：新负责人若已在协助位则移出；主要协助若等于新负责人则换成旧负责人
+        if new_p in (a.qa_support or []):
+            a.qa_support = [x for x in a.qa_support if x != new_p]
+        if a.qa_primary == new_p:
+            a.qa_primary = old_p
+        avoid_fixed = True
 
-
-    # 负载失衡/超载检测（在均衡后计算，避免过期警告）
+    # 先按 LLM 人选算负载；若成员间差距过大（LLM 常无视提示词的均衡要求），
+    # 再用确定性负载均衡做兜底——这才是「LLM 负责、确定性算法保底」的异构设计。
+    work = _work_from(enhanced, task_hours, members)
+    gap = (max(work.values()) - min(work.values())) if work else 0.0
     note = qa.note or ""
+    if work and gap > threshold:
+        # 确定性均衡搬运负责人/主要协助/辅助协助，目标 max-min<=threshold
+        task_skills = {t.id: t.required_skills for t in plan.tasks}
+        work = _balance_workload(enhanced, task_hours, members, threshold=threshold,
+                                 task_skills=task_skills, member_map=member_map)
+        # 均衡后重算 score/reasoning，使其与最终负责人自洽
+        _resync_scores(enhanced, plan, members)
+        note = note + "（LLM 分配负载失衡，已用确定性均衡修正）"
+    if avoid_fixed:
+        note = (note or "") + "；已将明确回避某任务的负责人调整为更合适人选"
     imbalance = []
     for name, hours in work.items():
         m = member_map.get(name)

@@ -6,6 +6,89 @@
 
 ---
 
+## v4.7 —— 合入 v3.5–v3.8 算法修复：负载均衡全局重排 + 状态切换分工保留 + 健壮性加固（2026-07-20）
+
+**定位：** v4.x 系列在 v3.4 基础上分叉发展，缺少 v3.5–v3.8 的核心算法修复。本版本将这些修复移植到 v4.6 代码基础上，并保留队友的全部 v4.x 新功能（文件上传、任务拆解工作流、反思 agent 等）。
+
+**审查/修改背景：** 团队在 v3.4 时间点分叉：一端发展为 v4.6（文件分析 + 工作台 + 聊天），另一端发展为 v3.8（负载均衡 + 状态切换 + 健壮性）。经逐项核查，v4.6 缺少以下 v3.5–v3.8 修复。
+
+---
+
+### 关键缺陷（P0）
+
+**1. 负载均衡陷入局部最优，分工相差可达 6h+（v3.8 修复）**
+- **问题：** `_balance_workload` 的贪心搬运在「最小搬运粒度 > 需要的转移量」时陷入局部最优，gap 卡在 1.4h 甚至 6h+ 时直接 break。
+- **修改前：** `if best is None: break  # 局部最优即停`
+- **修改后：** 贪心卡住时触发 `_rebalance_presenters`（全局联合枚举负责人+主要协助，选 gap 最小组合），重排有改善则回贪心再迭代，`rebalance_guard` 防死循环：
+  ```python
+  if best is None:
+      cur = _work_from(assignments, task_hours, members)
+      cur_gap = (max(cur.values()) - min(cur.values())) if cur else 0.0
+      if cur_gap <= threshold + 1e-9:
+          break
+      if rebalance_guard <= 0:
+          break
+      rebalance_guard -= 1
+      new_gap = _rebalance_presenters(assignments, task_hours, members,
+                                      task_skills, member_map, cur_gap)
+      if new_gap < cur_gap - 1e-9:
+          continue  # 重排解锁了更优解，贪心继续
+      break
+  ```
+- **为什么这样改：** 负责人和主要协助是负载权重最大的两个角色（1.0 / 0.3），把它们一起当变量做全局枚举，能在作业级规模（3人6任务）瞬间找到全局最优。枚举时排除 `p==q` 退化组合，保证预算负载与 `_apply_role_remap` 应用后一致。
+- **收益：** ① 实测 gap 从 32.3h → 0.85h（达标 ≤1h）；② 回避门槛被尊重（PPT 不派给不想做 PPT 的人）；③ 不破坏 LLM 的参与结构。
+
+**2. 状态来回切换丢失原责任分工（v3.7 修复）**
+- **问题：** `recompute_preserve` 把已完成任务的 `presenter` 覆盖成 `"(已完成)"`，原始负责人名字被丢弃。切回 pending 时后端看到 `presenter="(已完成)"` 走兜底从零重算，分工和匹配度都与最初不一致。
+- **修改前：**
+  ```python
+  if t.status == "completed":
+      assignments.append(QAAssignment(
+          presenter="(已完成)", qa_primary="", qa_support=[],
+          score=0.0, reasoning="任务已完成",  # 原分工被覆盖
+      ))
+  ```
+- **修改后：** 已完成任务保留原 presenter/qa_primary/qa_support（只要成员仍在职），完成状态由 `task.status` 唯一表达，score/reasoning 不清零：
+  ```python
+  if t.status == "completed":
+      if old is not None and old.presenter in member_map:
+          assignments.append(old.model_copy(update={
+              "task_name": t.name,
+              "qa_primary": qa_p, "qa_support": qa_s,
+              # score/reasoning 不动，切回 pending 时无损还原
+          }))
+  ```
+- **为什么这样改：** root cause 是用「覆盖 presenter 字段」标记完成，既丢数据又把状态和分配耦合。让 `task.status` 作为完成态唯一真相源，presenter 独立保留，状态来回切换无损。
+- **收益：** ① 任务状态来回切换分工完全还原；② 已完成任务在矩阵里仍能看到原分工；③ `_work_from` 用 `completed_ids` 集合跳过，不再依赖魔法字符串。
+
+### 健壮性提升（P1）
+
+**3. enhance 偷偷搬运负责人，与 docstring/提示词矛盾（v3.5 修复）**
+- **问题：** docstring 写「保留 LLM 分配」，函数体却无条件调 `_balance_workload` 搬运负责人。
+- **修改后：** 仅在 gap > threshold 时才触发均衡，且先修回避冲突（把回避者换到最合适的非回避成员），均衡后 `_resync_scores` 让 score/reasoning 与最终 presenter 一致。
+- **收益：** ① enhance 以 LLM 分配为基准，仅必要时校正；② 回避者在 enhance 路径也被纠偏；③ 提示词（MATCHER_SYSTEM）如实说明「系统会校正但以你为基准」。
+
+**4. LLM 调用健壮性加固（v3.5/v3.6 合并）**
+- **问题：** 配额耗尽被当瞬时限流反复重试、空 API key 挂死网络、ASCII 屏蔽词误伤 upload/download、Planner 兜底固定 5 阶段淹没小团队、`/api/save` 同名覆盖历史计划。
+- **修改后：** ①配额耗尽 `insufficient_quota` 立即失败不重试；②空 key 秒退走兜底；③ASCII 屏蔽词加 `\b` 单词边界；④兜底按总产能自适应 3/4/5 阶段；⑤`/api/save` 同名追加计数后缀。
+- **收益：** ①配额耗尽给出可操作提示；②测试/未配置环境稳定；③正常英文词不被误删；④小团队兜底计划合理；⑤历史计划不被同名覆盖。
+
+### 打磨（P3）
+
+**5. 工程可复现性 + 文档同步（v3.6 修复）**
+- **问题：** 干净环境无 `pytest.ini` 导致 `@pytest.mark.asyncio` 用例报错；文档测试计数三处互相矛盾（45/24/53）。
+- **修改后：** ①新增 `pytest.ini`（`asyncio_mode=auto`）；②统一测试计数为 80。
+
+### 队友改动说明
+
+本版本基于队友的 v4.6（`origin/main`），完整保留其全部新功能：
+- v4.0–v4.6：文件上传分析、任务拆解工作流、`project_service.py` 业务分层、反思 agent、长课程手册解析、AI JSON 容错。
+- `assign_with_balance` 的多因子打分（技能 0.55 + 总负载 0.20 + 阶段负载 0.15 + 剩余产能 0.10）。
+
+本版本在其基础上的增强：将 v3.5–v3.8 独立发展线的算法修复移植过来，与队友的多因子打分融合——`_balance_workload` 增加全局重排 + 回避门槛，`enhance` 改为条件式均衡，`recompute_preserve` 保留原分工，`_fallback_plan` 自适应阶段数。
+
+---
+
 ## v4.6 —— 任务与附属限制分离、AI JSON 本地容错（2026-07-19）
 
 **定位：** 禁止把“命令行即可、不要求图形界面”等实现限制生成新任务，并让轻微不规范的 AI JSON 无需再次请求即可本地修复。

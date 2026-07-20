@@ -307,5 +307,6 @@ def test_coordinator_planner_fallback():
     )
     # Should NOT raise RuntimeError
     result = coord.run(inp)
-    assert len(result.plan.tasks) == 5  # fallback plan has 5 tasks
+    # 小团队（总产能 ≤ 30h）自适应缩为 3 阶段
+    assert len(result.plan.tasks) == 3
     assert "fallback" in result.plan.summary.lower() or "兜底" in result.plan.summary

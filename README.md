@@ -1,6 +1,6 @@
-# 小组合作智能体 — 课程作业
+# 小组合作智能体
 
-**版本：v4.6** | 最后更新：2026-07-19（任务与附属限制分离、AI JSON 本地容错）
+**版本：v4.7** | 最后更新：2026-07-20（合入 v3.5-v3.8 算法修复：负载均衡全局重排、状态切换分工保留、健壮性加固）
 
 ## v4.6 任务短句与 AI 返回容错
 
@@ -65,15 +65,17 @@ OpenAI 兼容适配层可把自然语言转换为同一组 `DraftOperation` 或�
 清小搭适配层 ┘          （未来实现 /v1/models 与 /v1/chat/completions）
 ```
 
-## v2.0 更新亮点（2026-07-16 深度审查修复）
+## v4.7 算法修复合入（2026-07-20）
 
-本次版本针对全量代码审查发现的 30 项问题进行系统性修复：
+v4.x 系列在 v3.4 基础上发展，本版本将 v3.5–v3.8 的核心算法修复移植过来：
 
-- **工时链路打通**：每日工时真正驱动规划，不再有硬编码的假产能。
-- **排期更现实**：CPM 改为半天粒度，小任务不再被放大成整天；起始日不会排到过去。
-- **导出完整可用**：支持 Markdown / Word / PDF 三种格式导出，普通用户可直接打印。
-- **状态闭环**：标记任务「完成/阻塞」会实时重算排期与分工，不再只是视觉标记。
-- **安全加固**：修复路径穿越、空成员、负载误报等问题。
+- **负载均衡跳出局部最优**：贪心卡住时触发全局联合枚举重排（负责人+主要协助），工时差距从 6h+ 收敛到 ≤1h。
+- **状态切换不再丢失分工**：已完成任务保留原负责人/主要协助/辅助协助，来回切换完全还原（分工和匹配度都不变）。
+- **负向技能识别**：标注「不想做PPT」的成员不再被派去做PPT，负责人候选排除明确回避者。
+- **enhance 条件式均衡**：仅在 gap 超 1h 时才搬运负责人，以 LLM 分配为基准，避免无谓改动。
+- **健壮性加固**：LLM 配额耗尽快速失败、空 API key 秒退兜底、Structured Output 降级、`/api/save` 去重防覆盖。
+- **兜底自适应**：Planner 不可用时按团队产能生成 3–5 阶段，小团队不再被 5 阶段淹没。
+- **初始分配多因子打分**：技能匹配(0.55) + 总负载(0.20) + 阶段负载(0.15) + 剩余产能(0.10)，并尊重成员的阶段偏好。
 
 详见 [CHANGELOG.md](CHANGELOG.md)。
 
@@ -112,28 +114,6 @@ AssignmentInput (课程 / 成员 / 截止日 / 每日工时)
 | Reporter | 全部结果 -> 答辩报告 | LLM | 纯文本拼接兜底 |
 
 **设计原则**：LLM 负责创造性拆解，确定性算法负责正确性保证（关键路径、技能评分、负载均衡、依赖校验）。每个 Agent 失败都有兜底，主链路永不中断。
-
-## 当前进度（截至 2026-07-14）
-
-| 编号 | 模块 | 状态 | 负责人 | 说明 |
-|------|------|------|--------|------|
-| Step 0 | JSON 接口契约 (`schemas.py`) | ✅ done | B | 含 B3/B4 扩展模型，v0.3 新增 `daily_available_hours` |
-| A1 | LLM 调用封装 (`client.py`) | ✅ done | B | Structured Output + 重试 |
-| A2 | Coordinator 主链路 (`coordinator.py`) | ✅ done | B | v0.3 成员信息透传 Timeline + Planner |
-| A5 | FastAPI + Web (`main.py`/`routes.py`/`index.html`) | ✅ done | B | v0.3 全新 UI + 答辩模拟接口 |
-| A3/A4 | Matcher（QA矩阵） | ✅ done | B+C | LLM + B3 评分增强 + 成员名校验 + sanitize 修复 |
-| — | Timeline Agent (`timeline.py`) | ✅ done | B | v0.3 CPM + **成员级日工时折算**，环容错 |
-| — | Reporter Agent (`reporter.py`) | ✅ done | B | LLM + 纯文本兜底 |
-| B1 | 答辩模拟 Agent (`interview_sim.py`) | ✅ done | B | 5 维度，优先级标注，v0.3 接入 Web API |
-| B2 | Memory (`routes.py` save/load/list/delete) | ✅ done | B | 计划持久化 + Web 管理 |
-| **B3** | **完整角色匹配 (`scoring.py`)** | ✅ **done** | B | 技能相似度评分 + 负载均衡 + workload |
-| **B4** | **协作图动态编辑 (`editor.py`)** | ✅ **done** | B | add/remove/update + 重算 |
-| — | Prompt 模板 (`prompts.py`) | ✅ done | B | v0.3 全量重构：结构化 Prompt Engineering |
-| — | 进度追踪（前端进度条 + 状态联动） | ✅ done | B | v1.2 新增 |
-| — | 突发情况处理（成员退出/工时变更） | ✅ done | B | v1.0 实现 + v1.2 补测试 |
-| — | Planner Agent | skeleton | A | 骨架 + Planner 兜底已就位（LLM 失败时生成 5 阶段计划），Prompt 待 A 调优 |
-| — | CLI 单 Agent 调试 (`cli.py`) | ✅ done | B | v1.1 新增：planner/matcher/timeline/reporter/interview/full |
-| — | 测试 (45 个) | ✅ done | B | CPM/Scoring/Editor/Coordinator/API 全覆盖 |
 
 ## 近期变更
 
@@ -262,7 +242,7 @@ competition/
 │       ├── routes.py         # FastAPI 路由（run/edit/save/load/interview）
 │       ├── templates/index.html  # TailwindCSS + Lucide + Tab 布局
 │       └── static/style.css  # 补充样式
-├── tests/                    # 45 个单元/集成测试
+├── tests/                    # 80 个单元/集成测试
 ├── memory/                   # B2 计划持久化
 ├── docs/                     # 项目文档
 └── requirements.txt
@@ -293,14 +273,6 @@ competition/
 | DELETE | `/api/plans/{filename}` | B2：删除计划 |
 | GET | `/api/health` | 健康检查 |
 
-## 三人分工
-
-| 人 | 角色 | 端到端负责 | 占比 |
-|---|---|---|---|
-| **B** | 软件工程 | 骨架 + LLM封装 + Coordinator + Timeline + Reporter + Matcher增强(B3) + 动态编辑(B4) + Web + Memory(B2) + 答辩模拟(B1) + Prompt + 测试 | ~55% |
-| **A** | Agent 设计 | **Planner**：Prompt 调优 + 输出质量（校验兜底已由 B 提供） | ~22% |
-| **C** | 知识增强 | **Matcher QA 矩阵**：Prompt + 可解释性（评分增强已由 B 提供） | ~23% |
-
 ## 快速启动
 
 ```bash
@@ -312,7 +284,7 @@ python -m app.main     # 默认 http://127.0.0.1:8000
 ## 运行测试
 
 ```bash
-python -m pytest -v    # 45 passed
+python -m pytest -v    # 80 passed
 ```
 
 ## 分支策略
