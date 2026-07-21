@@ -228,9 +228,9 @@ python -m app.main     # 默认 http://127.0.0.1:8000
 python -m pytest -v    # 80 passed
 ```
 
-## 分支策略
+## 协作方式
 
-详见 [BRANCHES.md](BRANCHES.md)。每人一个独享分支，只有 B 合并 `main`，每天至少集成一次。
+三人轮流负责，每人在自己负责的时间段内可以直接在 main 上做大改。交接前确保 git pull 拉到最新版本，改完 git push 即可。
 
 ## 提交范围
 
