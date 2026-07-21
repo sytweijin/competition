@@ -1,0 +1,137 @@
+[
+  {
+    "id": "confirm-submit",
+    "label": "确认、检查与提交",
+    "keywords": ["确认", "检查", "提交", "发布", "上传", "登记"],
+    "base_hours": 0.75,
+    "min_hours": 0.5,
+    "max_hours": 1.5,
+    "reason": "已有成果的确认、检查或提交通常只需要半小时到一个半小时。"
+  },
+  {
+    "id": "review-revise",
+    "label": "审核与一轮修改",
+    "keywords": ["审核", "审校", "校对", "修改", "复核", "验收"],
+    "base_hours": 1.5,
+    "min_hours": 1.0,
+    "max_hours": 3.0,
+    "reason": "针对已有成果进行一轮审核和修改，通常不应按从零制作估算。"
+  },
+  {
+    "id": "organize-materials",
+    "label": "资料整理",
+    "keywords": ["资料整理", "整理资料", "归档", "素材整理", "记录整理", "录入"],
+    "base_hours": 2.0,
+    "min_hours": 1.0,
+    "max_hours": 4.0,
+    "reason": "常规资料分类、命名和归档一般为轻量任务；大量录音转写另行增加工时。"
+  },
+  {
+    "id": "collect-information",
+    "label": "资料搜集与简单调研",
+    "keywords": ["搜集", "收集", "检索", "资料采集", "文献", "政策"],
+    "base_hours": 3.0,
+    "min_hours": 1.5,
+    "max_hours": 5.0,
+    "reason": "围绕明确主题完成资料搜集和初步筛选，通常需要一点五到五小时。"
+  },
+  {
+    "id": "research-design",
+    "label": "调研或活动方案设计",
+    "keywords": ["调研方案", "调研提纲", "问卷设计", "访谈问题", "活动方案", "任务清单", "策划"],
+    "base_hours": 3.0,
+    "min_hours": 2.0,
+    "max_hours": 5.0,
+    "reason": "目标明确的方案、提纲或问题清单通常可在二到五小时内完成。"
+  },
+  {
+    "id": "field-research",
+    "label": "现场调研与素材采集",
+    "keywords": ["现场调研", "实地调研", "开展调研", "现场任务", "走访", "访谈", "问卷采集"],
+    "base_hours": 6.0,
+    "min_hours": 4.0,
+    "max_hours": 8.0,
+    "reason": "单次半天到一天的现场调研通常需要四到八人时；明确多日时按天数调整。"
+  },
+  {
+    "id": "short-writing",
+    "label": "短文案或千字总结",
+    "keywords": ["文案", "感想", "心得", "短文", "个人总结", "总结报告"],
+    "base_hours": 2.5,
+    "min_hours": 1.5,
+    "max_hours": 4.0,
+    "reason": "结构清楚、资料齐全的短文案或约千字总结通常需要一点五到四小时。"
+  },
+  {
+    "id": "research-report",
+    "label": "研究或调研报告",
+    "keywords": ["调研报告", "研究报告", "论文", "报告撰写", "撰写报告"],
+    "base_hours": 8.0,
+    "min_hours": 5.0,
+    "max_hours": 14.0,
+    "reason": "需要分析材料、形成结论并引用来源的正式报告，应明显高于普通总结。"
+  },
+  {
+    "id": "ppt",
+    "label": "汇报 PPT",
+    "keywords": ["PPT", "幻灯片", "汇报材料", "演示文稿"],
+    "base_hours": 4.0,
+    "min_hours": 2.5,
+    "max_hours": 6.0,
+    "reason": "资料齐全的常规课程汇报 PPT 通常需要二点五到六小时。"
+  },
+  {
+    "id": "layout",
+    "label": "图文排版",
+    "keywords": ["排版", "秀米", "版式", "格式调整", "美化"],
+    "base_hours": 2.0,
+    "min_hours": 1.0,
+    "max_hours": 3.5,
+    "reason": "内容和素材已经准备好时，常规图文排版通常是一到三个半小时。"
+  },
+  {
+    "id": "image-processing",
+    "label": "图片筛选与处理",
+    "keywords": ["图片处理", "照片处理", "图片筛选", "选片", "修图"],
+    "base_hours": 2.5,
+    "min_hours": 1.5,
+    "max_hours": 4.0,
+    "reason": "小批量图片筛选和基础处理通常需要一点五到四小时。"
+  },
+  {
+    "id": "video-editing",
+    "label": "短视频剪辑",
+    "keywords": ["视频剪辑", "剪辑", "字幕", "Vlog", "短视频"],
+    "base_hours": 6.0,
+    "min_hours": 4.0,
+    "max_hours": 10.0,
+    "reason": "素材齐全的课程短视频剪辑通常需要四到十小时，长片或复杂特效另算。"
+  },
+  {
+    "id": "software-feature",
+    "label": "单个软件功能",
+    "keywords": ["开发", "实现功能", "编程", "接口", "模块开发", "搭建"],
+    "base_hours": 6.0,
+    "min_hours": 3.0,
+    "max_hours": 10.0,
+    "reason": "边界明确的单个课程项目功能通常需要三到十小时；完整系统应继续拆分。"
+  },
+  {
+    "id": "testing",
+    "label": "测试与联调",
+    "keywords": ["测试", "联调", "调试", "缺陷修复"],
+    "base_hours": 3.0,
+    "min_hours": 2.0,
+    "max_hours": 6.0,
+    "reason": "边界明确的小型课程项目测试与联调通常需要二到六小时。"
+  },
+  {
+    "id": "presentation-rehearsal",
+    "label": "答辩演练",
+    "keywords": ["答辩", "演练", "试讲", "彩排"],
+    "base_hours": 2.0,
+    "min_hours": 1.0,
+    "max_hours": 3.0,
+    "reason": "一次汇报分工确认和一到两轮演练通常需要一到三小时。"
+  }
+]

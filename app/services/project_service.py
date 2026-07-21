@@ -14,6 +14,7 @@ from app.models.schemas import (
     AssignmentInput, DraftOperation, FullPlan, ManualAssignmentRequest,
     PlanOutput, QAAssignment, QAOutput, ReportOutput, SubTask,
 )
+from app.services.duration_estimator import calibrate_plan_estimates
 
 
 class ProjectServiceError(ValueError):
@@ -23,7 +24,8 @@ class ProjectServiceError(ValueError):
 def generate_draft(inp: AssignmentInput, use_ai: bool = True) -> PlanOutput:
     if use_ai:
         return Coordinator().draft(inp)
-    return Coordinator._fallback_plan(inp, "快速模式")
+    return calibrate_plan_estimates(
+        Coordinator._fallback_plan(inp, "快速模式"))
 
 
 def mutate_draft(plan: PlanOutput, operations: list[DraftOperation]) -> PlanOutput:

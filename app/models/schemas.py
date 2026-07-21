@@ -91,6 +91,12 @@ class SubTask(BaseModel):
     name: str
     description: str = ""
     estimated_hours: float = Field(default=0.0, description="预估工时（人时）")
+    estimate_min_hours: Optional[float] = Field(
+        default=None, description="知识库建议工时下限")
+    estimate_max_hours: Optional[float] = Field(
+        default=None, description="知识库建议工时上限")
+    estimate_reason: str = Field(default="", description="工时估算依据")
+    estimate_confidence: str = Field(default="", description="工时估算可信度")
     dependencies: list[str] = Field(default_factory=list,
                                     description="依赖的其他任务 ID 列表")
     required_skills: list[str] = Field(default_factory=list)
