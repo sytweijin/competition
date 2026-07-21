@@ -133,5 +133,14 @@
     "min_hours": 1.0,
     "max_hours": 3.0,
     "reason": "一次汇报分工确认和一到两轮演练通常需要一到三小时。"
+  },
+  {
+    "id": "meeting-organization",
+    "label": "讲座或研讨会组织",
+    "keywords": ["讲座", "研讨会", "会议组织", "会议记录", "座谈会"],
+    "base_hours": 2.0,
+    "min_hours": 1.0,
+    "max_hours": 4.0,
+    "reason": "已有主题和参与人员时，单次讲座或研讨会的联络、组织与记录通常需要一到四小时。"
   }
 ]

@@ -51,6 +51,51 @@ def test_assign_empty_returns_empty():
     assert out.assignments == []
 
 
+def test_default_assignment_keeps_gap_within_two_hours_when_possible():
+    plan = PlanOutput(tasks=[
+        SubTask(id=f"T{i}", name=f"通用任务{i}", estimated_hours=4)
+        for i in range(1, 7)
+    ], summary="t")
+    members = [TeamMember(name=name) for name in ("A", "B", "C")]
+    out = assign_with_balance(plan, members)
+    gap = max(out.workload.values()) - min(out.workload.values())
+    assert gap <= 2.0
+
+
+def test_impossible_two_hour_balance_returns_split_suggestion():
+    plan = PlanOutput(tasks=[
+        SubTask(id="T1", name="大任务", estimated_hours=12,
+                required_skills=["专项技能"]),
+        SubTask(id="T2", name="小任务", estimated_hours=2),
+    ], summary="t")
+    members = [
+        TeamMember(name="A", skill_tags=["专项技能"]),
+        TeamMember(name="B"),
+        TeamMember(name="C"),
+    ]
+    out = assign_with_balance(plan, members)
+    gap = max(out.workload.values()) - min(out.workload.values())
+    assert gap > 2.0
+    assert "超过 2h" in out.note
+    assert "建议拆分" in out.note
+
+
+def test_balance_does_not_assign_avoided_skill_to_presenter():
+    plan = PlanOutput(tasks=[
+        SubTask(id="T1", name="制作PPT", estimated_hours=8,
+                required_skills=["PPT"]),
+        SubTask(id="T2", name="整理资料", estimated_hours=2),
+    ], summary="t")
+    members = [
+        TeamMember(name="A", skill_tags=["PPT"]),
+        TeamMember(name="B", skill_tags=["不想做PPT"]),
+    ]
+    out = assign_with_balance(plan, members)
+    ppt = next(item for item in out.assignments if item.task_id == "T1")
+    assert ppt.presenter == "A"
+    assert "B" not in (ppt.qa_primary, *(ppt.qa_support or []))
+
+
 def test_enhance_keeps_llm_picks_adds_scores():
     plan = PlanOutput(tasks=[
         SubTask(id="T1", name="前端", estimated_hours=8, required_skills=["前端"]),

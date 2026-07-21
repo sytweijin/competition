@@ -14,7 +14,9 @@ from app.models.schemas import (
     AssignmentInput, DraftOperation, FullPlan, ManualAssignmentRequest,
     PlanOutput, QAAssignment, QAOutput, ReportOutput, SubTask,
 )
-from app.services.duration_estimator import calibrate_plan_estimates
+from app.services.duration_estimator import (
+    calibrate_plan_estimates, record_duration_feedback,
+)
 
 
 class ProjectServiceError(ValueError):
@@ -47,7 +49,16 @@ def mutate_draft(plan: PlanOutput, operations: list[DraftOperation]) -> PlanOutp
         elif operation.op == "update":
             if operation.task_id not in by_id or operation.task is None:
                 raise ProjectServiceError("修改任务时必须提供有效 task_id 和 task")
-            tasks = [operation.task if t.id == operation.task_id else t for t in tasks]
+            original = by_id[operation.task_id]
+            updated = operation.task
+            if record_duration_feedback(original, updated):
+                updated = updated.model_copy(update={
+                    "estimate_reason": (
+                        f"用户已将知识库建议的 {original.estimated_hours:g}h"
+                        f"调整为 {updated.estimated_hours:g}h；本次采用用户值。"),
+                    "estimate_confidence": "用户已确认",
+                })
+            tasks = [updated if t.id == operation.task_id else t for t in tasks]
         elif operation.op == "remove":
             if operation.task_id not in by_id:
                 raise ProjectServiceError(f"任务不存在：{operation.task_id}")

@@ -71,6 +71,25 @@ def test_reorder_requires_every_task():
         ])
 
 
+def test_user_hour_edit_is_marked_as_confirmed(tmp_path, monkeypatch):
+    from app.services import duration_estimator
+
+    monkeypatch.setattr(
+        duration_estimator, "_FEEDBACK_PATH", tmp_path / "feedback.jsonl")
+    original = _draft().model_copy(update={
+        "tasks": [_draft().tasks[0].model_copy(update={
+            "estimate_reason": "知识库建议", "estimate_confidence": "中",
+        }), _draft().tasks[1]]
+    })
+    corrected = original.tasks[0].model_copy(update={"estimated_hours": 1})
+    result = mutate_draft(original, [
+        DraftOperation(op="update", task_id="T1", task=corrected)
+    ])
+    task = result.tasks[0]
+    assert task.estimated_hours == 1
+    assert task.estimate_confidence == "用户已确认"
+
+
 def test_manual_assignment_and_workload_share_business_rules():
     plan = _full_plan()
     result = apply_manual_assignment(ManualAssignmentRequest(

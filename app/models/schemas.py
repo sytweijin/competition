@@ -97,6 +97,8 @@ class SubTask(BaseModel):
         default=None, description="知识库建议工时上限")
     estimate_reason: str = Field(default="", description="工时估算依据")
     estimate_confidence: str = Field(default="", description="工时估算可信度")
+    required_duration_hours: Optional[float] = Field(
+        default=None, description="任务要求明确规定的活动持续时长，不等同于制作人时")
     dependencies: list[str] = Field(default_factory=list,
                                     description="依赖的其他任务 ID 列表")
     required_skills: list[str] = Field(default_factory=list)

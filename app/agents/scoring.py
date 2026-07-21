@@ -83,6 +83,7 @@ def _similar(a: str, b: str) -> float:
 PRESENTER_RATIO = 1.0
 QA_PRIMARY_RATIO = 0.3
 QA_SUPPORT_RATIO = 0.15
+DEFAULT_BALANCE_THRESHOLD_HOURS = 2.0
 
 # 集中定义，便于后续调参。最终分数越高越优。
 ASSIGNMENT_WEIGHTS = {
@@ -116,6 +117,15 @@ def skill_score(member: TeamMember, required_skills: list[str]) -> float:
     return round(total / len(required_skills), 3)
 
 
+def _avoids_required(member: TeamMember | None,
+                     required_skills: list[str]) -> bool:
+    if member is None or not required_skills:
+        return False
+    _, avoided = _split_tags(member.skill_tags)
+    return any(_similar(req, neg) >= 0.6
+               for req in required_skills for neg in avoided)
+
+
 
 def _work_from(assignments, task_hours, members):
     """按最终分配精确计算每人负载。"""
@@ -133,13 +143,17 @@ def _work_from(assignments, task_hours, members):
     return w
 
 
-def _balance_workload(assignments, task_hours, members, threshold=1.0, max_passes=500):
+def _balance_workload(assignments, task_hours, members,
+                      threshold=DEFAULT_BALANCE_THRESHOLD_HOURS,
+                      max_passes=500, task_skills=None):
     """统一负载均衡：主讲/主答/辅答均可搬运，目标 max-min<=threshold。
 
     每步枚举所有可行搬运，用「真实重算负载」评估搬运后的全局 gap，选最小者执行；
     gap 不再下降即停。每次搬运前快照、评估后还原，杜绝近似误差。
     """
     names = [m.name for m in members]
+    member_map = {m.name: m for m in members}
+    task_skills = task_skills or {}
 
     def gap_of(w):
         vals = list(w.values())
@@ -151,6 +165,13 @@ def _balance_workload(assignments, task_hours, members, threshold=1.0, max_passe
     def restore(a, snap):
         a.presenter, a.qa_primary, sup = snap[0], snap[1], list(snap[2])
         a.qa_support = sup
+
+    def avoids(member_name, task_id):
+        member = member_map.get(member_name)
+        required = task_skills.get(task_id, [])
+        if member is None or not required:
+            return False
+        return _avoids_required(member, required)
 
     for _ in range(max_passes):
         gap = gap_of(_work_from(assignments, task_hours, members))
@@ -167,6 +188,20 @@ def _balance_workload(assignments, task_hours, members, threshold=1.0, max_passe
             for t in names:
                 if t == cur_p:
                     continue
+                required = task_skills.get(a.task_id, [])
+                target_member = member_map.get(t)
+                current_member = member_map.get(cur_p)
+                if required and target_member is not None:
+                    if avoids(t, a.task_id):
+                        continue
+                    target_skill = skill_score(target_member, required)
+                    current_skill = (
+                        skill_score(current_member, required)
+                        if current_member is not None else 0.0)
+                    # 均衡不能以明显破坏专业匹配为代价。
+                    if ((current_skill > 0 and target_skill <= 0)
+                            or target_skill < current_skill - 0.35):
+                        continue
                 a.presenter = t
                 ng = gap_of(_work_from(assignments, task_hours, members))
                 if ng < best_gap - 1e-12:
@@ -176,6 +211,8 @@ def _balance_workload(assignments, task_hours, members, threshold=1.0, max_passe
             if cur_q:
                 for t in names:
                     if t in (cur_p, cur_q):
+                        continue
+                    if avoids(t, a.task_id):
                         continue
                     a.qa_primary = t
                     if t in (a.qa_support or []):
@@ -188,6 +225,8 @@ def _balance_workload(assignments, task_hours, members, threshold=1.0, max_passe
             for owner in cur_s:
                 for t in names:
                     if t in (cur_p, cur_q) or t in cur_s:
+                        continue
+                    if avoids(t, a.task_id):
                         continue
                     a.qa_support = [x for x in cur_s if x != owner] + [t]
                     ng = gap_of(_work_from(assignments, task_hours, members))
@@ -208,7 +247,8 @@ def _balance_workload(assignments, task_hours, members, threshold=1.0, max_passe
             a.qa_support = [x for x in (a.qa_support or []) if x != owner] + [t]
     return _work_from(assignments, task_hours, members)
 
-def _split_suggestion(work, assignments, task_hours, members, threshold=1.0):
+def _split_suggestion(work, assignments, task_hours, members,
+                      threshold=DEFAULT_BALANCE_THRESHOLD_HOURS):
     """均衡后 gap 仍超阈值时，给"建议拆分超载成员最大任务"的提示。
 
     当任务结构本身无法在成员间均摊（如 5 个 5h 任务给 3 人，必有人扛 2 个），
@@ -232,13 +272,14 @@ def _split_suggestion(work, assignments, task_hours, members, threshold=1.0):
     if h <= 0:
         return ""
     return (f" 建议拆分 {over_name} 的 {a.task_name}（{h:.1f}h），"
-            f"当前成员最大工时差 {gap:.1f}h 超过 1h，任务结构无法在 3 人间均摊")
+            f"当前成员最大工时差 {gap:.1f}h 超过 {threshold:g}h，"
+            f"任务结构无法在 {len(members)} 人间均摊")
 
 def assign_with_balance(plan: PlanOutput,
                         members: list[TeamMember]) -> QAOutput:
     """确定性任务分配 + 负载均衡 v2.1
 
-    负载差距 <= 1h 时停止调整
+    默认尽量把成员负载差控制在 2h 内，同时保护专业匹配和负向偏好。
     """
     if not members or not plan.tasks:
         return QAOutput(assignments=[], note="B3确定性兜底+超载校正")
@@ -281,7 +322,11 @@ def assign_with_balance(plan: PlanOutput,
             stage_work[presenter].get(t.execution_stage, 0.0) + t.estimated_hours)
 
         # 主答：剩余成员中「负载最轻」者优先（匹配度作同负载时的次序）
-        rest = [(n, skill) for n, skill, _ in scored if n != presenter]
+        rest = [
+            (n, skill) for n, skill, _ in scored
+            if n != presenter
+            and not _avoids_required(member_map.get(n), t.required_skills)
+        ]
         rest.sort(key=lambda x: (work[x[0]], -x[1]))
         primary = rest[0][0] if rest else ""
         if primary and primary != presenter:
@@ -309,7 +354,15 @@ def assign_with_balance(plan: PlanOutput,
     # P1-2: 全员参与兜底——0 负载成员先补一个辅答角色，再进入均衡（避免兜底破坏均衡结果）
     zero_load = [n for n, h in work.items() if h <= 0]
     for n in zero_load:
-        active = [a for a in assignments if a.presenter != "(已完成)" and n not in (a.qa_support or [])]
+        active = [
+            a for a in assignments
+            if a.presenter != "(已完成)"
+            and n not in (a.qa_support or [])
+            and not _avoids_required(
+                member_map.get(n),
+                all_task_map.get(a.task_id).required_skills
+                if all_task_map.get(a.task_id) else [])
+        ]
         if not active:
             continue
         target = max(active, key=lambda a: task_hours.get(a.task_id, 0.0))
@@ -319,8 +372,28 @@ def assign_with_balance(plan: PlanOutput,
             target.qa_support.append(n)
             work[n] += task_hours.get(target.task_id, 0.0) * QA_SUPPORT_RATIO
 
-    # 保留专业匹配结果，不做会破坏技能匹配的强制 1h 拉平。
-    work = _work_from(assignments, task_hours, members)
+    # 在不明显破坏技能匹配、不违反负向偏好的前提下，将默认负载差
+    # 尽量控制在 2h 内。
+    original_presenters = {a.task_id: a.presenter for a in assignments}
+    task_skills = {t.id: t.required_skills for t in active_tasks}
+    work = _balance_workload(
+        assignments, task_hours, members,
+        threshold=DEFAULT_BALANCE_THRESHOLD_HOURS,
+        task_skills=task_skills,
+    )
+    for assignment in assignments:
+        old_presenter = original_presenters.get(assignment.task_id)
+        if assignment.presenter in member_map:
+            assignment.score = skill_score(
+                member_map[assignment.presenter],
+                task_skills.get(assignment.task_id, []),
+            )
+        if old_presenter and assignment.presenter != old_presenter:
+            assignment.reasoning = (
+                f"为将默认负载差控制在 {DEFAULT_BALANCE_THRESHOLD_HOURS:g}h 内，"
+                f"在技能匹配允许范围内由 {old_presenter} 调整为"
+                f" {assignment.presenter}"
+            )
 
 
     # overload detection
@@ -331,11 +404,13 @@ def assign_with_balance(plan: PlanOutput,
             overload_warnings.append(
                 f"{name} 负载 {hours:.1f}h 超过可用 {m.available_hours:.1f}h"
             )
-    note = "B3确定性兜底 + 超载校正 v2.1"
+    note = "B3确定性兜底 + 2h负载均衡 v2.2"
     if overload_warnings:
         note += " 超载警告: " + "; ".join(overload_warnings)
     # 均衡后仍失衡（任务结构限制）：给出拆分建议而非自动改动计划
-    note += _split_suggestion(work, assignments, task_hours, members, threshold=1.0)
+    note += _split_suggestion(
+        work, assignments, task_hours, members,
+        threshold=DEFAULT_BALANCE_THRESHOLD_HOURS)
 
     return QAOutput(assignments=assignments, workload=work, note=note)
 def _fmt(tags: list[str]) -> str:
@@ -425,8 +500,25 @@ def enhance(qa: QAOutput, plan: PlanOutput,
             score = skill_score(member_map[a.presenter], t.required_skills)
         enhanced.append(a.model_copy(update={"score": round(score, 3)}))
 
-    # 负载均衡：主讲/主答/辅答统一搬运，目标 max-min<=1h
-    work = _balance_workload(enhanced, task_hours, members, threshold=1.0)
+    # 负载均衡：主讲/主答/辅答统一搬运，默认目标 max-min<=2h。
+    original_presenters = {a.task_id: a.presenter for a in enhanced}
+    work = _balance_workload(
+        enhanced, task_hours, members,
+        threshold=DEFAULT_BALANCE_THRESHOLD_HOURS,
+        task_skills={t.id: t.required_skills for t in plan.tasks},
+    )
+    for assignment in enhanced:
+        task = task_map.get(assignment.task_id)
+        previous = original_presenters.get(assignment.task_id)
+        if task is not None and assignment.presenter in member_map:
+            assignment.score = skill_score(
+                member_map[assignment.presenter], task.required_skills)
+        if previous and assignment.presenter != previous:
+            assignment.reasoning = (
+                f"为将默认负载差控制在 {DEFAULT_BALANCE_THRESHOLD_HOURS:g}h 内，"
+                f"在技能匹配允许范围内由 {previous} 调整为"
+                f" {assignment.presenter}"
+            )
 
 
     # 负载失衡/超载检测（在均衡后计算，避免过期警告）
@@ -440,6 +532,8 @@ def enhance(qa: QAOutput, plan: PlanOutput,
     if imbalance:
         note += "；负载警告：" + "；".join(imbalance)
     # 均衡后仍失衡（任务结构限制）：给出拆分建议而非自动改动计划
-    note += _split_suggestion(work, enhanced, task_hours, members, threshold=1.0)
+    note += _split_suggestion(
+        work, enhanced, task_hours, members,
+        threshold=DEFAULT_BALANCE_THRESHOLD_HOURS)
     return qa.model_copy(update={
         "assignments": enhanced, "workload": work, "note": note})
