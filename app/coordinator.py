@@ -27,6 +27,9 @@ from app.agents.timeline import TimelineAgent
 from app.agents.reporter import ReporterAgent
 from app.agents.reflection import ReflectionAgent
 from app.file_analysis import _classify_requirement_unit, _strip_dangling_brackets
+from app.services.duration_estimator import (
+    build_duration_context, calibrate_plan_estimates,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +54,7 @@ class Coordinator:
             logger.warning("Planner LLM failed, use deterministic fallback: %s",
                            plan.message)
             plan = self._fallback_plan(inp, plan.message)
+        plan = calibrate_plan_estimates(plan)
 
         # Step 2: Matcher（B3：LLM + 确定性评分兜底）
         qa_matrix = self._step_matcher(plan, inp.members)
@@ -91,6 +95,7 @@ class Coordinator:
         plan = self._step_planner(inp)
         if isinstance(plan, AgentError):
             plan = self._fallback_plan(inp, plan.message)
+        plan = calibrate_plan_estimates(plan)
         start = inp.default_start_date
         end = inp.default_end_date or inp.deadline
         tasks = []
@@ -149,6 +154,12 @@ class Coordinator:
         extra = "\n".join(
             item for item in (inp.additional_requirements, inp.requirements, extracted)
             if item and item.strip())
+        duration_query = " ".join((
+            inp.course.name, inp.course.description, inp.background,
+            inp.requirements, inp.additional_requirements, extracted,
+        ))
+        duration_context = build_duration_context(duration_query)
+        extra = "\n\n".join(item for item in (extra, duration_context) if item)
         return self.planner.run(
             course_name=inp.course.name,
             course_description=inp.course.description,
@@ -291,20 +302,19 @@ class Coordinator:
                     f"{_friendly_fallback_cause(error_msg)}；文件解析正常，"
                     "系统已自动使用本地规则继续生成，未丢失上传文件。"))
 
-        # 团队总产能（默认 3 人 × 20h = 60h 作为基准）
-        total_capacity = sum(m.available_hours for m in inp.members) or 60.0
-        scale = max(0.5, min(2.0, total_capacity / 60.0))
+        # 工时由任务本身的范围决定。团队产能只供后续 Reflection 判断
+        # 是否超载，不得反向放大或压缩同一项工作的预计人时。
         base_hours = {0: (4, "需求分析与调研", ["调研", "文档"]),
                       1: (6, "方案设计与技术选型", ["设计", "架构"]),
                       2: (8, "核心模块开发", ["开发", "编程"]),
                       3: (6, "测试与联调", ["测试", "调试"]),
                       4: (4, "文档撰写与答辩准备", ["文档", "PPT"])}
         # 按团队总产能自适应阶段数：小团队砍掉测试/文档，保留核心链路
+        total_capacity = sum(m.available_hours for m in inp.members)
         num_stages = 3 if total_capacity <= 30 else (4 if total_capacity <= 60 else 5)
         tasks: list[SubTask] = []
         for i in range(num_stages):
             hours, name, skills = base_hours[i]
-            hours = round(hours * scale)
             deps = [tasks[i - 1].id] if i > 0 else []
             tasks.append(SubTask(
                 id=f"T{i + 1}",
