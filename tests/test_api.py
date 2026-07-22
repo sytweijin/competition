@@ -203,11 +203,12 @@ async def test_confirm_draft_assigns_members(client):
 @pytest.mark.asyncio
 async def test_workload_returns_snapshot(client):
     """工作量快照应正确统计各成员工时。"""
+    draft_resp = await client.post("/api/draft", json={
+        "input": _sample_course_input(), "use_ai": False
+    })
     confirm_payload = {
         "input": _sample_course_input(),
-        "plan": (await (await client.post("/api/draft", json={
-            "input": _sample_course_input(), "use_ai": False
-        })).json())["plan"],
+        "plan": draft_resp.json()["plan"],
     }
     plan_resp = await client.post("/api/confirm-draft", json=confirm_payload)
     full_plan = plan_resp.json()
@@ -225,11 +226,12 @@ async def test_workload_returns_snapshot(client):
 @pytest.mark.asyncio
 async def test_manual_assignment_updates_owner(client):
     """手动指定负责人后应正确反映在结果中。"""
+    draft_resp = await client.post("/api/draft", json={
+        "input": _sample_course_input(), "use_ai": False
+    })
     confirm_payload = {
         "input": _sample_course_input(),
-        "plan": (await (await client.post("/api/draft", json={
-            "input": _sample_course_input(), "use_ai": False
-        })).json())["plan"],
+        "plan": draft_resp.json()["plan"],
     }
     plan_resp = await client.post("/api/confirm-draft", json=confirm_payload)
     full_plan = plan_resp.json()
@@ -255,11 +257,12 @@ async def test_manual_assignment_updates_owner(client):
 @pytest.mark.asyncio
 async def test_export_markdown_returns_text(client):
     """导出 Markdown 应返回纯文本/不抛 500。"""
+    draft_resp = await client.post("/api/draft", json={
+        "input": _sample_course_input(), "use_ai": False
+    })
     confirm_payload = {
         "input": _sample_course_input(),
-        "plan": (await (await client.post("/api/draft", json={
-            "input": _sample_course_input(), "use_ai": False
-        })).json())["plan"],
+        "plan": draft_resp.json()["plan"],
     }
     plan_resp = await client.post("/api/confirm-draft", json=confirm_payload)
     full_plan = plan_resp.json()
