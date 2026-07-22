@@ -175,9 +175,6 @@ async def run_plan(req: RunRequest):
         return coordinator.run(inp)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.exception("Run failed")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ──────────── B4：动态编辑 ────────────
@@ -189,9 +186,6 @@ async def edit_plan_endpoint(req: EditPlanRequest):
         return edit_plan(req)
     except EditError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.exception("Edit failed")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ──────────── B2：Memory ────────────
@@ -199,42 +193,34 @@ async def edit_plan_endpoint(req: EditPlanRequest):
 @router.post("/save")
 async def save_plan(plan: FullPlan):
     """保存计划到 memory 目录。"""
-    try:
-        MEMORY_DIR.mkdir(parents=True, exist_ok=True)
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        # 清洗课程名中的路径分隔符等危险字符，防止路径穿越
-        raw_name = plan.input.course.name or "plan"
-        course_name = re.sub(r'[^\w\u4e00-\u9fff._-]', "_", raw_name).strip("_") or "plan"
-        filename = f"{ts}_{course_name}.json"
+    MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # 清洗课程名中的路径分隔符等危险字符，防止路径穿越
+    raw_name = plan.input.course.name or "plan"
+    course_name = re.sub(r'[^\w\u4e00-\u9fff._-]', "_", raw_name).strip("_") or "plan"
+    filename = f"{ts}_{course_name}.json"
+    filepath = MEMORY_DIR / filename
+    # 同名课程同一秒保存时追加计数后缀，避免覆盖历史计划
+    n = 1
+    while filepath.exists():
+        filename = f"{ts}_{course_name}_{n}.json"
         filepath = MEMORY_DIR / filename
-        # 同名课程同一秒保存时追加计数后缀，避免覆盖历史计划
-        n = 1
-        while filepath.exists():
-            filename = f"{ts}_{course_name}_{n}.json"
-            filepath = MEMORY_DIR / filename
-            n += 1
-        filepath.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
-        logger.info("Plan saved to %s", filepath)
-        return {"status": "ok", "filename": filename}
-    except Exception as e:
-        logger.exception("Save failed")
-        raise HTTPException(status_code=500, detail=str(e))
+        n += 1
+    filepath.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
+    logger.info("Plan saved to %s", filepath)
+    return {"status": "ok", "filename": filename}
 
 
 @router.get("/plans")
 async def list_plans(q: str = ""):
     """List saved plans with optional search filter."""
-    try:
-        files = sorted(MEMORY_DIR.glob("*.json"), reverse=True)
-        plans = []
-        for f in files:
-            if q and q.lower() not in f.name.lower():
-                continue
-            plans.append({"filename": f.name, "size": f.stat().st_size})
-        return {"plans": plans}
-    except Exception as e:
-        logger.exception("List failed")
-        raise HTTPException(status_code=500, detail=str(e))
+    files = sorted(MEMORY_DIR.glob("*.json"), reverse=True)
+    plans = []
+    for f in files:
+        if q and q.lower() not in f.name.lower():
+            continue
+        plans.append({"filename": f.name, "size": f.stat().st_size})
+    return {"plans": plans}
 
 
 @router.get("/load/{filename}")
@@ -248,9 +234,6 @@ async def load_plan(filename: str):
         return data
     except HTTPException:
         raise
-    except Exception as e:
-        logger.exception("Load failed")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.delete("/plans/{filename}")
@@ -264,9 +247,6 @@ async def delete_plan(filename: str):
         return {"status": "ok"}
     except HTTPException:
         raise
-    except Exception as e:
-        logger.exception("Delete failed")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 class InterviewRequest(BaseModel):
@@ -278,13 +258,9 @@ class InterviewRequest(BaseModel):
 @router.post("/interview")
 async def interview_sim(req: InterviewRequest):
     """B1: 答辩模拟 - 根据计划和QA矩阵生成模拟答辩问题。"""
-    try:
-        agent = InterviewSimAgent()
-        questions = agent.run(plan=req.plan, qa_matrix=req.qa_matrix, user_requirements=req.user_requirements)
-        return {"questions": questions}
-    except Exception as e:
-        logger.exception("Interview sim failed")
-        raise HTTPException(status_code=500, detail=str(e))
+    agent = InterviewSimAgent()
+    questions = agent.run(plan=req.plan, qa_matrix=req.qa_matrix, user_requirements=req.user_requirements)
+    return {"questions": questions}
 
 
 @router.post("/recompute", response_model=FullPlan)
@@ -294,98 +270,82 @@ async def recompute_plan(req: FullPlan):
     前端状态切换（completed/blocked 等）或成员变动后调用此端点，
     确保排期与分配与最新状态保持一致。
     """
-    try:
-        from app.agents.scoring import recompute_preserve
-        from app.agents.timeline import TimelineAgent
+    from app.agents.scoring import recompute_preserve
+    from app.agents.timeline import TimelineAgent
 
-        plan = req.plan
-        members = req.input.members
+    plan = req.plan
+    members = req.input.members
 
-        # 重算 Matcher：状态切换保留原有分工（完成自己任务的人不再被重排到别人后续任务），
-        # 仅已完成任务标记为占位、负载/告警按现状重算；成员变动走 /edit-members 仍全量重排
-        qa_matrix = recompute_preserve(plan, req.qa_matrix, members)
+    # 重算 Matcher：状态切换保留原有分工（完成自己任务的人不再被重排到别人后续任务），
+    # 仅已完成任务标记为占位、负载/告警按现状重算；成员变动走 /edit-members 仍全量重排
+    qa_matrix = recompute_preserve(plan, req.qa_matrix, members)
 
-        # 回填负责人，重算 Timeline（会读取 task.status）
-        assignments: dict[str, list[str]] = {}
-        for a in qa_matrix.assignments:
-            people = [a.presenter] if a.presenter else []
-            if a.qa_primary and a.qa_primary not in people:
-                people.append(a.qa_primary)
-            for s in (a.qa_support or []):
-                if s not in people:
-                    people.append(s)
-            assignments[a.task_id] = people
+    # 回填负责人，重算 Timeline（会读取 task.status）
+    assignments: dict[str, list[str]] = {}
+    for a in qa_matrix.assignments:
+        people = [a.presenter] if a.presenter else []
+        if a.qa_primary and a.qa_primary not in people:
+            people.append(a.qa_primary)
+        for s in (a.qa_support or []):
+            if s not in people:
+                people.append(s)
+        assignments[a.task_id] = people
 
-        timeline = TimelineAgent().run(
-            plan=plan,
-            deadline=req.input.deadline.isoformat(),
-            assignments=assignments,
-            members=members,
-        )
+    timeline = TimelineAgent().run(
+        plan=plan,
+        deadline=req.input.deadline.isoformat(),
+        assignments=assignments,
+        members=members,
+    )
 
-        # 状态切换是高频操作，只用本地结果更新报告，避免每次标记完成/阻塞都等待 LLM。
-        report = req.report.model_copy(update={
-            "timeline_section": timeline.note,
-            "qa_matrix_section": "\n".join(
-                f"{item.task_name}：{item.presenter or '未分配'}"
-                for item in qa_matrix.assignments),
-            "risk_note": qa_matrix.note,
-        })
+    # 状态切换是高频操作，只用本地结果更新报告，避免每次标记完成/阻塞都等待 LLM。
+    report = req.report.model_copy(update={
+        "timeline_section": timeline.note,
+        "qa_matrix_section": "\n".join(
+            f"{item.task_name}：{item.presenter or '未分配'}"
+            for item in qa_matrix.assignments),
+        "risk_note": qa_matrix.note,
+    })
 
-        return FullPlan(
-            input=req.input,
-            plan=plan,
-            timeline=timeline,
-            qa_matrix=qa_matrix,
-            report=report,
-        )
-    except Exception as e:
-        logger.exception("Recompute failed")
-        raise HTTPException(status_code=500, detail=str(e))
+    return FullPlan(
+        input=req.input,
+        plan=plan,
+        timeline=timeline,
+        qa_matrix=qa_matrix,
+        report=report,
+    )
 
 @router.post("/export/docx")
 async def export_docx(plan: FullPlan):
     """导出当前计划为 Word 文档。"""
-    try:
-        from app.web.exporters import plan_to_docx
-        data = plan_to_docx(plan)
-        return Response(
-            content=data,
-            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            headers={"Content-Disposition": 'attachment; filename="plan_report.docx"'},
-        )
-    except Exception as e:
-        logger.exception("Export docx failed")
-        raise HTTPException(status_code=500, detail=str(e))
+    from app.web.exporters import plan_to_docx
+    data = plan_to_docx(plan)
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": 'attachment; filename="plan_report.docx"'},
+    )
 
 
 @router.post("/export/pdf")
 async def export_pdf(plan: FullPlan):
     """导出当前计划为 PDF 文档。"""
-    try:
-        from app.web.exporters import plan_to_pdf
-        data = plan_to_pdf(plan)
-        return Response(
-            content=data, media_type="application/pdf",
-            headers={"Content-Disposition": 'attachment; filename="plan_report.pdf"'},
-        )
-    except Exception as e:
-        logger.exception("Export pdf failed")
-        raise HTTPException(status_code=500, detail=str(e))
+    from app.web.exporters import plan_to_pdf
+    data = plan_to_pdf(plan)
+    return Response(
+        content=data, media_type="application/pdf",
+        headers={"Content-Disposition": 'attachment; filename="plan_report.pdf"'},
+    )
 
 
 @router.post("/export/markdown")
 async def export_current_plan(plan: FullPlan):
     """导出当前计划为 Markdown（前端「导出」按钮调用，无需先保存）。"""
-    try:
-        md = _plan_to_markdown(plan.model_dump())
-        return Response(
-            content=md, media_type="text/markdown; charset=utf-8",
-            headers={"Content-Disposition": 'attachment; filename="plan_report.md"'},
-        )
-    except Exception as e:
-        logger.exception("Export current plan failed")
-        raise HTTPException(status_code=500, detail=str(e))
+    md = _plan_to_markdown(plan.model_dump())
+    return Response(
+        content=md, media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="plan_report.md"'},
+    )
 
 @router.get("/export/{filename}")
 async def export_plan(filename: str, fmt: str = "markdown"):
@@ -402,9 +362,6 @@ async def export_plan(filename: str, fmt: str = "markdown"):
                         headers={"Content-Disposition": f'attachment; filename="{filename}{ext}"'})
     except HTTPException:
         raise
-    except Exception as e:
-        logger.exception("Export failed")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 def _plan_to_markdown(data: dict) -> str:
@@ -564,9 +521,6 @@ async def edit_members_endpoint(req: MemberEditRequest):
         )
     except HTTPException:
         raise
-    except Exception as e:
-        logger.exception("Edit members failed")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/health")

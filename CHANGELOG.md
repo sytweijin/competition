@@ -6,6 +6,46 @@
 
 ---
 
+## v4.8.1 —— 代码质量加固 + CI + API 测试覆盖（2026-07-22）
+
+**定位：** 在 v4.8 基础上补充 CI 配置、API 测试覆盖、全局异常处理、参数调优和目录自动初始化。
+
+---
+
+### 新增（P1）
+
+**1. GitHub Actions CI（.github/workflows/test.yml）**
+- **问题：** 此前无 CI 配置，代码 push 后不会自动运行测试，依赖人工记忆执行 pytest，容易遗漏。
+- **新增后：** 每次 push 或 PR 到 `main`/`feature/*` 分支时，自动在 Ubuntu 上安装依赖并运行 pytest（跳过需 API key 的 `test_reflection.py`）。
+- **收益：** ① 每个 commit 自动验证测试通过；② PR 页面直接显示测试结果 ✅/❌；③ 降低团队协作中"改了别人的功能不知道"的风险。
+
+**2. API 集成测试覆盖（tests/test_api.py 从 3 个扩充到 11 个）**
+- **问题：** 原先只覆盖了 `/health`、`/recompute`、`/save` 三个端点，其余 13+ 端点无测试保护。
+- **新增测试：**
+  - `/api/draft` — use_ai=false 快速模式 + use_ai=true 无 key 降级
+  - `/api/draft/mutate` — 新增任务 / 删除任务
+  - `/api/confirm-draft` — 确认草案后自动分工
+  - `/api/workload` — 工作量快照
+  - `/api/manual-assignment` — 手动指定负责人/协作者
+  - `/api/export/markdown` — Markdown 导出
+- **设计原则：** 全部走确定性逻辑（不需要 LLM），CI 环境无 API key 也能通过。
+
+**3. 全局异常处理器（app/main.py）**
+- **问题：** 多处 `except Exception` 裸捕获，意外错误信息被吞掉。部署到比赛平台时，未处理的异常会暴露 Python 堆栈。
+- **修改后：** `app/main.py` 新增 `@app.exception_handler(Exception)` 统一拦截所有未处理异常，日志保留完整堆栈，返回 JSON 格式的错误信息。设置环境变量 `DEBUG=true` 时返回详细错误内容，否则只返回 `"服务器内部错误"`。
+- **同时清理：** `app/web/routes.py` 移除全部 13 处 `except Exception` 兜底块，统一由全局处理器接管。
+
+### 调优（P2）
+
+**4. LLM 超时与重试参数调整（app/config.py）**
+- `LLM_TIMEOUT`：25s → **35s**（减少网络波动导致超时的概率）
+- `LLM_MAX_RETRIES`：1 次 → **3 次**（给 LLM 调用更多耐心，降低兜底触发频率）
+
+**5. Memory 目录启动时自动创建（app/config.py）**
+- 新增 `MEMORY_DIR.mkdir(parents=True, exist_ok=True)`，应用启动时自动创建 `memory/` 目录，不再依赖 `/api/save` 端点来创建。
+
+---
+
 ## v4.8 —— 统一合并：v4.7 算法修复 + 知识库增强工时估算（2026-07-22）
 
 **定位：** v4.7.2 在 v4.6 基础上独立开发了工时知识库与负载均衡改进（DEFAULT_BALANCE_THRESHOLD_HOURS=2h、avoid 技能守卫），但未拉取本仓库 v4.7 的三大算法修复后 force push。本版本将两条独立发展线合并到同一代码基础，保留双方全部功能。
