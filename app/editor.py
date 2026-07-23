@@ -79,9 +79,10 @@ def edit_plan(req: EditPlanRequest) -> FullPlan:
 
     # 先重算 matcher（B3 确定性），再用新分配回填负责人算 timeline，保证二者一致
     qa_matrix = original.qa_matrix
-    # P2-1: 新增任务必须重算 matcher，否则新任务不在 qa_matrix、时间线退回 global_daily 兜底
+    # 结构性变更（新增/删除）必须重算 matcher，否则 qa_matrix 与 plan 不一致
     has_add = any(e.op.strip().lower() == "add" for e in req.edits)
-    if req.recompute_matcher or has_add:
+    has_remove = any(e.op.strip().lower() == "remove" for e in req.edits)
+    if req.recompute_matcher or has_add or has_remove:
         qa_matrix = assign_with_balance(new_plan, original.input.members)
 
     timeline = original.timeline

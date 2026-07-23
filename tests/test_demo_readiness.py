@@ -22,11 +22,11 @@ def test_demo_ui_has_full_showcase_flow():
     assert 'id="demoCaseBtn"' in html
     assert "function projectDays()" in html
     assert "daily*30" not in html
-    assert 'data-format="markdown"' in html
-    assert 'data-format="docx"' in html
-    assert 'data-format="pdf"' in html
-    assert "function deletePlan(" in html
-    assert "关键路径" in html and "缓冲较少" in html and "缓冲充裕" in html
+    assert 'id="exportMdBtn"' in html
+    assert 'id="exportDocxBtn"' in html
+    assert 'id="exportPdfBtn"' in html
+    assert "data-delete" in html
+    assert "关键路径" in html and "紧急" in html and "浮动充足" in html
     assert ".gantt-track i.blocked" in css
 
 

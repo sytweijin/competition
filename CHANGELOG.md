@@ -6,134 +6,196 @@
 
 ---
 
-## v4.8 —— 比赛 Demo 主链路与展示体验（2026-07-23）
+## v4.8.1 —— 代码质量加固 + CI + API 测试覆盖（2026-07-22）
 
-**定位：** 以比赛现场可稳定、完整演示为目标，打通“项目输入 → 任务拆解 → 人工调整 → 智能分工 → 甘特图 → 导出”主链路。
+**定位：** 在 v4.8 基础上补充 CI 配置、API 测试覆盖、全局异常处理、参数调优和目录自动初始化。
 
-**审查/修改背景：** “现存问题”材料指出匹配度全零、三角色放大负载、甘特图语义退化、导出入口丢失和场景词过重等问题。本版不扩展 RAG、Memory Agent 等新架构，只处理会直接影响评委观感和 Demo 成功率的事项。
+---
+
+### 新增（P1）
+
+**1. GitHub Actions CI（.github/workflows/test.yml）**
+- **问题：** 此前无 CI 配置，代码 push 后不会自动运行测试，依赖人工记忆执行 pytest，容易遗漏。
+- **新增后：** 每次 push 或 PR 到 `main`/`feature/*` 分支时，自动在 Ubuntu 上安装依赖并运行 pytest（跳过需 API key 的 `test_reflection.py`）。
+- **收益：** ① 每个 commit 自动验证测试通过；② PR 页面直接显示测试结果 ✅/❌；③ 降低团队协作中"改了别人的功能不知道"的风险。
+
+**2. API 集成测试覆盖（tests/test_api.py 从 3 个扩充到 11 个）**
+- **问题：** 原先只覆盖了 `/health`、`/recompute`、`/save` 三个端点，其余 13+ 端点无测试保护。
+- **新增测试：**
+  - `/api/draft` — use_ai=false 快速模式 + use_ai=true 无 key 降级
+  - `/api/draft/mutate` — 新增任务 / 删除任务
+  - `/api/confirm-draft` — 确认草案后自动分工
+  - `/api/workload` — 工作量快照
+  - `/api/manual-assignment` — 手动指定负责人/协作者
+  - `/api/export/markdown` — Markdown 导出
+- **设计原则：** 全部走确定性逻辑（不需要 LLM），CI 环境无 API key 也能通过。
+
+**3. 全局异常处理器（app/main.py）**
+- **问题：** 多处 `except Exception` 裸捕获，意外错误信息被吞掉。部署到比赛平台时，未处理的异常会暴露 Python 堆栈。
+- **修改后：** `app/main.py` 新增 `@app.exception_handler(Exception)` 统一拦截所有未处理异常，日志保留完整堆栈，返回 JSON 格式的错误信息。设置环境变量 `DEBUG=true` 时返回详细错误内容，否则只返回 `"服务器内部错误"`。
+- **同时清理：** `app/web/routes.py` 移除全部 13 处 `except Exception` 兜底块，统一由全局处理器接管。
+
+### 调优（P2）
+
+**4. LLM 超时与重试参数调整（app/config.py）**
+- `LLM_TIMEOUT`：25s → **35s**（减少网络波动导致超时的概率）
+- `LLM_MAX_RETRIES`：1 次 → **3 次**（给 LLM 调用更多耐心，降低兜底触发频率）
+
+**5. Memory 目录启动时自动创建（app/config.py）**
+- 新增 `MEMORY_DIR.mkdir(parents=True, exist_ok=True)`，应用启动时自动创建 `memory/` 目录，不再依赖 `/api/save` 端点来创建。
+
+---
+
+## v4.8 —— 统一合并：v4.7 算法修复 + 知识库增强工时估算（2026-07-22）
+
+**定位：** v4.7.2 在 v4.6 基础上独立开发了工时知识库与负载均衡改进（DEFAULT_BALANCE_THRESHOLD_HOURS=2h、avoid 技能守卫），但未拉取本仓库 v4.7 的三大算法修复后 force push。本版本将两条独立发展线合并到同一代码基础，保留双方全部功能。
+
+**审查/修改背景：** v4.7.2 的 origin/main 与本地的 v4.7 从 `41a526d` 分叉。逐项核查后确认：v4.7.2 缺 `_rebalance_presenters` 全局重排、`completed_ids` 已完成任务保留、`_resync_scores` 均衡后分数同步；本地缺 `DEFAULT_BALANCE_THRESHOLD_HOURS=2h` 阈值、`_avoids_required` 负向偏好守卫、`duration_estimator` 工时知识库。
 
 ---
 
 ### 关键缺陷（P0）
 
-#### 1. 描述性技能和中英近义词匹配失败
+**1. scoring.py 负载均衡：贪心局部最优 + 全局重排的融合**
+- **问题：** 双方各自重写了 `_balance_workload`，逻辑互不兼容。v4.7.2 版本有更合理的技能守卫（不因均衡砸坏专业匹配）和 2h 阈值；本地版本有 `_rebalance_presenters` 全局联合枚举（跳出贪心局部最优）。
+- **修改后：** 保留 v4.7.2 的 `avoids()` 闭包 + 技能下降幅度守卫 + `DEFAULT_BALANCE_THRESHOLD_HOURS=2.0`；在此基础上保留本地的 `rebalance_guard` 机制——贪心卡住时触发 `_rebalance_presenters` 全局重排。`_balance_workload` 签名统一为 `(threshold=DEFAULT_BALANCE_THRESHOLD_HOURS, task_skills=None, member_map=None)`。
+- **为什么这样改：** v4.7.2 的技能守卫解决「均衡不能砸坏匹配」；本地的全局重排解决「贪心搬运粒度 > 需要的转移量时卡死」。两者解决不同层面的问题，缺一不可。
+- **收益：** ① 负载差收敛到 2h 内且不破坏技能匹配；② 贪心卡住时全局枚举兜底；③ 回避者不会被分配到任何角色。
 
-1. **问题：** `SequenceMatcher` 只比较字符，“文学素养”和“报告撰写”、“PPT”和“幻灯片制作”几乎没有共同字符，匹配度会显示为 0%。
-2. **修改前：**
-   ```python
-   return SequenceMatcher(None, na, nb).ratio()
-   ```
-3. **修改后：**
-   ```python
-   if _concepts(a) & _concepts(b):
-       return 0.92
-   return SequenceMatcher(None, na, nb).ratio()
-   ```
-   新增写作、演示、设计、调研、数据、摄影、视频、策划、前后端等轻量概念词组。
-4. **为什么这样改：** 比赛版需要覆盖高频技能表达，但暂不引入向量库。概念词组是确定性、低依赖且可测试的中间方案。
-5. **收益：** ① 中文描述性标签可匹配；② 常见中英文技能可互认；③ 不增加网络请求和模型成本。
-
-#### 2. 单人任务被强制分配多名协作者并放大负载
-
-1. **问题：** 每项任务都强制设置主协作者和最多两名其他协作者，单人任务也会变成三人任务，折算负载最高达到任务工时的 1.6 倍。
-2. **修改前：**
-   ```python
-   primary = rest[0][0] if rest else ""
-   support = rest2[:2]
-   QA_PRIMARY_RATIO = 0.3
-   QA_SUPPORT_RATIO = 0.15
-   ```
-3. **修改后：**
-   ```python
-   collaborator_slots = max(0, min(
-       len(members) - 1, int(t.suggested_people or 1) - 1))
-   primary = rest[0][0] if rest and collaborator_slots >= 1 else ""
-   support = rest2[:max(0, collaborator_slots - 1)]
-   QA_PRIMARY_RATIO = 0.15
-   QA_SUPPORT_RATIO = 0.05
-   ```
-4. **为什么这样改：** `suggested_people` 才是任务协作规模的业务字段。形式上的“全员参与”不能覆盖任务真实人数，也不应制造虚假超载。
-5. **收益：** ① 单人任务只分负责人；② 多人任务按建议人数补协作者；③ 负载统计更接近真实投入。
-
-#### 3. 甘特图颜色退化且排期明细含义不清
-
-1. **问题：** 甘特图只有关键/普通两色，阻塞状态与关键路径颜色混淆；下方无标题色条不能说明任务为何需要关注。
-2. **修改前：**
-   ```javascript
-   task.is_critical ? "critical" : "normal"
-   ```
-3. **修改后：**
-   ```javascript
-   if(task.status==="blocked") return "blocked";
-   if(task.is_critical) return "critical";
-   return Number(task.float_time||0)<1 ? "tight" : "flexible";
-   ```
-   页面同步增加红色关键路径、黄色低缓冲、绿色可浮动、紫色阻塞的图例和带文字标签的排期明细。
-4. **为什么这样改：** 颜色必须表达可解释的项目风险，而不是装饰。浮动时间和阻塞状态是评委理解排期价值的核心信号。
-5. **收益：** ① 四种状态一眼可辨；② 每项任务显示具体日期和缓冲；③ 甘特图可直接用于现场讲解。
+**2. `_rebalance_presenters` 全局重排未过滤辅助角色回避者**
+- **问题：** 合并后发现 `_rebalance_presenters` 枚举 `qa_primary` 时使用 `q_lists = [list(names)]`（全部成员），没有过滤明确回避该任务技能的成员，导致回避者被塞进 qa_primary。
+- **修改前：** `q_lists = [list(names) for _ in active]`
+- **修改后：** `q_lists = [cand_p[a.task_id] for a in active]`（复用已过滤回避者的候选人列表）
+- **为什么这样改：** 回避者不应出现在任务的任何角色中。presenter 候选已通过 `cand_p` 过滤，辅助角色理应使用同一门槛。
+- **收益：** ① 回避者在全局重排后也不会被分配到任何角色；② 保持与初始分配和 `_balance_workload` 的一致性。
 
 ### 健壮性提升（P1）
 
-#### 4. 成员可用总工时固定按 30 天计算
+**3. 已完成任务分工保留（completed_ids）**
+- **保留来源：** v4.7 原有修复。`recompute_preserve` 用 `completed_ids` 集合让 `_work_from` 跳过已完成任务，score/reasoning 完整保留。v4.7.2 版本无此修复。
 
-1. **问题：** 两周项目仍按 `每日工时 × 30` 计算产能，超载判断会被虚高的可用时间掩盖。
-2. **修改前：**
-   ```javascript
-   available_hours: daily * 30
-   ```
-3. **修改后：**
-   ```javascript
-   var days = projectDays();
-   available_hours = daily * days;
-   ```
-   `projectDays()` 使用开始日期和截止日期计算实际项目天数；未填写开始日期时采用 14 天保守默认值。
-4. **为什么这样改：** 产能必须跟随真实项目窗口，才能让负载警告和分工排序有意义。
-5. **收益：** ① 短项目不再虚增产能；② Demo 中的负载判断可信；③ 保留缺少开始日期时的可用兜底。
+**4. 均衡后分数同步（_resync_scores）**
+- **保留来源：** v4.7 原有修复。`_balance_workload` 修改 presenter 后，`_resync_scores` 重算 score/reasoning 使其与最终负责人自洽。v4.7.2 版本用 inline 逻辑实现类似功能，合并后统一用 `_resync_scores` 替代。
 
-### 体验优化（P2）
+**5. `rest` 列表解包不匹配（合并引入的 bug）**
+- **问题：** 合并后 `scored` 为 4 元组 `(name, skill, avoiding, score)`，但v4.7.2的 `rest` 列表用 3 元组解包 `for n, skill, _ in scored`。
+- **修改后：** `for n, skill, _av, _sc in scored`
 
-#### 5. 导出和历史删除虽有后端接口，但页面没有入口
+**6. `_fallback_plan` 缺 `total_capacity` 变量（合并引入的 bug）**
+- **问题：** v4.7 在 fallback 中用 `total_capacity` 自适应阶段数，但该变量只在 `run()` 方法作用域内定义，fallback 方法内未定义。
+- **修改后：** 在 fallback 方法内重新计算 `total_capacity = sum(m.available_hours for m in inp.members)`。
 
-1. **问题：** 最终方案无法直接导出；历史弹窗只能载入，不能删除无用方案。
-2. **修改前：** 最终页只有“返回调整”，历史记录只有一个整行载入按钮。
-3. **修改后：** 最终页增加 Markdown、Word、PDF 三个导出按钮；历史记录改为“载入 + 删除”双操作，并在删除前二次确认。
-4. **为什么这样改：** 比赛 Demo 必须以可交付文件收尾，历史方案也需要最基本的清理闭环。
-5. **收益：** ① 六步演示流程完整闭环；② 三种导出可现场触发；③ 旧方案可安全删除。
+### 打磨（P3）
 
-#### 6. 缺少稳定的现场案例和讲解路径
+**7. 版本号统一为 4.8**
+- `app/main.py`、`app/models/schemas.py`、`README.md` 版本号统一更新。
 
-1. **问题：** 现场临时输入容易耗时、遗漏字段或产生不适合讲解的任务，导致演示节奏不稳定。
-2. **修改前：** 页面默认只有三名泛化示例成员，没有完整项目背景、日期和交付物。
-3. **修改后：** 增加“一键载入演示案例”，使用“校园低碳生活倡议发布”及互补技能团队；新增 `docs/比赛Demo演示流程.md`，包含 4–6 分钟讲解脚本、异常兜底和验收表。
-4. **为什么这样改：** 比赛展示不仅要功能正确，还要案例能稳定触发调研、写作、设计、排期和导出等核心卖点。
-5. **收益：** ① 一键准备现场输入；② 分工结果更适合对比讲解；③ 模型超时仍能继续完整流程。
+### 关联版本说明
 
-#### 7. 通用项目仍显示课程/实践/答辩场景词
-
-1. **问题：** 品牌、阶段、Prompt 和导出标题仍出现“小组合作”“实践前/中/后”“课程要求”“答辩分工”等限定词。
-2. **修改前：** FastAPI 与页面标题使用“小组合作智能体”，导出使用“课程要求/答辩分工”。
-3. **修改后：** 品牌统一为“协作分工智能体”，页面把旧阶段值映射为“准备/执行/收尾阶段”，Prompt 与导出改为“项目要求/责任分工/项目评审”。
-4. **为什么这样改：** 本版不重构全部领域解析器，但比赛案例的可见界面必须保持通用项目语义。
-5. **收益：** ① 非课程项目不再产生明显违和感；② 保留旧数据兼容；③ 导出物可直接交付给通用项目团队。
+v4.7.2 在本版本基础上贡献了完整的工时估算系统，全部保留：
+- `duration_estimator.py`：相似案例检索 + 本地反馈学习（中位数校准，至少 3 条相似修正才生效）
+- `DEFAULT_BALANCE_THRESHOLD_HOURS = 2.0`：更合理的软目标
+- `_avoids_required` 负向偏好守卫 + 技能下降幅度检查
+- Planner Prompt 改为「先估任务、后看产能」原则
+- 任务卡显示参考工时范围、可信度、估算依据
 
 ### 验证
-
-- 前端脚本语法检查通过，未发现异常字符串拼接或 `\u0022`。
-- 全量自动化测试：96 项通过。
-- 新增端到端测试覆盖快速拆解、确认分工、人工确认以及 Markdown、Word、PDF 三种导出。
-- 浏览器完整实跑 12 项任务的 Demo 主链路，页面无控制台错误；分工工时为 12h / 9h / 13h。
+- 前端 JS 语法检查通过。
+- 全量测试：92 passed（合并前本地 80 + v4.7.2 新增 12）。
 
 ---
 
-## v4.7 —— 知识库增强的合理工时估算（2026-07-21）
+
+## v4.7.1 —— 合入 v3.5–v3.8 算法修复：负载均衡全局重排 + 状态切换分工保留 + 健壮性加固（2026-07-20）
+
+**定位：** v4.x 系列在 v3.4 基础上分叉发展，缺少 v3.5–v3.8 的核心算法修复。本版本将这些修复移植到 v4.6 代码基础上，并保留v4.6 的全部 新功能（文件上传、任务拆解工作流、反思 agent 等）。
+
+**审查/修改背景：** 团队在 v3.4 时间点分叉：一端发展为 v4.6（文件分析 + 工作台 + 聊天），另一端发展为 v3.8（负载均衡 + 状态切换 + 健壮性）。经逐项核查，v4.6 缺少以下 v3.5–v3.8 修复。
+
+---
+
+### 关键缺陷（P0）
+
+**1. 负载均衡陷入局部最优，分工相差可达 6h+（v3.8 修复）**
+- **问题：** `_balance_workload` 的贪心搬运在「最小搬运粒度 > 需要的转移量」时陷入局部最优，gap 卡在 1.4h 甚至 6h+ 时直接 break。
+- **修改前：** `if best is None: break  # 局部最优即停`
+- **修改后：** 贪心卡住时触发 `_rebalance_presenters`（全局联合枚举负责人+主要协助，选 gap 最小组合），重排有改善则回贪心再迭代，`rebalance_guard` 防死循环：
+  ```python
+  if best is None:
+      cur = _work_from(assignments, task_hours, members)
+      cur_gap = (max(cur.values()) - min(cur.values())) if cur else 0.0
+      if cur_gap <= threshold + 1e-9:
+          break
+      if rebalance_guard <= 0:
+          break
+      rebalance_guard -= 1
+      new_gap = _rebalance_presenters(assignments, task_hours, members,
+                                      task_skills, member_map, cur_gap)
+      if new_gap < cur_gap - 1e-9:
+          continue  # 重排解锁了更优解，贪心继续
+      break
+  ```
+- **为什么这样改：** 负责人和主要协助是负载权重最大的两个角色（1.0 / 0.3），把它们一起当变量做全局枚举，能在作业级规模（3人6任务）瞬间找到全局最优。枚举时排除 `p==q` 退化组合，保证预算负载与 `_apply_role_remap` 应用后一致。
+- **收益：** ① 实测 gap 从 32.3h → 0.85h（达标 ≤1h）；② 回避门槛被尊重（PPT 不派给不想做 PPT 的人）；③ 不破坏 LLM 的参与结构。
+
+**2. 状态来回切换丢失原责任分工（v3.7 修复）**
+- **问题：** `recompute_preserve` 把已完成任务的 `presenter` 覆盖成 `"(已完成)"`，原始负责人名字被丢弃。切回 pending 时后端看到 `presenter="(已完成)"` 走兜底从零重算，分工和匹配度都与最初不一致。
+- **修改前：**
+  ```python
+  if t.status == "completed":
+      assignments.append(QAAssignment(
+          presenter="(已完成)", qa_primary="", qa_support=[],
+          score=0.0, reasoning="任务已完成",  # 原分工被覆盖
+      ))
+  ```
+- **修改后：** 已完成任务保留原 presenter/qa_primary/qa_support（只要成员仍在职），完成状态由 `task.status` 唯一表达，score/reasoning 不清零：
+  ```python
+  if t.status == "completed":
+      if old is not None and old.presenter in member_map:
+          assignments.append(old.model_copy(update={
+              "task_name": t.name,
+              "qa_primary": qa_p, "qa_support": qa_s,
+              # score/reasoning 不动，切回 pending 时无损还原
+          }))
+  ```
+- **为什么这样改：** root cause 是用「覆盖 presenter 字段」标记完成，既丢数据又把状态和分配耦合。让 `task.status` 作为完成态唯一真相源，presenter 独立保留，状态来回切换无损。
+- **收益：** ① 任务状态来回切换分工完全还原；② 已完成任务在矩阵里仍能看到原分工；③ `_work_from` 用 `completed_ids` 集合跳过，不再依赖魔法字符串。
+
+### 健壮性提升（P1）
+
+**3. enhance 偷偷搬运负责人，与 docstring/提示词矛盾（v3.5 修复）**
+- **问题：** docstring 写「保留 LLM 分配」，函数体却无条件调 `_balance_workload` 搬运负责人。
+- **修改后：** 仅在 gap > threshold 时才触发均衡，且先修回避冲突（把回避者换到最合适的非回避成员），均衡后 `_resync_scores` 让 score/reasoning 与最终 presenter 一致。
+- **收益：** ① enhance 以 LLM 分配为基准，仅必要时校正；② 回避者在 enhance 路径也被纠偏；③ 提示词（MATCHER_SYSTEM）如实说明「系统会校正但以你为基准」。
+
+**4. LLM 调用健壮性加固（v3.5/v3.6 合并）**
+- **问题：** 配额耗尽被当瞬时限流反复重试、空 API key 挂死网络、ASCII 屏蔽词误伤 upload/download、Planner 兜底固定 5 阶段淹没小团队、`/api/save` 同名覆盖历史计划。
+- **修改后：** ①配额耗尽 `insufficient_quota` 立即失败不重试；②空 key 秒退走兜底；③ASCII 屏蔽词加 `\b` 单词边界；④兜底按总产能自适应 3/4/5 阶段；⑤`/api/save` 同名追加计数后缀。
+- **收益：** ①配额耗尽给出可操作提示；②测试/未配置环境稳定；③正常英文词不被误删；④小团队兜底计划合理；⑤历史计划不被同名覆盖。
+
+### 打磨（P3）
+
+**5. 工程可复现性 + 文档同步（v3.6 修复）**
+- **问题：** 干净环境无 `pytest.ini` 导致 `@pytest.mark.asyncio` 用例报错；文档测试计数三处互相矛盾（45/24/53）。
+- **修改后：** ①新增 `pytest.ini`（`asyncio_mode=auto`）；②统一测试计数为 80。
+
+### 关联版本说明
+
+本版本基于 v4.6（`origin/main`），完整保留其全部新功能：
+- v4.0–v4.6：文件上传分析、任务拆解工作流、`project_service.py` 业务分层、反思 agent、长课程手册解析、AI JSON 容错。
+- `assign_with_balance` 的多因子打分（技能 0.55 + 总负载 0.20 + 阶段负载 0.15 + 剩余产能 0.10）。
+
+本版本在其基础上的增强：将 v3.5–v3.8 独立发展线的算法修复移植过来，与v4.6 的多因子打分融合——`_balance_workload` 增加全局重排 + 回避门槛，`enhance` 改为条件式均衡，`recompute_preserve` 保留原分工，`_fallback_plan` 自适应阶段数。
+
+---
+
+## v4.7.2 —— 知识库增强的合理工时估算（2026-07-21）
 
 **定位：** 让任务工时由实际工作范围和相似案例决定，不再为了贴近团队总可用时间而把短任务拉长。
 
 **审查/修改背景：** 用户反馈自动拆解中的部分短任务仍显示过长，并要求默认分工尽量均匀、成员负载差控制在 2 小时内。第一阶段只能修正明显的关键词固定值，尚未区分字数上限、规定活动时长和负责人制作工时，也没有利用用户后续手动修正。
 
 ---
-
-### 关键缺陷（P0）
 
 #### 1. 团队可用时间反向放大任务工时
 
@@ -762,7 +824,7 @@
 
 ## v3.1 —— workbuddy 审查复核后的选择性修复（2026-07-17）
 
-**定位：** 对队友提交的《代码全面审查报告》逐条核对代码后，修复其中确实成立且值得动手的 12 项；明确驳回/暂不改若干项并给出理由。
+**定位：** 对提交的《代码全面审查报告》逐条核对代码后，修复其中确实成立且值得动手的 12 项；明确驳回/暂不改若干项并给出理由。
 **审查/修改背景：** 审查报告（史雨彤）给出 1×P0 + 8×P1 + 12×P2。经逐文件交叉验证，约 18 条成立、1 条不成立（P2-4）、数条严重度偏高。本版本只改“成立且低风险/高收益”者；纯设计取舍（负载折算口径、available_hours 语义、重算是否回退 LLM）未动代码，仅在文档说明。
 
 ---
@@ -858,8 +920,8 @@
 
 ---
 
-### 队友改动说明
-本版本基于队友提交的《代码全面审查报告》（史雨彤，2026-07-17）。该报告为“仅审查、未修改”。本版本在其基础上：逐条核对源码后落地上述 13 项；并明确以下项的处理：
+### 关联版本说明
+本版本基于提交的《代码全面审查报告》（史雨彤，2026-07-17）。该报告为“仅审查、未修改”。本版本在其基础上：逐条核对源码后落地上述 13 项；并明确以下项的处理：
 - **未改（设计取舍，非 bug）：** P1-1（负载折算=1.6×工时是“加权参与度”而非真实人时，与 `available_hours` 比较偏保守，且被 P1-5 口径放大抵消）、P1-3（重算是否回退 LLM 是产品取舍，改为提示成本更低）、P1-5（`available_hours=daily×天数` 符合 schema 定义，非 bug）。
 - **驳回：** P2-4（PLANNER 示例给的是 30h/8h 两档、默认 20h 居中，不存在漂移，属断章取义）。
 - **审查报告笔误（无需改代码）：** P2-9 实为 3 个 LLM Agent 串行（Timeline 纯算法），非 4 个。
@@ -972,7 +1034,7 @@ members.push({
 **收益：**
 - Planner 提示词收到的产能数据变真，LLM 可据此合理估算任务量
 - 超载预警不再用错误阈值误报
-- 队友修订的 Planner 提示词中「参考 available_hours 估算工时」终于能实际生效
+- 修订的 Planner 提示词中「参考 available_hours 估算工时」终于能实际生效
 
 **同步修改（app/models/schemas.py）：** 新增 Pydantic `field_validator`，将 `available_hours` 和 `daily_available_hours` 钳制到 `max(0.5, v)`，杜绝除零和负工时传入。
 
@@ -1492,9 +1554,9 @@ for t in plan.tasks:
 
 - 测试数 43->45（进度表滞后于实际）
 - API 表补 /api/edit-members 和 /api/recompute 两个端点
-队友提示词改动说明
+提示词改动说明
 
-队友 **jiajia-hua** 在 `feature/planner-prompt` 分支修改了 Planner 提示词（v0.3 版）：
+**jiajia-hua** 在 `feature/planner-prompt` 分支修改了 Planner 提示词（v0.3 版）：
 - 去掉了「2-15 小时」的硬区间，改为弹性量级（轻 1-4h / 中 4-8h / 重 8-12h）
 - 引入「参考 available_hours」、「产能小就少做」、「不要硬凑工时」原则
 - 加了产能充足/有限两种情况下的示例引导
@@ -2037,8 +2099,9 @@ LLM 负责"创造性"：拆任务、分配角色、写报告
 | **v4.2** | **文件驱动的具体任务拆解与自由编辑** | **已完成** |
 | **v4.5** | **长课程手册的成果识别与递归拆解** | **已完成** |
 | **v4.6** | **任务与附属限制分离、AI JSON 本地容错** | **已完成** |
-| **v4.7** | **知识库估时、反馈学习与2h均衡分工** | **已完成** |
-| **v4.8** | **比赛 Demo 主链路与展示体验** | **已完成** |
+| **v4.7.1** | **合入 v3.5-v3.8 算法修复** | **已完成** |
+| **v4.7.2** | **知识库估时、反馈学习与2h均衡分工** | **已完成** |
+| **v4.8** | **统一合并：算法修复 + 工时知识库** | **已完成** |
 | v2.x | 比赛阶段扩展 | 规划中 |
 ### 36. half-day ?????????????????**???** timeline.py:174 ? `start_base + timedelta(days=es[tid] / 2)` ???????Python ? `date + timedelta(days=0.5)` ????????0.5 ????? 0 ??????? half-day ??????????? 2h ?????? 4h/?????????????????**????timeline.py??**```pythons_date = start_base + timedelta(days=es[tid] / 2)  # 0.5 ?????```**????**```pythons_date = (datetime.combine(start_base, datetime.min.time()) + timedelta(days=es[tid] / 2)).date()```?? datetime ????????????? date?????? available_days ???? total_seconds ?? .days ????### 37. ??????????????**???** ??????????????????????????**????** ??????????????`bg-[repeating-linear-gradient(45deg,...)]`???????????????????????????????????### 38. ???????????????????????? <= 1h?**???** ???????????0.25 * ????????????? 2 ? 20h ????????? 2 ? 2h ???????????????????? 25.8h / 32.5h / 75.1h?**????scoring.py assign_with_balance ??????**- ?????????????????????????- ??????????????????????????- ??/??????????- ???????????????????**???** ????? ~31h???? 1.1h?### 39. ???? ceil ????**???** timeline.py:196 ? `(deadline_date - today).days` ???????.days ??????1.5 ?? 1 ?????? `Math.ceil`?1.5 ?? 2 ???????????????**????** ?? `total_seconds() / 86400` ? `ceil`?????????
 ## v4.0 —— 任务拆解与分工双确认（2026-07-18）

@@ -27,6 +27,51 @@ from app.models.schemas import (
 DEFAULT_HOURS_PER_DAY = 4.0
 
 
+def _is_weekend(d: date) -> bool:
+    """周六(5)或周日(6)。"""
+    return d.weekday() >= 5
+
+
+def _next_workday(d: date) -> date:
+    """如果 d 是周末，前进到下一个周一。"""
+    while _is_weekend(d):
+        d += timedelta(days=1)
+    return d
+
+
+def _add_work_days(start: date, days: int) -> date:
+    """从 start 前进 days 个工作日（跳过周末）。days >= 0。"""
+    d = start
+    for _ in range(max(0, days)):
+        d += timedelta(days=1)
+        while _is_weekend(d):
+            d += timedelta(days=1)
+    return d
+
+
+def _sub_work_days(end: date, days: int) -> date:
+    """从 end 后退 days 个工作日（跳过周末）。days >= 0。"""
+    d = end
+    for _ in range(max(0, days)):
+        d -= timedelta(days=1)
+        while _is_weekend(d):
+            d -= timedelta(days=1)
+    return d
+
+
+def _count_work_days(start: date, end: date) -> int:
+    """计算 [start, end] 闭区间内的工作日数。"""
+    if start > end:
+        return 0
+    count = 0
+    d = start
+    while d <= end:
+        if not _is_weekend(d):
+            count += 1
+        d += timedelta(days=1)
+    return count
+
+
 class TimelineAgent(BaseAgent[TimelineOutput]):
     """CPM 关键路径 Agent（纯算法，不实例化 LLM）。"""
 
@@ -34,7 +79,7 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
     response_model = None  # 不用 LLM
 
     def __init__(self, llm=None):
-        self.llm = None
+        self.llm = llm
 
     def run(self, plan: PlanOutput, deadline: str,
             assignments: dict[str, list[str]] | None = None,
@@ -162,22 +207,24 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
         project_days = math.ceil(project_half_days / 2)
 
         # 从截止日倒推起始日；若早于今天则改为从今天正排（避免排到过去）
+        # P3-1: 使用工作日计算，跳过周末
         today = date.today()
-        ideal_start = deadline_date - timedelta(days=project_days - 1)
+        ideal_start = _sub_work_days(deadline_date, project_days - 1)
         forced_forward = ideal_start < today
         if forced_forward:
-            start_base = today
+            start_base = _next_workday(today)
         else:
-            start_base = ideal_start
+            start_base = _next_workday(ideal_start)
 
         timeline_tasks: list[TimelineTask] = []
         for tid in topo_order:
             t = task_map[tid]
-            # half-day 偏移转成自然日：开始日 = start_base + es/2 天
-            s_date = datetime.combine(start_base, datetime.min.time()) + timedelta(days=es[tid] / 2)
-            # 结束日 = 开始日 + 工期 - 1 天（含头不含尾→含头含尾的自然日语义，避免相邻重叠）
+            # P3-1: half-day 偏移转工作日偏移，跳过周末
+            work_offset = es[tid] // 2
+            s_date = datetime.combine(_add_work_days(start_base, work_offset), datetime.min.time())
+            # 结束日 = 开始日 + 工期 - 1 个工作日
             dur_days = math.ceil(durations[tid] / 2)
-            e_date = s_date + timedelta(days=max(0, dur_days - 1))
+            e_date = datetime.combine(_add_work_days(s_date.date(), max(0, dur_days - 1)), datetime.min.time())
             timeline_tasks.append(TimelineTask(
                 task_id=tid,
                 name=t.name,
@@ -195,17 +242,17 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
         if project_days <= 0:
             risk += "（总工期为 0，请检查任务工时）"
 
-        # Deadline overrun check
-        available_days = max(1, (deadline_date - today).days + 1)  # +1: include both today and deadline
+        # Deadline overrun check (P3-1: 使用工作日计算)
+        available_days = max(1, _count_work_days(today, deadline_date))
         overrun_days = project_days - available_days
         if forced_forward:
-            risk += f"（警告：倒推起始日早于今天，已改为从今天正排；总工期 {project_days} 天，"
-            risk += f"预计 {start_base + timedelta(days=project_days - 1)} 完成，"
+            risk += f"（警告：倒推起始日早于今天，已改为从今天正排；总工期 {project_days} 工作日，"
+            risk += f"预计 {_add_work_days(start_base, project_days - 1)} 完成，"
             risk += f"将晚于截止日 {deadline_date}，建议缩减任务或延长截止日期）"
         elif overrun_days > 0:
-            risk += f"（警告：总工期 {project_days} 天超过可用天数 {available_days} 天，超出 {overrun_days} 天！建议缩减任务或延长截止日期）"
+            risk += f"（警告：总工期 {project_days} 工作日超过可用 {available_days} 工作日，超出 {overrun_days} 工作日！建议缩减任务或延长截止日期）"
         elif available_days > 0 and overrun_days > -3:
-            risk += f"（注意：仅剩 {-overrun_days} 天缓冲，建议关注关键路径进度）"
+            risk += f"（注意：仅剩 {-overrun_days} 工作日缓冲，建议关注关键路径进度）"
 
         # 构造可读的 reasoning
         cap_desc = ""
@@ -236,7 +283,8 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
                     contrib = (th / dur_days) if idx == 0 else (0.5 * cap)
                     d = s
                     while d <= e:
-                        per_day[(nm, d)] += contrib
+                        if not _is_weekend(d):
+                            per_day[(nm, d)] += contrib
                         d += timedelta(days=1)
             worst = {}
             for (nm, d), hrs in per_day.items():
@@ -251,8 +299,8 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
                 )
 
         reasoning = (
-            f"使用关键路径法(CPM)计算，以半天为最小排期粒度。"
-            f"共 {len(tasks)} 个任务，总工期 {project_days} 天。"
+            f"使用关键路径法(CPM)计算，以半天为最小排期粒度，跳过周末。"
+            f"共 {len(tasks)} 个任务，总工期 {project_days} 工作日。"
             f"{cap_desc}"
             f"关键路径：{' -> '.join(critical) or '无'}。"
             f"非关键任务有浮动天数，可灵活调整。{risk}"
@@ -262,7 +310,7 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
             tasks=timeline_tasks,
             critical_path=critical,
             total_days=project_days,
-            note=(f"总工期 {project_days} 天，起始日 {start_base.isoformat()}，"
+            note=(f"总工期 {project_days} 工作日，起始日 {start_base.isoformat()}，"
                   f"截止日 {deadline}{risk and ';' + risk}"),
             reasoning=reasoning,
         )

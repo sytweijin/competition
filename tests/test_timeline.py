@@ -52,8 +52,12 @@ def test_linear_chain_critical_path():
     assert out.critical_path == ["T1", "T2", "T3"]
     # T3 结束于截止日
     assert out.tasks[-1].end_date == datetime(2026, 7, 20)
-    # 起始日 = 截止日 - (总天数 - 1)（含头含尾的自然日语义）
-    assert out.tasks[0].start_date == datetime(2026, 7, 20) - timedelta(days=out.total_days - 1)
+    # 起始日 = 截止日往前推 (total_days - 1) 个工作日（跳过周末）
+    from app.agents.timeline import _sub_work_days
+    expected_start = datetime.combine(
+        _sub_work_days(_dt.date(2026, 7, 20), out.total_days - 1),
+        _dt.datetime.min.time())
+    assert out.tasks[0].start_date == expected_start
 
 
 def test_parallel_task_has_float():

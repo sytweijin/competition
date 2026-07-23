@@ -1,17 +1,27 @@
 # 协作分工智能体
 
-**版本：v4.8** | 最后更新：2026-07-23（比赛 Demo 主链路）
+**版本：v4.9** | 最后更新：2026-07-23（比赛 Demo + 清小搭标准协议接入）
 
-## v4.8 比赛 Demo 主链路
+## 比赛 Demo
 
-- 一键载入“校园低碳生活倡议发布”演示案例。
-- 完整展示项目输入、任务拆解、人工调整、智能分工、四色甘特图和三种格式导出。
-- 技能匹配支持常见中文描述、近义词与中英文表达。
-- 协作者数量遵循任务建议人数，成员产能按真实项目周期计算。
-- 历史方案支持保存、载入和删除。
-- 演示讲稿与现场兜底见 [比赛Demo演示流程](docs/比赛Demo演示流程.md)。
+- 页面提供“一键载入演示案例”，可完整演示项目输入、任务拆解、人工调整、智能分工、四色甘特图与三种格式导出。
+- 技能匹配支持描述性中文、近义词与中英文表达，协作者数量遵循任务建议人数。
+- 演示讲稿、异常兜底和验收表见 [比赛Demo演示流程](docs/比赛Demo演示流程.md)。
 
-## v4.7 知识库增强的工时估算
+## v4.8 统一合并：算法修复 + 工时知识库
+
+将 v4.7.1（v3.5-v3.8 算法修复）与 v4.7.2（知识库增强工时估算）两条独立发展线合并到同一代码基础，保留双方全部功能。
+
+## v4.7.1 合入 v3.5-v3.8 算法修复
+
+- 负载均衡全局联合枚举：贪心卡住时触发 _rebalance_presenters，负责人+主要协助联合搜索，gap 从 6h+ 收敛到 1h 内。
+- 状态来回切换保留原分工：已完成任务的 presenter/score/reasoning 完整保留，不再清零覆盖。
+- enhance 改为条件式均衡：仅在负载差超阈值时才搬运负责人，以 LLM 分配为基准。
+- 均衡后自动重算 score/reasoning，与最终负责人自洽。
+- LLM 调用健壮性：配额耗尽秒退、空 key 兜底、ASCII 屏蔽词加单词边界、Planner 兜底自适应团队规模。
+- /api/save 同名课程同一秒保存追加计数后缀，不再覆盖历史计划。
+
+## v4.7.2 知识库增强的工时估算
 
 - 新增结构化工时案例库，按任务名称、说明和成果类型检索相似案例。
 - Planner 会收到与当前项目相关的基准工时范围；生成后的任务再经过同一知识库校准，AI 与快速草案使用统一标准。
@@ -133,127 +143,39 @@ AssignmentInput (课程 / 成员 / 截止日 / 每日工时)
 
 **设计原则**：LLM 负责创造性拆解，确定性算法负责正确性保证（关键路径、技能评分、负载均衡、依赖校验）。每个 Agent 失败都有兜底，主链路永不中断。
 
-## 当前进度（截至 2026-07-14）
+## 版本演进
 
-| 编号 | 模块 | 状态 | 负责人 | 说明 |
-|------|------|------|--------|------|
-| Step 0 | JSON 接口契约 (`schemas.py`) | ✅ done | B | 含 B3/B4 扩展模型，v0.3 新增 `daily_available_hours` |
-| A1 | LLM 调用封装 (`client.py`) | ✅ done | B | Structured Output + 重试 |
-| A2 | Coordinator 主链路 (`coordinator.py`) | ✅ done | B | v0.3 成员信息透传 Timeline + Planner |
-| A5 | FastAPI + Web (`main.py`/`routes.py`/`index.html`) | ✅ done | B | v0.3 全新 UI + 答辩模拟接口 |
-| A3/A4 | Matcher（QA矩阵） | ✅ done | B+C | LLM + B3 评分增强 + 成员名校验 + sanitize 修复 |
-| — | Timeline Agent (`timeline.py`) | ✅ done | B | v0.3 CPM + **成员级日工时折算**，环容错 |
-| — | Reporter Agent (`reporter.py`) | ✅ done | B | LLM + 纯文本兜底 |
-| B1 | 答辩模拟 Agent (`interview_sim.py`) | ✅ done | B | 5 维度，优先级标注，v0.3 接入 Web API |
-| B2 | Memory (`routes.py` save/load/list/delete) | ✅ done | B | 计划持久化 + Web 管理 |
-| **B3** | **完整角色匹配 (`scoring.py`)** | ✅ **done** | B | 技能相似度评分 + 负载均衡 + workload |
-| **B4** | **协作图动态编辑 (`editor.py`)** | ✅ **done** | B | add/remove/update + 重算 |
-| — | Prompt 模板 (`prompts.py`) | ✅ done | B | v0.3 全量重构：结构化 Prompt Engineering |
-| — | 进度追踪（前端进度条 + 状态联动） | ✅ done | B | v1.2 新增 |
-| — | 突发情况处理（成员退出/工时变更） | ✅ done | B | v1.0 实现 + v1.2 补测试 |
-| — | Planner Agent | skeleton | A | 骨架 + Planner 兜底已就位（LLM 失败时生成 5 阶段计划），Prompt 待 A 调优 |
-| — | CLI 单 Agent 调试 (`cli.py`) | ✅ done | B | v1.1 新增：planner/matcher/timeline/reporter/interview/full |
-| — | 测试 (45 个) | ✅ done | B | CPM/Scoring/Editor/Coordinator/API 全覆盖 |
+| 版本 | 日期 | 定位 |
+|------|------|------|
+| v4.8 | 2026-07-22 | 统一合并：v4.7.1 算法修复 + v4.7.2 工时知识库 |
+| v4.7.2 | 2026-07-21 | 知识库增强的合理工时估算：相似案例检索、反馈学习、2h 均衡分工 |
+| v4.7.1 | 2026-07-20 | 合入 v3.5-v3.8 算法修复：负载均衡全局重排、状态切换分工保留、健壮性加固 |
+| v4.6 | 2026-07-19 | 任务短句与 AI 返回容错：限制条件不再单独生成任务，轻微 JSON 错误本地修复 |
+| v4.5 | 2026-07-19 | 长课程手册解析：PDF 段落边界保留、成果识别、推送/Vlog 递归拆解 |
+| v4.4 | 2026-07-19 | AI 调整建议按钮可拖拽 + 生成按钮反馈修复 |
+| v4.3 | 2026-07-19 | 修复首次提交不走快速模式、默认调 AI |
+| v4.2 | 2026-07-19 | 领域化兜底与最终协作视图恢复 |
+| v4.1 | 2026-07-18 | 恢复工作台视觉与共享业务服务（project_service.py 分层） |
+| v4.0 | 2026-07-18 | 任务拆解与分工双确认工作流：文件上传、可编辑草案、确认后分工 |
+| v3.8 | 2026-07-19 | 负载均衡跳出局部最优（全局联合枚举重排）+ 甘特窄条带日期修复 |
+| v3.7 | 2026-07-19 | 状态来回切换不再丢失原责任分工与匹配度 |
+| v3.6 | 2026-07-19 | 提示词与代码自洽 + 测试可复现性（pytest.ini）+ 文档计数统一 |
+| v3.5 | 2026-07-18 | 异步化收尾 + enhance 行为与提示词一致性 + Planner 兜底自适应 |
+| v3.4 | 2026-07-17 | 报告自动重生 + 表格渲染修复 + 空鉴权快速兜底 |
+| v3.3 | 2026-07-17 | 完成不重排 + 负向技能标签识别（不想做 X 的人不会被派去做 X） |
+| v3.2 | 2026-07-17 | 用户验收六连击修复：版本同步/状态归零/分工均衡/报告渲染/甘特图末位 |
+| v3.1 | 2026-07-17 | 审查复核选择性修复（13 项）：禁词乱码/状态切换重算/全员参与保证 |
+| v3.0 | 2026-07-16 | 七轮审查全量修复：健壮性/一致性/测试/死代码清理 |
+| v2.0 | 2026-07-16 | 深度审查修复（30 项问题）：工时链路打通/排期现实化/导出完整/状态闭环 |
+| v1.2 | 2026-07-15 | 进度追踪 + 突发情况处理（成员退出/工时变更） |
+| v1.1 | 2026-07-15 | 代码质量加固（6 个暗雷修复）：LLM 超时/错误分类/Structured Output 降级 |
+| v1.0 | 2026-07-14 | 功能完整正式版：成员级日工时 + Prompt 全量重构 + Web UI 全面升级 |
+| v0.4 | 2026-07-14 | 技能评分增强 + 动态编辑 + 精细打磨 |
+| v0.3 | 2026-07-14 | Web 重做 + 计划持久化 + 答辩模拟 |
+| v0.2 | 2026-07-14 | 核心算法：CPM 排期 + 技能评分 + B3/B4 角色匹配与动态编辑 |
+| v0.1 | 2026-07-12 | 初始骨架：接口契约 + Agent 基类 + LLM 封装 + Coordinator + FastAPI |
 
-## 近期变更
-
-### v1.2（2026-07-15）— 进度追踪 + 突发情况处理
-
-#### 进度追踪
-- **进度条**：任务列表顶部显示整体完成度（如 "3/8 (37%)"），绿色填充条实时变化
-- **阻塞状态**：status 下拉框新增「阻塞」选项（红色标记）
-- **甘特图联动**：标记任务状态后，时间线甘特图同步显示——已完成半透明、进行中蓝色边框、阻塞红色边框
-- **实时刷新**：改任务状态后进度条立即更新，无需刷新页面
-
-#### 突发情况处理
-- **已有功能验证**：`/api/edit-members` 接口支持成员退出（自动重分配任务）和工时变更（自动重排时间线）
-- **新增测试**：4 个成员变动测试覆盖退课/工时变更/边界保护
-
-#### 代码质量
-- editor.py 版本硬编码修复（version="1.0" -> 使用 schemas 默认值）
-- 测试总数 39 -> 43
-
-### v1.1（2026-07-15）— 代码质量加固（6 个暗雷修复）
-
-系统性代码审查后，修复 6 个"平时不炸、边界条件下崩溃"的隐患：
-
-#### 健壮性修复
-- **LLM 超时保护**：所有 LLM 调用增加 120s timeout，防止网络卡死时永久挂起
-- **LLM 错误分类**：从一刀切 `llm_timeout` 细分为 `auth_error`/`rate_limit`/`parse_error`/`timeout`/`unknown`
-- **Structured Output 降级**：`beta.parse` 失败后自动回退到 `create` + 手动 JSON 提取，兼容不支持 structured outputs 的端点
-- **Planner 兜底**：LLM 失败时不再 `raise RuntimeError` 崩溃，改为生成确定性 5 阶段兜底计划
-- **依赖重映射**：去重 T1->T1_1 后，所有 dependencies 统一重写，不再指向错误实例
-- **Matcher 空分配兜底**：sanitize 后全空时返回 AgentError，触发 B3 确定性兜底
-
-#### 新增
-- **CLI 单 Agent 调试入口**（`app/cli.py`）：支持单独运行 planner/matcher/timeline/reporter/interview
-- **Agent 单元测试**（`tests/test_agents.py`）：FakeLLMClient 注入，15 个测试覆盖全部 Agent 成功+失败路径
-- **版本统一**：main.py / schemas.py 对齐为 v1.1
-- **依赖锁定**：requirements.txt 加版本上限，新增 pytest-asyncio
-- **CHANGELOG.md**：含原版 vs 现版代码对照
-- **单 Agent 调试指南**（`docs/单Agent调试指南.md`）：面向队友的分步操作说明
-
-### v1.0.0（2026-07-14）— 全面审查修复 + B4 前端落地
-
-#### Bug 修复
-- routes.py 未传 user_requirements 给 InterviewSimAgent（已修复）
-- editor.py 重算 timeline 时未传 members（已修复）
-- routes.py 导出函数 f-string 语法错误（已修复）
-- schemas.py 删除未使用的 SkillLevel/MemberRole 枚举
-- routes.py 清理冗余 hours_per_day 字段（已移除，改用成员级 daily_available_hours）
-
-#### 新功能
-- **B4 编辑计划 Tab**：前端可直接增删改任务并一键重算 Timeline + Matcher
-- **工期预警系统**：自动检测工期超截止日期、缓冲不足、成员负载超标/偏高
-- **进度追踪预留**：SubTask/TimelineTask 新增 status 字段（待开始/进行中/已完成）
-- **报告 Markdown 渲染**：simpleMarkdown 解析标题/粗体/斜体/列表
-- **Markdown 导出**：一键下载完整计划报告为 .md 文件
-- **历史计划搜索**：Modal 内支持按文件名实时筛选
-- **答辩模拟用户要求**：传入评委关注点/重点模块等自定义要求
-- **Planner 多方案建议**：Prompt 增加 alternatives 字段，鼓励 LLM 提供备选拆解思路
-
-### v1.0（2026-07-14）— 代码质量 + UI 全面升级
-
-#### 核心功能增强
-- **成员级日工时**：`TeamMember` 新增 `daily_available_hours` 字段，不同成员可以设置不同的每日可用时间（如 6h、3h、4h），Timeline 按任务负责人的实际产能折算天数，彻底告别硬编码的"每人每天4小时"
-- **Coordinator 透传成员信息**：将完整的成员列表传入 TimelineAgent，支持按成员实际可用工时计算排期
-- **Planner 输入升级**：从简单姓名列表升级为含技能标签 + 可用工时的富文本，LLM 能更好地理解团队产能
-- **答辩模拟 API**：新增 `/api/interview` 接口，前端可直接调用 AI 生成答辩问题
-- **`additional_requirements` 修复**：之前额外要求字段未传入 `AssignmentInput`，现已修复
-
-#### Prompt 全量重构
-- Planner：增加拆解原则（粒度适中、依赖清晰、技能匹配、覆盖完整、可验证），输出格式说明更严格
-- Matcher：增加分配原则（技能匹配优先、负载均衡、主讲主答可不同、辅答互补、全员参与）
-- Reporter：增加风险多维度分析（工期/人员/技术风险 + 建议），要求用数据说话
-- 所有 Prompt 从简短指令升级为结构化 Prompt Engineering 格式
-
-#### Bug 修复
-- **Matcher sanitize**：修复了 `_sanitize` 中指向不存在任务的分配被错误保留的 bug（现在正确跳过）
-- **版本号统一**：`FullPlan.version` 和 `editor.py` 统一升至 `0.3.0`
-
-#### Web UI 全面重构
-- **左右分栏布局**：输入面板 sticky 在左侧，结果区域在右侧
-- **TailwindCSS + Lucide 图标**：现代化的 UI 组件和图标系统
-- **Tab 切换输出**：任务计划 / 时间线 / QA 矩阵 / 报告 / 答辩模拟，五个 Tab 清晰组织
-- **新增输入字段**：每人每天工时（全局）、成员每日工时（个人）、额外要求
-- **成员行可删除**：每个成员行有移除按钮
-- **甘特图美化**：红色=关键路径，绿色=可浮动，右侧显示关键/浮动/负责人标签
-- **负载条形图**：渐变蓝色条形图展示成员负载分布
-- **QA 表格**：蓝色=主讲，琥珀色=主答，匹配度百分比徽章
-- **答辩模拟**：集成在输出 Tab 中，一键生成 AI 答辩问题
-- **历史计划弹窗**：现代化 Modal 设计，支持载入/删除
-- **空状态优化**：引导性图标 + 文字说明
-
-### v0.2.0 — B3 角色匹配 + B4 动态编辑
-- B3 完整角色匹配：技能评分 + 负载均衡 + workload 可视化
-- B4 协作图动态编辑：add/remove/update + 自动重算 Timeline + Matcher
-- Timeline CPM 算法：环容错 + 可配置工时 + 浮动天数 + 负责人回填
-- Web：Gantt 图表 + 负载条形图 + Memory 管理 + 编辑接口
-
-### v0.1.0 — 初始骨架
-- 接口契约（schemas.py）+ Agent 基类 + LLM 封装
-- Coordinator 主链路 + FastAPI + 简易 Web
-- 计划校验（去重/去环/清依赖）+ 24 个测试
+详细版本变更记录见 [CHANGELOG.md](CHANGELOG.md)，包含每一版的问题分析、代码对照、原因和收益说明。
 
 ## 项目结构
 
@@ -282,7 +204,7 @@ competition/
 │       ├── routes.py         # FastAPI 路由（run/edit/save/load/interview）
 │       ├── templates/index.html  # TailwindCSS + Lucide + Tab 布局
 │       └── static/style.css  # 补充样式
-├── tests/                    # 45 个单元/集成测试
+├── tests/                    # 92 个单元/集成测试
 ├── memory/                   # B2 计划持久化
 ├── docs/                     # 项目文档
 └── requirements.txt
@@ -313,14 +235,6 @@ competition/
 | DELETE | `/api/plans/{filename}` | B2：删除计划 |
 | GET | `/api/health` | 健康检查 |
 
-## 三人分工
-
-| 人 | 角色 | 端到端负责 | 占比 |
-|---|---|---|---|
-| **B** | 软件工程 | 骨架 + LLM封装 + Coordinator + Timeline + Reporter + Matcher增强(B3) + 动态编辑(B4) + Web + Memory(B2) + 答辩模拟(B1) + Prompt + 测试 | ~55% |
-| **A** | Agent 设计 | **Planner**：Prompt 调优 + 输出质量（校验兜底已由 B 提供） | ~22% |
-| **C** | 知识增强 | **Matcher QA 矩阵**：Prompt + 可解释性（评分增强已由 B 提供） | ~23% |
-
 ## 快速启动
 
 ```bash
@@ -332,18 +246,12 @@ python -m app.main     # 默认 http://127.0.0.1:8000
 ## 运行测试
 
 ```bash
-python -m pytest -v    # 45 passed
+python -m pytest -v    # 92 passed
 ```
 
-## 分支策略
+## 协作方式
 
-详见 [BRANCHES.md](BRANCHES.md)。每人一个独享分支，只有 B 合并 `main`，每天至少集成一次。
-
-## 提交范围
-
-- **A 类（必做）**：A1~A5 ✅
-- **B 类（加做）**：B1 答辩模拟 ✅、B2 Memory ✅、B3 完整角色匹配 ✅、B4 协作图动态编辑 ✅
-- **C 类**：比赛阶段再扩展
+三人轮流负责，每人在自己负责的时间段内可以直接在 main 上做大改。交接前确保 git pull 拉到最新版本，改完 git push 即可。
 
 ## 单 Agent 调试
 

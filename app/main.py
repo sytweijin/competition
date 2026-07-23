@@ -3,9 +3,11 @@ FastAPI 应用入口（A5）
 """
 
 import logging
+import os
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import APP_HOST, APP_PORT, BASE_DIR
@@ -15,7 +17,20 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 
+logger = logging.getLogger(__name__)
+
 app = FastAPI(title="协作分工智能体", version="4.8")
+
+# 全局异常处理器：意外错误不暴露代码堆栈，返回 JSON 错误信息
+_DEBUG = os.getenv("DEBUG", "").lower() in ("1", "true", "yes")
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """捕获所有未处理的异常，防止平台暴露 Python 堆栈。"""
+    logger.exception("未捕获的错误: %s %s", request.method, request.url.path)
+    detail = str(exc) if _DEBUG else "服务器内部错误"
+    return JSONResponse(status_code=500, content={"detail": detail})
 
 # 注册路由
 from app.web.routes import router as api_router

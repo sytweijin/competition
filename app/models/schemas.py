@@ -103,7 +103,7 @@ class SubTask(BaseModel):
                                     description="依赖的其他任务 ID 列表")
     required_skills: list[str] = Field(default_factory=list)
     category: str = "其他"
-    execution_stage: str = "实践中"
+    execution_stage: str = "执行"
     custom_stage: Optional[str] = None
     start_date: Optional[date] = None
     end_date: Optional[date] = None
@@ -236,7 +236,7 @@ class FullPlan(BaseModel):
     qa_matrix: QAOutput
     report: ReportOutput
     reflection: Optional[ReflectionOutput] = Field(default=None, description="Reflection Agent 的自我审查结果")
-    version: str = "3.0"
+    version: str = "4.8"
 
 
 class DraftRequest(BaseModel):

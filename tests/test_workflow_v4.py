@@ -106,7 +106,7 @@ def test_file_requirements_create_specific_fast_tasks():
     assert "依据文件要求" in file_task.description
     assert "数量、格式、时间和质量条件" in file_task.description
     photo_task = next(task for task in plan.tasks if "日期水印" in task.name)
-    assert photo_task.execution_stage == "实践后"
+    assert photo_task.execution_stage == "收尾"
 
 
 def test_draft_editor_uses_handle_only_dragging_and_always_analyzes_files():
