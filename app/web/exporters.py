@@ -218,7 +218,7 @@ def plan_to_docx(plan: FullPlan) -> bytes:
 
     # 基本信息
     p = doc.add_paragraph()
-    p.add_run("课程要求：").bold = True
+    p.add_run("项目要求：").bold = True
     p.add_run(plan.input.course.description or "无")
     p = doc.add_paragraph()
     p.add_run("截止日期：").bold = True
@@ -276,10 +276,10 @@ def plan_to_docx(plan: FullPlan) -> bytes:
 
     # QA 矩阵
     if plan.qa_matrix.assignments:
-        doc.add_heading("四、答辩分工", level=1)
+        doc.add_heading("四、责任分工", level=1)
         qa_table = doc.add_table(rows=1, cols=4, style="Table Grid")
         hdr = qa_table.rows[0].cells
-        for i, text in enumerate(["任务", "主讲", "主答", "辅答"]):
+        for i, text in enumerate(["任务", "负责人", "主要协助", "辅助协助"]):
             hdr[i].text = text
             for run in hdr[i].paragraphs[0].runs:
                 run.bold = True
@@ -363,8 +363,8 @@ def plan_to_pdf(plan: FullPlan) -> bytes:
         story.append(Spacer(1, 10))
 
     if plan.qa_matrix.assignments:
-        story.append(Paragraph("四、答辩分工", h2_style))
-        qa_data = [["任务", "主讲", "主答", "辅答"]]
+        story.append(Paragraph("四、责任分工", h2_style))
+        qa_data = [["任务", "负责人", "主要协助", "辅助协助"]]
         for a in plan.qa_matrix.assignments:
             qa_data.append([
                 a.task_name, a.presenter, a.qa_primary,

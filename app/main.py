@@ -19,7 +19,7 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="小组合作智能体", version="4.8")
+app = FastAPI(title="协作分工智能体", version="4.8")
 
 # 全局异常处理器：意外错误不暴露代码堆栈，返回 JSON 错误信息
 _DEBUG = os.getenv("DEBUG", "").lower() in ("1", "true", "yes")

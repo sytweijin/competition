@@ -155,6 +155,12 @@ class RunRequest(BaseModel):
     members: list[TeamMember]
     deadline: str
     additional_requirements: str = ""
+    background: str = ""
+    requirements: str = ""
+    uploaded_files: list[dict] = Field(default_factory=list)
+    requirement_analysis: dict = Field(default_factory=dict)
+    default_start_date: str | None = None
+    default_end_date: str | None = None
 
 
 @router.post("/run", response_model=FullPlan)
@@ -170,6 +176,12 @@ async def run_plan(req: RunRequest):
             members=valid_members,
             deadline=date.fromisoformat(req.deadline),
             additional_requirements=req.additional_requirements,
+            background=req.background,
+            requirements=req.requirements,
+            uploaded_files=req.uploaded_files,
+            requirement_analysis=req.requirement_analysis,
+            default_start_date=date.fromisoformat(req.default_start_date) if req.default_start_date else None,
+            default_end_date=date.fromisoformat(req.default_end_date) if req.default_end_date else None,
         )
         coordinator = Coordinator()
         return coordinator.run(inp)
@@ -369,13 +381,13 @@ def _plan_to_markdown(data: dict) -> str:
     lines = []
     inp = data.get("input", {})
     course = inp.get("course", {})
-    lines.append(f"# {course.get('name', 'Unknown Course')} - Project Plan")
+    lines.append(f"# {course.get('name', '未命名项目')} - 项目计划")
     lines.append(f"")
-    lines.append(f"**Description:** {course.get('description', '')}")
-    lines.append(f"**Deadline:** {inp.get('deadline', '')}")
+    lines.append(f"**项目要求：** {course.get('description', '')}")
+    lines.append(f"**截止日期：** {inp.get('deadline', '')}")
     members = inp.get("members", [])
     if members:
-        lines.append(f"**Team:** {', '.join(m.get('name','') for m in members)}")
+        lines.append(f"**团队成员：** {', '.join(m.get('name','') for m in members)}")
     lines.append("")
 
     plan = data.get("plan", {})
@@ -385,8 +397,8 @@ def _plan_to_markdown(data: dict) -> str:
         lines.append("")
     tasks = plan.get("tasks", [])
     if tasks:
-        lines.append("## Tasks")
-        lines.append("| ID | Name | Hours | Dependencies | Skills |")
+        lines.append("## 任务列表")
+        lines.append("| 编号 | 任务 | 工时 | 依赖 | 技能 |")
         lines.append("|---|---|---|---|---|")
         for t in tasks:
             deps = ", ".join(t.get("dependencies", []))
@@ -396,23 +408,23 @@ def _plan_to_markdown(data: dict) -> str:
 
     tl = data.get("timeline", {})
     if tl.get("tasks"):
-        lines.append("## Timeline")
-        lines.append(f"**Total Duration:** {tl.get('total_days', 0)} days")
+        lines.append("## 时间线")
+        lines.append(f"**总工期：** {tl.get('total_days', 0)} 天")
         cp = tl.get("critical_path", [])
         if cp:
-            lines.append(f"**Critical Path:** {' -> '.join(cp)}")
+            lines.append(f"**关键路径：** {' -> '.join(cp)}")
         lines.append("")
-        lines.append("| Task | Start | End | Critical | Float |")
+        lines.append("| 任务 | 开始 | 结束 | 关键 | 浮动 |")
         lines.append("|---|---|---|---|---|")
         for t in tl["tasks"]:
-            crit = "Yes" if t.get("is_critical") else ""
-            lines.append(f"| {t['task_id']} {t['name']} | {t['start_date']} | {t['end_date']} | {crit} | {t.get('float_days',0)}d |")
+            crit = "是" if t.get("is_critical") else ""
+            lines.append(f"| {t['task_id']} {t['name']} | {t['start_date']} | {t['end_date']} | {crit} | {t.get('float_days',0)}天 |")
         lines.append("")
 
     qa = data.get("qa_matrix", {})
     if qa.get("assignments"):
-        lines.append("## QA Matrix")
-        lines.append("| Task | Presenter | QA Primary | QA Support | Score |")
+        lines.append("## 责任分工")
+        lines.append("| 任务 | 负责人 | 主要协助 | 辅助协助 | 匹配度 |")
         lines.append("|---|---|---|---|---|")
         for a in qa["assignments"]:
             support = ", ".join(a.get("qa_support", []))
@@ -422,11 +434,11 @@ def _plan_to_markdown(data: dict) -> str:
 
     report = data.get("report", {})
     if report.get("summary"):
-        lines.append("## Report")
+        lines.append("## 报告")
         lines.append(report["summary"])
         if report.get("risk_note"):
             lines.append("")
-            lines.append("**Risks:** " + report["risk_note"])
+            lines.append("**风险提示：** " + report["risk_note"])
         lines.append("")
 
     return "\n".join(lines)

@@ -23,6 +23,81 @@ def _normalize_tag(tag: str) -> str:
 # 用元组而非单字符串，避免把「想做」误判为负向（正向的「想做PPT」不含这些标记）。
 _NEGATIVE_MARKERS = ("不想", "不太想", "不擅长", "不喜欢", "避免", "拒绝", "别让", "排斥", "怕做")
 
+# 正向描述性前缀：在匹配前剥离，让「擅长PPT」→「ppt」
+_POSITIVE_PREFIXES = ("擅长", "想做", "会做", "能做", "做过", "精通", "熟练", "熟悉")
+
+# 描述性后缀：在匹配前剥离，让「文学素养不错」→「文学素养」
+_DESCRIPTIVE_SUFFIXES = ("不错", "很好", "较好", "还可以", "挺强", "很强", "还行")
+
+# 技能同义词映射表：将各种表达归一化为标准技能词，解决纯字符相似度
+# 对中文描述性标签和跨语言近义词失效的问题（P0-3）。
+_SKILL_SYNONYMS = {
+    # 写作 / 文案类
+    "写作": "文案撰写", "撰写": "文案撰写", "文笔": "文案撰写",
+    "文学素养": "文案撰写", "文学": "文案撰写", "文字": "文案撰写",
+    "总结": "文案撰写", "成文": "文案撰写", "报告撰写": "文案撰写",
+    "文档撰写": "文案撰写", "编撰": "文案撰写", "编辑": "文案撰写",
+    "内容撰写": "文案撰写", "文稿": "文案撰写",
+    # 前端类
+    "前端": "前端开发", "frontend": "前端开发", "web前端": "前端开发",
+    "html": "前端开发", "css": "前端开发", "javascript": "前端开发",
+    "js": "前端开发", "vue": "前端开发", "react": "前端开发",
+    "页面": "前端开发", "网页": "前端开发",
+    # 后端类
+    "后端": "后端开发", "backend": "后端开发", "服务端": "后端开发",
+    "服务器": "后端开发", "api": "后端开发",
+    # PPT / 演示类
+    "ppt": "PPT制作", "幻灯片": "PPT制作", "演示文稿": "PPT制作",
+    "powerpoint": "PPT制作", "演示": "PPT制作",
+    # 排版类
+    "排版": "排版设计", "秀米": "排版设计", "图文排版": "排版设计",
+    # 数据分析类
+    "数据分析": "数据分析", "dataanalysis": "数据分析",
+    "数据处理": "数据分析", "统计": "数据分析", "数据统计": "数据分析",
+    "数据挖掘": "数据分析",
+    # Python 类
+    "python": "Python编程", "py": "Python编程",
+    # 设计类
+    "设计": "平面设计", "平面设计": "平面设计", "ui": "平面设计",
+    "美工": "平面设计", "视觉设计": "平面设计", "海报设计": "平面设计",
+    # 视频 / 剪辑类
+    "视频": "视频剪辑", "剪辑": "视频剪辑", "video": "视频剪辑",
+    "vlog": "视频剪辑", "拍摄": "视频剪辑", "摄像": "视频剪辑",
+    # 策划类
+    "策划": "内容策划", "内容策划": "内容策划", "活动策划": "内容策划",
+    "创意": "内容策划", "方案策划": "内容策划",
+    # 调研类
+    "调研": "调研分析", "调查": "调研分析", "访谈": "调研分析",
+    "问卷": "调研分析", "采访": "调研分析", "实地调研": "调研分析",
+    # 沟通 / 协调类
+    "沟通": "沟通协调", "协调": "沟通协调", "组织": "沟通协调",
+    "团队协作": "沟通协调", "领导力": "沟通协调",
+    # 项目管理类
+    "项目管理": "项目管理", "projectmanagement": "项目管理",
+    "进度管理": "项目管理",
+}
+
+
+def _canonicalize(tag: str) -> str:
+    """将技能标签归一化为标准形式。
+
+    依次：去空格转小写 → 剥离描述性前缀/后缀 → 查同义词表。
+    例：「擅长PPT」→「ppt」→「PPT制作」
+         「文学素养不错」→「文学素养」→「文案撰写」
+    """
+    norm = _normalize_tag(tag)
+    # 剥离正向描述性前缀
+    for prefix in _POSITIVE_PREFIXES:
+        if norm.startswith(prefix) and len(norm) > len(prefix):
+            norm = norm[len(prefix):]
+            break
+    # 剥离描述性后缀
+    for suffix in _DESCRIPTIVE_SUFFIXES:
+        if norm.endswith(suffix) and len(norm) > len(suffix):
+            norm = norm[:-len(suffix)]
+            break
+    return _SKILL_SYNONYMS.get(norm, norm)
+
 
 def _split_tags(tags: list[str]) -> tuple[list[str], list[str]]:
     """把技能标签拆成 (正向技能, 负向回避技能)。
@@ -64,25 +139,26 @@ def format_skills_for_prompt(tags: list[str]) -> str:
 
 
 def _similar(a: str, b: str) -> float:
-    """两个技能标签的相似度（大小写/空白不敏感，支持包含关系）。"""
+    """两个技能标签的相似度（大小写/空白不敏感，支持包含关系和同义词）。"""
     na, nb = _normalize_tag(a), _normalize_tag(b)
     if not na or not nb:
         return 0.0
-    # 完全匹配
-    if na == nb:
+    # 同义词归一化：让「文学素养不错」和「撰写报告」能匹配
+    ca, cb = _canonicalize(a), _canonicalize(b)
+    if ca == cb:
         return 1.0
     # 包含关系（如「前端」vs「前端开发」）给高分
-    if na in nb or nb in na:
+    if ca in cb or cb in ca:
         return 0.85
     # 退化为字符相似度
-    return SequenceMatcher(None, na, nb).ratio()
+    return SequenceMatcher(None, ca, cb).ratio()
 
 
-# 角色投入系数：负责人承担任务全部工时，主要协助参与折算 30%，辅助协助各折算 15%。
-# 说明：同一任务的工时按角色投入占比折算到各成员（负责人1.0 + 主要协助0.3 + 辅助协助0.15/人），累计可能超过任务原工时。
+# 角色投入系数：负责人承担任务全部工时，主要协助参与折算 15%，辅助协助各折算 5%。
+# 降低协作者折算以减少表面负载放大（P0-4：原 0.3+0.15×2 导致 8h 任务算成 12.8h）。
 PRESENTER_RATIO = 1.0
-QA_PRIMARY_RATIO = 0.3
-QA_SUPPORT_RATIO = 0.15
+QA_PRIMARY_RATIO = 0.15
+QA_SUPPORT_RATIO = 0.05
 DEFAULT_BALANCE_THRESHOLD_HOURS = 2.0
 
 # 多因子初始打分权重：技能匹配 + 总负载 + 阶段负载 + 剩余产能
@@ -493,23 +569,29 @@ def assign_with_balance(plan: PlanOutput,
         stage_work[presenter][t.execution_stage] = (
             stage_work[presenter].get(t.execution_stage, 0.0) + t.estimated_hours)
 
-        # 主答：剩余成员中「负载最轻」者优先（匹配度作同负载时的次序）
-        rest = [
-            (n, skill) for n, skill, _av, _sc in scored
-            if n != presenter
-            and not _avoids_required(member_map.get(n), t.required_skills)
-        ]
-        rest.sort(key=lambda x: (work[x[0]], -x[1]))
-        primary = rest[0][0] if rest else ""
-        if primary and primary != presenter:
-            work[primary] += t.estimated_hours * QA_PRIMARY_RATIO
+        # 根据建议参与人数决定协作者数量（P0-4：单人任务不分配协作者，避免放大负载）
+        max_collaborators = max(0, t.suggested_people - 1)
+        primary = ""
+        support: list[str] = []
+        if max_collaborators > 0:
+            # 主答：剩余成员中「负载最轻」者优先（匹配度作同负载时的次序）
+            rest = [
+                (n, skill) for n, skill, _av, _sc in scored
+                if n != presenter
+                and not _avoids_required(member_map.get(n), t.required_skills)
+            ]
+            rest.sort(key=lambda x: (work[x[0]], -x[1]))
+            primary = rest[0][0] if rest else ""
+            if primary and primary != presenter:
+                work[primary] += t.estimated_hours * QA_PRIMARY_RATIO
 
-        # 辅助协助：再从剩余（排除负责人、主要协助）中取负载最轻的 2 人，避免同人占两席
-        rest2 = [n for n, _ in rest if n != primary]
-        rest2.sort(key=lambda n: work[n])
-        support = rest2[:2]
-        for s in support:
-            work[s] += t.estimated_hours * QA_SUPPORT_RATIO
+            # 辅助协助：再从剩余中取负载最轻者，上限受 suggested_people 约束
+            if max_collaborators >= 2:
+                rest2 = [n for n, _ in rest if n != primary]
+                rest2.sort(key=lambda n: work[n])
+                support = rest2[:min(2, max_collaborators - 1)]
+                for s in support:
+                    work[s] += t.estimated_hours * QA_SUPPORT_RATIO
 
         best_skill = scored[0][1]
         reasoning = (

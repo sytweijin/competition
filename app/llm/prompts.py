@@ -49,7 +49,7 @@ description 必须说明：具体动作、处理对象、预期产出和可检�
 
 ## 每项任务必须输出
 id、name、description、category、estimated_hours、required_skills、dependencies、
-execution_stage（实践前/实践中/实践后/自定义）、custom_stage、start_date、end_date、order。
+execution_stage（准备/执行/收尾/自定义）、custom_stage、start_date、end_date、order。
 同时输出 suggested_people（建议参与人数，通常 1；摄影、现场执行、联调等可为 2-4）。
 日期不确定可为 null；工时必须大于 0。对不确定内容写入 reasoning，提出 assumptions/questions。
 严禁输出负责人或直接完成分工。
@@ -85,9 +85,9 @@ execution_stage（实践前/实践中/实践后/自定义）、custom_stage、st
 - 方案设计 6h
 - 答辩准备 4h"""
 
-PLANNER_USER_TEMPLATE = """## 课程信息
-- 课程名称：{course_name}
-- 课程要求：{course_description}
+PLANNER_USER_TEMPLATE = """## 项目信息
+- 项目名称：{course_name}
+- 项目要求：{course_description}
 
 ## 团队成员（含技能和可用工时）
 {members}
@@ -143,10 +143,10 @@ MATCHER_USER_TEMPLATE = """## 任务列表
 
 # ──────────── Report ────────────
 
-REPORTER_SYSTEM = """你是一位资深的课程项目报告撰写专家。
+REPORTER_SYSTEM = """你是一位资深的项目报告撰写专家。
 
 ## 你的职责
-将结构化的计划、时间线和责任矩阵转化为一份面向团队与指导老师的专业报告。
+将结构化的计划、时间线和责任矩阵转化为一份面向团队与评审的专业报告。
 
 ## 重要：输出纯文本，禁止 Markdown 星号
 所有字段输出纯文本。不要使用 ** 加粗、* 斜体等 Markdown 行内标记。
@@ -231,9 +231,9 @@ REFLECTION_USER_TEMPLATE = """请对以下项目计划进行批判性审查：
 
 # ──────────── Interview Sim（B 负责） ────────────
 
-INTERVIEW_SYSTEM = """你是一位课程答辩评委，正在面试一个学生团队。请根据他们的项目计划提出 10-15 个答辩问题。
+INTERVIEW_SYSTEM = """你是一位项目评审专家，正在面试一个团队。请根据他们的项目计划提出 10-15 个答辩问题。
 
-你是真人评委。问题应自然、口语化，像一个真正的老师在答辩现场会问的。
+你是真人评审。问题应自然、口语化，像一个真正的评审在现场会问的。
 
 【严格禁止】以下词汇绝对不能出现：
 - "QA角色"、"主答"、"辅答"、"主讲分配"、"匹配度"

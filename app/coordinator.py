@@ -100,7 +100,7 @@ class Coordinator:
         end = inp.default_end_date or inp.deadline
         tasks = []
         for index, task in enumerate(plan.tasks, 1):
-            stage = task.execution_stage or "实践中"
+            stage = task.execution_stage or "执行"
             tasks.append(task.model_copy(update={
                 "order": task.order or index,
                 "start_date": task.start_date or start,
@@ -136,8 +136,13 @@ class Coordinator:
                 )[:max(0, t.suggested_people - 1)] if t.id in by_task else []
             }) for t in plan.tasks
         ]
-        return FullPlan(input=inp, plan=plan.model_copy(update={"tasks": assigned_tasks}),
-                        timeline=timeline, qa_matrix=qa_matrix, report=report)
+        final_plan = plan.model_copy(update={"tasks": assigned_tasks})
+        # P1-3: confirm 路径也执行 Reflection 审查（确定性兜底，不阻塞主流程）
+        total_capacity = sum(m.available_hours for m in inp.members)
+        reflection = self._step_reflection(final_plan, timeline, qa_matrix, total_capacity)
+        return FullPlan(input=inp, plan=final_plan,
+                        timeline=timeline, qa_matrix=qa_matrix, report=report,
+                        reflection=reflection)
 
     # ──────────── 各步骤 ────────────
 
@@ -244,16 +249,16 @@ class Coordinator:
                      or ("推送" in text
                          and ("实践" in text or "公众号" in text)))):
             specs = [
-                ("确定推送主题和内容框架", "策划", 3, ["内容策划"], "实践前"),
-                ("制定摄影和素材收集要求", "摄影", 2, ["摄影策划"], "实践前"),
-                ("实践过程摄影", "摄影", 6, ["摄影"], "实践中"),
-                ("活动记录与资料整理", "资料", 4, ["资料整理"], "实践中"),
-                ("收集成员感想", "采访", 3, ["采访沟通"], "实践中"),
-                ("推送文案撰写", "文案", 6, ["文案撰写"], "实践后"),
-                ("图片筛选与处理", "设计", 4, ["图片处理"], "实践后"),
-                ("秀米排版", "排版", 5, ["秀米排版"], "实践后"),
-                ("内容审核与修改", "审核", 3, ["内容审核"], "实践后"),
-                ("推送发布与数据反馈", "发布", 2, ["平台发布", "数据分析"], "实践后"),
+                ("确定推送主题和内容框架", "策划", 3, ["内容策划"], "准备"),
+                ("制定摄影和素材收集要求", "摄影", 2, ["摄影策划"], "准备"),
+                ("实践过程摄影", "摄影", 6, ["摄影"], "执行"),
+                ("活动记录与资料整理", "资料", 4, ["资料整理"], "执行"),
+                ("收集成员感想", "采访", 3, ["采访沟通"], "执行"),
+                ("推送文案撰写", "文案", 6, ["文案撰写"], "收尾"),
+                ("图片筛选与处理", "设计", 4, ["图片处理"], "收尾"),
+                ("秀米排版", "排版", 5, ["秀米排版"], "收尾"),
+                ("内容审核与修改", "审核", 3, ["内容审核"], "收尾"),
+                ("推送发布与数据反馈", "发布", 2, ["平台发布", "数据分析"], "收尾"),
             ]
             tasks = []
             for i, (name, category, hours, skills, stage) in enumerate(specs):
@@ -282,7 +287,7 @@ class Coordinator:
         if len(specs) > 2:
             tasks = []
             for i, spec in enumerate(specs):
-                deps = [f"T{i}"] if i > 0 and spec[4] != "实践中" else []
+                deps = [f"T{i}"] if i > 0 and spec[4] != "执行" else []
                 tasks.append(SubTask(
                     id=f"T{i+1}", name=spec[0],
                     description=_fallback_description(
@@ -351,7 +356,7 @@ def _domain_fallback_specs(
                 name, category, hours, skills, stage, people, source))
 
     # 通用起始工作
-    add("确认项目目标与交付标准", "策划", 2, ["需求分析", "沟通"], "实践前")
+    add("确认项目目标与交付标准", "策划", 2, ["需求分析", "沟通"], "准备")
 
     # 先落地文件中明确写出的动作/交付物，避免被通用行业模板淹没。
     for item in _specific_requirement_items(analysis)[:6]:
@@ -363,37 +368,37 @@ def _domain_fallback_specs(
                 _requirement_source_with_constraints(item, analysis))
 
     if any(word in lowered for word in ("调研", "问卷", "访谈", "调查")):
-        add("设计调研方案与问题清单", "调研", 3, ["调研设计"], "实践前")
-        add("开展调研与资料采集", "调研", 6, ["访谈", "资料收集"], "实践中", 2)
-        add("整理并分析调研数据", "分析", 5, ["数据分析"], "实践后")
+        add("设计调研方案与问题清单", "调研", 3, ["调研设计"], "准备")
+        add("开展调研与资料采集", "调研", 6, ["访谈", "资料收集"], "执行", 2)
+        add("整理并分析调研数据", "分析", 5, ["数据分析"], "收尾")
     if any(word in lowered for word in ("活动", "实践", "现场", "志愿")):
         focus = _project_focus(project_name)
         has_file_execution = any(
-            spec[4] == "实践中" and spec[6] for spec in specs)
-        add(f"制定{focus}现场任务清单", "策划", 3, ["活动策划"], "实践前")
+            spec[4] == "执行" and spec[6] for spec in specs)
+        add(f"制定{focus}现场任务清单", "策划", 3, ["活动策划"], "准备")
         if not has_file_execution:
             add(f"开展{focus}现场任务", "执行", 6,
-                ["组织协调"], "实践中", 3)
+                ["组织协调"], "执行", 3)
         add(f"整理{focus}过程证据", "记录", 4,
-            ["资料整理"], "实践中", 2)
+            ["资料整理"], "执行", 2)
     if any(word in lowered for word in ("摄影", "照片", "拍摄", "视频")):
-        add("制定拍摄清单与素材规范", "摄影", 2, ["摄影策划"], "实践前")
-        add("现场摄影与视频素材采集", "摄影", 6, ["摄影", "摄像"], "实践中", 2)
-        add("素材筛选与后期处理", "设计", 5, ["图片处理", "视频剪辑"], "实践后")
+        add("制定拍摄清单与素材规范", "摄影", 2, ["摄影策划"], "准备")
+        add("现场摄影与视频素材采集", "摄影", 6, ["摄影", "摄像"], "执行", 2)
+        add("素材筛选与后期处理", "设计", 5, ["图片处理", "视频剪辑"], "收尾")
     if any(word in lowered for word in ("报告", "总结", "论文", "文档")):
-        add("搭建报告结构与内容提纲", "文案", 2.5, ["内容策划"], "实践前")
-        add("撰写报告或总结正文", "文案", 6, ["文案撰写"], "实践后")
-        add("数据、图表与附件整理", "资料", 4, ["数据可视化", "资料整理"], "实践后")
+        add("搭建报告结构与内容提纲", "文案", 2.5, ["内容策划"], "准备")
+        add("撰写报告或总结正文", "文案", 6, ["文案撰写"], "收尾")
+        add("数据、图表与附件整理", "资料", 4, ["数据可视化", "资料整理"], "收尾")
     if any(word in lowered for word in ("ppt", "答辩", "汇报", "展示")):
-        add("设计汇报结构与演示逻辑", "策划", 2.5, ["汇报策划"], "实践后")
-        add("制作演示文稿与视觉排版", "设计", 5, ["PPT", "视觉设计"], "实践后")
-        add("答辩演练与问题准备", "答辩", 3, ["表达", "应答"], "实践后", 2)
+        add("设计汇报结构与演示逻辑", "策划", 2.5, ["汇报策划"], "收尾")
+        add("制作演示文稿与视觉排版", "设计", 5, ["PPT", "视觉设计"], "收尾")
+        add("答辩演练与问题准备", "答辩", 3, ["表达", "应答"], "收尾", 2)
     if any(word in lowered for word in ("开发", "系统", "网站", "程序", "小程序")):
-        add("梳理功能需求与验收标准", "产品", 3, ["需求分析"], "实践前")
-        add("完成核心功能设计与实现", "开发", 10, ["技术开发"], "实践中", 2)
-        add("功能测试、修复与联调", "测试", 6, ["测试", "调试"], "实践后", 2)
+        add("梳理功能需求与验收标准", "产品", 3, ["需求分析"], "准备")
+        add("完成核心功能设计与实现", "开发", 10, ["技术开发"], "执行", 2)
+        add("功能测试、修复与联调", "测试", 6, ["测试", "调试"], "收尾", 2)
 
-    add("成果审核、修改与最终提交", "审核", 3, ["质量审核"], "实践后", 2)
+    add("成果审核、修改与最终提交", "审核", 3, ["质量审核"], "收尾", 2)
     return specs[:12]
 
 
@@ -442,7 +447,7 @@ def _fallback_blueprint_plan(
                     str(skill) for skill in item.get("required_skills", [])
                 ],
                 execution_stage=str(
-                    item.get("execution_stage", "实践中")),
+                    item.get("execution_stage", "执行")),
                 dependencies=dependencies,
                 suggested_people=(
                     1 if member is not None
@@ -667,12 +672,12 @@ def _infer_skills(name: str) -> list[str]:
 def _infer_stage(name: str) -> str:
     if any(word in name for word in (
             "提交", "发布", "审核", "总结", "分析", "撰写", "排版", "后期")):
-        return "实践后"
+        return "收尾"
     if any(word in name for word in ("方案", "标准", "设计", "准备")):
-        return "实践前"
+        return "准备"
     if any(word in name for word in ("现场", "采集", "开展", "执行")):
-        return "实践中"
-    return "实践后"
+        return "执行"
+    return "收尾"
 
 
 def _infer_people(name: str) -> int:

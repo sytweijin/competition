@@ -173,7 +173,7 @@ class LLMClient:
                 {"role": "user", "content": user_prompt},
             ],
             temperature=temperature,
-            max_tokens=3000,
+            max_tokens=8000,
             timeout=LLM_TIMEOUT,
         )
         raw = resp.choices[0].message.content or ""
@@ -286,11 +286,11 @@ class LLMClient:
             stage_raw = str(item.get(
                 "execution_stage", item.get("stage", "实践中")))
             stage_mapping = {
-                "前期": "实践前", "准备": "实践前", "实践前": "实践前",
-                "中期": "实践中", "执行": "实践中", "实践中": "实践中",
-                "后期": "实践后", "收尾": "实践后", "实践后": "实践后",
+                "前期": "准备", "准备": "准备", "实践前": "准备",
+                "中期": "执行", "执行": "执行", "实践中": "执行",
+                "后期": "收尾", "收尾": "收尾", "实践后": "收尾",
             }
-            stage = stage_mapping.get(stage_raw, "实践中")
+            stage = stage_mapping.get(stage_raw, "执行")
             people_raw = item.get(
                 "suggested_people", item.get("people", 1))
             people_match = re.search(r"\d+", str(people_raw))
