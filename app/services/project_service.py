@@ -184,7 +184,8 @@ def workload_snapshot(plan: FullPlan) -> dict:
             warnings.append(f"{name} 总工时明显高于团队平均")
         for stage, stage_hours in stage_work[name].items():
             if stage_hours > max(8, average):
-                warnings.append(f"{name} 在{stage}阶段任务较集中")
+                stage_label = stage if str(stage).endswith("阶段") else f"{stage}阶段"
+                warnings.append(f"{name} 在{stage_label}任务较集中")
     return {
         "members": {
             name: {

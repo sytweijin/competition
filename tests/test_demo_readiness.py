@@ -1,0 +1,79 @@
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+
+from app.agents.scoring import skill_score
+from app.main import app
+from app.models.schemas import TeamMember
+
+
+def test_descriptive_and_cross_language_skill_aliases_match():
+    writer = TeamMember(name="文案", skill_tags=["文学素养", "文案写作"])
+    designer = TeamMember(name="设计", skill_tags=["PPT", "视觉设计"])
+
+    assert skill_score(writer, ["报告撰写"]) >= 0.9
+    assert skill_score(designer, ["幻灯片制作"]) >= 0.9
+
+
+def test_demo_ui_has_full_showcase_flow():
+    html = Path("app/web/templates/index.html").read_text(encoding="utf-8")
+    css = Path("app/web/static/style.css").read_text(encoding="utf-8")
+
+    assert 'id="demoCaseBtn"' in html
+    assert "function projectDays()" in html
+    assert "daily*30" not in html
+    assert 'data-format="markdown"' in html
+    assert 'data-format="docx"' in html
+    assert 'data-format="pdf"' in html
+    assert "function deletePlan(" in html
+    assert "关键路径" in html and "缓冲较少" in html and "缓冲充裕" in html
+    assert ".gantt-track i.blocked" in css
+
+
+def test_demo_main_flow_and_three_exports():
+    client = TestClient(app)
+    project_input = {
+        "course": {
+            "name": "校园低碳生活倡议发布",
+            "description": "完成调研、内容策划、视觉物料、活动和复盘报告",
+        },
+        "background": "面向全校同学策划低碳生活倡议活动",
+        "requirements": "交付调研摘要、宣传图文和复盘报告",
+        "members": [
+            {"name": "林悦", "skill_tags": ["调研", "数据分析"]},
+            {"name": "陈曦", "skill_tags": ["文案写作", "报告撰写"]},
+            {"name": "周航", "skill_tags": ["视觉设计", "PPT", "摄影"]},
+        ],
+        "deadline": "2026-08-20",
+        "default_start_date": "2026-08-05",
+        "default_end_date": "2026-08-20",
+    }
+    draft_response = client.post(
+        "/api/draft", json={"input": project_input, "use_ai": False})
+    assert draft_response.status_code == 200
+    draft = draft_response.json()["plan"]
+    assert len(draft["tasks"]) >= 5
+
+    confirm_response = client.post(
+        "/api/confirm-draft", json={"input": project_input, "plan": draft})
+    assert confirm_response.status_code == 200
+    plan = confirm_response.json()
+    assert plan["timeline"]["tasks"]
+    assert all(task.get("assignee_id") for task in plan["plan"]["tasks"])
+
+    assignees = {
+        task["id"]: task["assignee_id"] for task in plan["plan"]["tasks"]}
+    collaborators = {
+        task["id"]: task.get("collaborator_ids", [])
+        for task in plan["plan"]["tasks"]
+    }
+    manual_response = client.post("/api/manual-assignment", json={
+        "plan": plan, "assignees": assignees, "collaborators": collaborators,
+    })
+    assert manual_response.status_code == 200
+    final_plan = manual_response.json()
+
+    for format_name in ("markdown", "docx", "pdf"):
+        response = client.post(f"/api/export/{format_name}", json=final_plan)
+        assert response.status_code == 200
+        assert response.content

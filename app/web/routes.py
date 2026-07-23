@@ -449,7 +449,7 @@ def _plan_to_markdown(data: dict) -> str:
     qa = data.get("qa_matrix", {})
     if qa.get("assignments"):
         lines.append("## QA Matrix")
-        lines.append("| Task | Presenter | QA Primary | QA Support | Score |")
+        lines.append("| 任务 | 负责人 | 主要协作者 | 其他协作者 | 匹配度 |")
         lines.append("|---|---|---|---|---|")
         for a in qa["assignments"]:
             support = ", ".join(a.get("qa_support", []))

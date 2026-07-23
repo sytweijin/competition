@@ -218,7 +218,7 @@ def plan_to_docx(plan: FullPlan) -> bytes:
 
     # 基本信息
     p = doc.add_paragraph()
-    p.add_run("课程要求：").bold = True
+    p.add_run("项目要求：").bold = True
     p.add_run(plan.input.course.description or "无")
     p = doc.add_paragraph()
     p.add_run("截止日期：").bold = True
@@ -276,7 +276,7 @@ def plan_to_docx(plan: FullPlan) -> bytes:
 
     # QA 矩阵
     if plan.qa_matrix.assignments:
-        doc.add_heading("四、答辩分工", level=1)
+        doc.add_heading("四、责任分工", level=1)
         qa_table = doc.add_table(rows=1, cols=4, style="Table Grid")
         hdr = qa_table.rows[0].cells
         for i, text in enumerate(["任务", "主讲", "主答", "辅答"]):
@@ -324,7 +324,7 @@ def plan_to_pdf(plan: FullPlan) -> bytes:
 
     story.append(Paragraph(saxutils.escape(plan.input.course.name) or "项目计划", h1_style))
     story.append(Spacer(1, 12))
-    story.append(Paragraph(f"<b>课程要求：</b>{saxutils.escape(plan.input.course.description or '无')}", body_style))
+    story.append(Paragraph(f"<b>项目要求：</b>{saxutils.escape(plan.input.course.description or '无')}", body_style))
     story.append(Paragraph(f"<b>截止日期：</b>{plan.input.deadline}", body_style))
     members_str = "、".join(
         f"{m.name}({m.daily_available_hours}h/天)" for m in plan.input.members
@@ -363,7 +363,7 @@ def plan_to_pdf(plan: FullPlan) -> bytes:
         story.append(Spacer(1, 10))
 
     if plan.qa_matrix.assignments:
-        story.append(Paragraph("四、答辩分工", h2_style))
+        story.append(Paragraph("四、责任分工", h2_style))
         qa_data = [["任务", "主讲", "主答", "辅答"]]
         for a in plan.qa_matrix.assignments:
             qa_data.append([

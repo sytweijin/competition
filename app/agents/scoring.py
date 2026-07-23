@@ -19,6 +19,42 @@ def _normalize_tag(tag: str) -> str:
     """标签归一化：去空格、转小写，便于精确匹配。"""
     return tag.strip().lower().replace(" ", "")
 
+
+# 比赛展示版使用的轻量技能概念词典。它解决“文学素养 vs 报告撰写”、
+# “PPT vs 幻灯片”和中英文标签等常见近义表达，不引入向量库或额外服务。
+_SKILL_CONCEPTS = {
+    "writing": (
+        "写作", "文案", "文字", "文学", "报告", "撰写", "编辑", "总结",
+        "copywriting", "writing", "report",
+    ),
+    "presentation": (
+        "ppt", "幻灯片", "演示文稿", "汇报", "路演", "presentation",
+    ),
+    "design": (
+        "设计", "视觉", "排版", "美术", "海报", "秀米", "ui", "design",
+    ),
+    "research": (
+        "调研", "研究", "访谈", "问卷", "资料收集", "检索", "research",
+    ),
+    "data": (
+        "数据", "统计", "分析", "excel", "可视化", "dataanalysis", "analytics",
+    ),
+    "photo": ("摄影", "拍摄", "照片", "相机", "photo", "photography"),
+    "video": ("视频", "剪辑", "vlog", "后期", "video"),
+    "planning": ("策划", "统筹", "协调", "组织", "运营", "planning"),
+    "frontend": ("前端", "网页", "html", "css", "javascript", "frontend"),
+    "backend": ("后端", "接口", "数据库", "api", "python", "backend"),
+}
+
+
+def _concepts(tag: str) -> set[str]:
+    normalized = _normalize_tag(tag)
+    return {
+        concept for concept, words in _SKILL_CONCEPTS.items()
+        if any(_normalize_tag(word) in normalized for word in words)
+    }
+
+
 # 负向偏好的前缀标记：命中即认为该成员「回避」其后跟随的技能。
 # 用元组而非单字符串，避免把「想做」误判为负向（正向的「想做PPT」不含这些标记）。
 _NEGATIVE_MARKERS = ("不想", "不太想", "不擅长", "不喜欢", "避免", "拒绝", "别让", "排斥", "怕做")
@@ -74,15 +110,17 @@ def _similar(a: str, b: str) -> float:
     # 包含关系（如「前端」vs「前端开发」）给高分
     if na in nb or nb in na:
         return 0.85
+    # 命中同一技能概念时视为强相关，避免描述性中文标签和中英近义词全为 0。
+    if _concepts(a) & _concepts(b):
+        return 0.92
     # 退化为字符相似度
     return SequenceMatcher(None, na, nb).ratio()
 
 
-# 角色投入系数：主讲承担任务全部工时，主答辅助参与折算 30%，辅答各折算 15%。
-# 说明：同一任务的工时按角色投入占比折算到各成员（主讲1.0 + 主答0.3 + 辅答0.15/人），累计可能超过任务原工时。
+# 协作投入只表示评审/支援成本，不应把任务总量系统性放大到 1.6 倍。
 PRESENTER_RATIO = 1.0
-QA_PRIMARY_RATIO = 0.3
-QA_SUPPORT_RATIO = 0.15
+QA_PRIMARY_RATIO = 0.15
+QA_SUPPORT_RATIO = 0.05
 DEFAULT_BALANCE_THRESHOLD_HOURS = 2.0
 
 # 集中定义，便于后续调参。最终分数越高越优。
@@ -286,7 +324,6 @@ def assign_with_balance(plan: PlanOutput,
 
     active_tasks = [t for t in plan.tasks if t.status != "completed"]
     member_map = {m.name: m for m in members}
-    all_task_map = {t.id: t for t in plan.tasks}
     task_hours = {t.id: t.estimated_hours for t in active_tasks}
 
     work = {m.name: 0.0 for m in members}
@@ -321,21 +358,24 @@ def assign_with_balance(plan: PlanOutput,
         stage_work[presenter][t.execution_stage] = (
             stage_work[presenter].get(t.execution_stage, 0.0) + t.estimated_hours)
 
-        # 主答：剩余成员中「负载最轻」者优先（匹配度作同负载时的次序）
+        # 协作者数量遵循任务的 suggested_people；单人任务不强塞协作者。
+        collaborator_slots = max(
+            0, min(len(members) - 1, int(t.suggested_people or 1) - 1))
+        # 主协作者：剩余成员中「负载最轻」者优先。
         rest = [
             (n, skill) for n, skill, _ in scored
             if n != presenter
             and not _avoids_required(member_map.get(n), t.required_skills)
         ]
         rest.sort(key=lambda x: (work[x[0]], -x[1]))
-        primary = rest[0][0] if rest else ""
+        primary = rest[0][0] if rest and collaborator_slots >= 1 else ""
         if primary and primary != presenter:
             work[primary] += t.estimated_hours * QA_PRIMARY_RATIO
 
-        # 辅答：再从剩余（排除主讲、主答）中取负载最轻的 2 人，避免同人占两席
+        # 其他协作者按剩余名额补齐。
         rest2 = [n for n, _ in rest if n != primary]
         rest2.sort(key=lambda n: work[n])
-        support = rest2[:2]
+        support = rest2[:max(0, collaborator_slots - 1)]
         for s in support:
             work[s] += t.estimated_hours * QA_SUPPORT_RATIO
 
@@ -350,27 +390,6 @@ def assign_with_balance(plan: PlanOutput,
             presenter=presenter, qa_primary=primary, qa_support=support,
             score=round(best_skill, 3), reasoning=reasoning,
         ))
-
-    # P1-2: 全员参与兜底——0 负载成员先补一个辅答角色，再进入均衡（避免兜底破坏均衡结果）
-    zero_load = [n for n, h in work.items() if h <= 0]
-    for n in zero_load:
-        active = [
-            a for a in assignments
-            if a.presenter != "(已完成)"
-            and n not in (a.qa_support or [])
-            and not _avoids_required(
-                member_map.get(n),
-                all_task_map.get(a.task_id).required_skills
-                if all_task_map.get(a.task_id) else [])
-        ]
-        if not active:
-            continue
-        target = max(active, key=lambda a: task_hours.get(a.task_id, 0.0))
-        if target.qa_support is None:
-            target.qa_support = []
-        if n not in target.qa_support:
-            target.qa_support.append(n)
-            work[n] += task_hours.get(target.task_id, 0.0) * QA_SUPPORT_RATIO
 
     # 在不明显破坏技能匹配、不违反负向偏好的前提下，将默认负载差
     # 尽量控制在 2h 内。

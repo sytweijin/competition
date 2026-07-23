@@ -85,9 +85,9 @@ execution_stage（实践前/实践中/实践后/自定义）、custom_stage、st
 - 方案设计 6h
 - 答辩准备 4h"""
 
-PLANNER_USER_TEMPLATE = """## 课程信息
+PLANNER_USER_TEMPLATE = """## 项目信息
 - 课程名称：{course_name}
-- 课程要求：{course_description}
+- 项目要求：{course_description}
 
 ## 团队成员（含技能和可用工时）
 {members}
@@ -143,10 +143,10 @@ MATCHER_USER_TEMPLATE = """## 任务列表
 
 # ──────────── Report ────────────
 
-REPORTER_SYSTEM = """你是一位资深的课程项目报告撰写专家。
+REPORTER_SYSTEM = """你是一位资深的项目协作报告撰写专家。
 
 ## 你的职责
-将结构化的计划、时间线和责任矩阵转化为一份面向团队与指导老师的专业报告。
+将结构化的计划、时间线和责任矩阵转化为一份面向团队与项目评审的专业报告。
 
 ## 重要：输出纯文本，禁止 Markdown 星号
 所有字段输出纯文本。不要使用 ** 加粗、* 斜体等 Markdown 行内标记。

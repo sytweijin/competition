@@ -138,9 +138,12 @@ def test_classify_error_basic_types():
 
 # ──────────── P1-2: assign_with_balance 保证全员参与 ────────────
 
-def test_assign_with_balance_guarantees_everyone_participates():
+def test_assign_with_balance_respects_suggested_people():
     plan = PlanOutput(tasks=[
-        SubTask(id="T1", name="Frontend", estimated_hours=8, required_skills=["frontend"]),
+        SubTask(
+            id="T1", name="Frontend", estimated_hours=8,
+            required_skills=["frontend"], suggested_people=1,
+        ),
     ], summary="t")
     members = [
         TeamMember(name="A", skill_tags=["frontend"]),
@@ -154,7 +157,26 @@ def test_assign_with_balance_guarantees_everyone_participates():
         if a.qa_primary:
             names.add(a.qa_primary)
         names.update(a.qa_support or [])
-    assert names == {"A", "B", "C"}, f"全员应都至少参与一个角色，实际 {names}"
+    assert names == {"A"}, "单人任务不应为了形式上的全员参与强塞协作者"
+
+
+def test_assign_with_balance_adds_only_requested_collaborators():
+    plan = PlanOutput(tasks=[
+        SubTask(
+            id="T1", name="Frontend", estimated_hours=8,
+            required_skills=["frontend"], suggested_people=2,
+        ),
+    ], summary="t")
+    members = [
+        TeamMember(name="A", skill_tags=["frontend"]),
+        TeamMember(name="B", skill_tags=["frontend"]),
+        TeamMember(name="C", skill_tags=["docs"]),
+    ]
+    assignment = assign_with_balance(plan, members).assignments[0]
+    participants = {
+        assignment.presenter, assignment.qa_primary, *(assignment.qa_support or [])
+    } - {""}
+    assert len(participants) == 2
 
 
 # ──────────── P2-1: 新增任务时强制重算 matcher ────────────
