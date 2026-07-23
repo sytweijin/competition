@@ -236,7 +236,7 @@ class FullPlan(BaseModel):
     qa_matrix: QAOutput
     report: ReportOutput
     reflection: Optional[ReflectionOutput] = Field(default=None, description="Reflection Agent 的自我审查结果")
-    version: str = "4.8"
+    version: str = "4.9"
 
 
 class DraftRequest(BaseModel):

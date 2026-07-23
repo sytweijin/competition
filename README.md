@@ -83,17 +83,43 @@
 - `apply_manual_assignment`：保存负责人和协作者调整并重算排期；
 - `workload_snapshot`：生成统一工作量统计与建议。
 
-Web 页面仅负责展示和把用户操作转换成结构化业务指令。未来接入清小搭时，
-OpenAI 兼容适配层可把自然语言转换为同一组 `DraftOperation` 或分工请求，
-与当前网页共享 Agent 核心逻辑，不需要复制业务规则。
+Web 页面仅负责展示和把用户操作转换成结构化业务指令。清小搭 OpenAI
+兼容适配层会把自然语言转换为同一套项目输入，并复用 Project Service
+完成任务拆解、智能分工和排期，不复制业务规则。
 
-规划中的分层边界：
+当前分层边界：
 
 ```text
 网页工作台 ─┐
             ├─> Project Service ─> Planner / Scoring / Timeline / State
-清小搭适配层 ┘          （未来实现 /v1/models 与 /v1/chat/completions）
+清小搭适配层 ┘          （/v1/models 与 /v1/chat/completions）
 ```
+
+## 清小搭接入
+
+服务已提供清小搭所需的 OpenAI 兼容协议，包括 Bearer 鉴权、模型列表、
+普通对话和 SSE 流式对话。接入前先在部署环境配置独立密钥：
+
+```bash
+QINGXIAODA_API_KEY=请替换为足够长的随机密钥
+```
+
+在清小搭的模型服务配置中填写：
+
+- Base URL：`https://你的公网域名/v1`
+- API Key：与 `QINGXIAODA_API_KEY` 完全一致
+- Model：`collaboration-planner`（若平台允许留空，也可由接口自动返回）
+
+连通性验证：
+
+```bash
+curl https://你的公网域名/v1/models \
+  -H "Authorization: Bearer 你的密钥"
+```
+
+对话接口会接受项目名称、成员技能、截止日期及交付要求，并返回可直接展示的
+任务拆解、负责人和排期。网页端的“人工调整、甘特图、导出”仍保留为比赛
+Demo 的可视化工作台。
 
 ## v2.0 更新亮点（2026-07-16 深度审查修复）
 
@@ -147,6 +173,7 @@ AssignmentInput (课程 / 成员 / 截止日 / 每日工时)
 
 | 版本 | 日期 | 定位 |
 |------|------|------|
+| v4.9 | 2026-07-23 | 比赛 Demo 全流程加固 + 清小搭 OpenAI 兼容协议接入 |
 | v4.8 | 2026-07-22 | 统一合并：v4.7.1 算法修复 + v4.7.2 工时知识库 |
 | v4.7.2 | 2026-07-21 | 知识库增强的合理工时估算：相似案例检索、反馈学习、2h 均衡分工 |
 | v4.7.1 | 2026-07-20 | 合入 v3.5-v3.8 算法修复：负载均衡全局重排、状态切换分工保留、健壮性加固 |
@@ -204,7 +231,7 @@ competition/
 │       ├── routes.py         # FastAPI 路由（run/edit/save/load/interview）
 │       ├── templates/index.html  # TailwindCSS + Lucide + Tab 布局
 │       └── static/style.css  # 补充样式
-├── tests/                    # 92 个单元/集成测试
+├── tests/                    # 单元与集成测试
 ├── memory/                   # B2 计划持久化
 ├── docs/                     # 项目文档
 └── requirements.txt
@@ -214,12 +241,14 @@ competition/
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
+| GET | `/v1/models` | 清小搭模型发现接口（Bearer 鉴权） |
+| POST | `/v1/chat/completions` | 清小搭普通/流式对话接口 |
 | POST | `/api/run` | 生成完整计划（成员级每日工时） |
 | POST | `/api/analyze-files` | 上传并分析任务要求文件 |
 | POST | `/api/draft` | 仅生成任务拆解草案，不分工 |
 | POST | `/api/confirm-draft` | 确认草案后自动分工 |
 | POST | `/api/manual-assignment` | 保存手动拖拽后的负责人和协作者 |
-| POST | `/api/draft/mutate` | 结构化修改任务草案（网页与未来 Agent 共用） |
+| POST | `/api/draft/mutate` | 结构化修改任务草案（网页与 Agent 共用） |
 | POST | `/api/workload` | 统一计算成员负载、占比和分工建议 |
 | POST | `/api/chat` | 基于当前方案实时问答 |
 | POST | `/api/edit` | B4：应用编辑并重算 |
@@ -246,7 +275,7 @@ python -m app.main     # 默认 http://127.0.0.1:8000
 ## 运行测试
 
 ```bash
-python -m pytest -v    # 92 passed
+python -m pytest -v
 ```
 
 ## 协作方式

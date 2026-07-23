@@ -6,6 +6,134 @@
 
 ---
 
+## v4.9 —— 比赛 Demo 加固与清小搭标准协议接入（2026-07-23）
+
+**定位：** 在保留完整网页演示链路的同时，提供可由清小搭直接调用的 OpenAI 兼容服务入口。
+
+**审查/修改背景：** 阶段一先以比赛可展示版本为目标修复演示链路；阶段二依据《接入清小搭方法》补齐模型发现、Bearer 鉴权、普通响应与 SSE 流式响应。开始阶段二前已拉取并合并队友在 `origin/main` 上的 9 个提交。
+
+---
+
+### 关键缺陷（P0）
+
+**1. 清小搭没有可识别、可鉴权的标准服务入口**
+
+- **问题：** 原项目只有 `/api/*` 网页业务接口，清小搭无法通过 OpenAI 兼容协议发现模型或发起对话；通用业务密钥也不应直接充当平台接入密钥。
+- **修改前：**
+  ```python
+  app.include_router(api_router, prefix="/api")
+  # 不存在 /v1/models 与 /v1/chat/completions
+  ```
+- **修改后：**
+  ```python
+  router = APIRouter(prefix="/v1")
+
+  @router.get("/models")
+  def models(authorization: str | None = Header(default=None)):
+      _check_auth(authorization)
+
+  @router.post("/chat/completions")
+  def chat_completions(request: ChatCompletionRequest, authorization=Header(None)):
+      _check_auth(authorization)
+  ```
+- **为什么这样改：** 清小搭按 OpenAI 协议探测服务，路由形状和 Bearer 语义必须符合平台预期。独立的 `QINGXIAODA_API_KEY` 将平台入站鉴权与项目调用上游模型的 `LLM_API_KEY` 分离，避免权限混用；密钥使用常量时间比较，缺失或错误时返回 401。
+- **收益：** ① 清小搭可以发现并调用 `collaboration-planner`；② 入站与出站密钥职责清晰；③ 未配置服务端密钥时明确返回 503，不会误开放接口。
+
+**2. 缺少清小搭要求的普通响应与 SSE 完整收尾协议**
+
+- **问题：** 自定义 JSON 或一次性文本无法满足平台对 `choices[0].message.content`、流式 role/content/stop 帧、usage 和 `[DONE]` 的解析要求。
+- **修改前：**
+  ```python
+  return {"reply": answer}
+  ```
+- **修改后：**
+  ```python
+  yield frame({"role": "assistant"})
+  for chunk in _chunk_text(answer):
+      yield frame({"content": chunk})
+  yield frame({}, finish_reason="stop", include_usage=True)
+  yield "data: [DONE]\n\n"
+  ```
+- **为什么这样改：** SSE 是逐帧协议，不只是给响应设置流式媒体类型。首帧角色、内容增量、唯一 stop 帧及最终 `[DONE]` 都是消费端确认消息边界所需的信息；普通响应也必须维持 OpenAI 的 choices/message 结构。
+- **收益：** ① 普通与流式模式均可被标准客户端解析；② 平台能可靠判断响应结束；③ usage 字段支持调用统计。
+
+### 健壮性提升（P1）
+
+**3. 自然语言项目输入复用既有拆解、分工与排期主链路**
+
+- **问题：** 若为清小搭重新实现一套规划规则，会与网页 Demo 的任务、技能匹配和排期结果逐渐分叉；简单按逗号切分成员还会把括号内技能误识别为成员。
+- **修改前：**
+  ```python
+  for raw in re.split(r"[、,，;；]+", member_text):
+      ...
+  ```
+- **修改后：**
+  ```python
+  # 仅在括号外切分成员，保留“小林(文案,统筹)”内部逗号
+  inp = _build_input(user_text)
+  draft = generate_draft(inp, use_ai=False)
+  full_plan = confirm_draft(inp, draft)
+  ```
+- **为什么这样改：** Project Service 已承载阶段一验证过的任务拆解、技能评分、负载和时间线逻辑，适配层只应负责协议及自然语言转结构化输入。成员解析用括号深度判断分隔位置，才能正确保留技能列表。
+- **收益：** ① 网页与清小搭共享同一业务事实源；② 接口不依赖外部模型也能稳定完成比赛演示；③ 中文成员技能输入不会产生伪成员。
+
+**4. 平台探测边界有自动化契约测试**
+
+- **问题：** `model=null`、`max_tokens=1`、字符串形式的 `stream`、错误密钥和 SSE stop 帧等边界若只人工验证，后续修改容易破坏接入。
+- **修改前：**
+  ```text
+  tests/ 中没有清小搭协议测试。
+  ```
+- **修改后：**
+  ```python
+  assert response.status_code == 401
+  assert response.json()["choices"][0]["message"]["content"] == "好"
+  assert data_lines[-1] == "[DONE]"
+  assert len(stop_frames) == 1
+  ```
+- **为什么这样改：** 这些字段是平台连通性探测的契约，不是内部实现细节。自动化测试能在每次改动时同时验证鉴权、模型发现、普通响应、严格布尔值、流式帧序列和真实项目规划。
+- **收益：** ① 接入兼容性可重复验证；② 异常输入返回明确状态码；③ 回归风险更低。
+
+### 体验优化（P2）
+
+**5. 比赛 Demo 形成“输入到导出”的完整展示路径**
+
+- **问题：** 原页面缺少稳定的一键案例和明确讲解顺序，临场输入成本高，无法保证在有限展示时间内覆盖人工调整、智能分工、甘特图和导出。
+- **修改前：**
+  ```text
+  需要现场逐项填写项目和成员信息。
+  ```
+- **修改后：**
+  ```javascript
+  demoCaseBtn.addEventListener("click", loadDemoCase);
+  ```
+  并新增 `docs/比赛Demo演示流程.md`，固化“项目输入 → 任务拆解 → 人工调整 → 智能分工 → 甘特图 → 导出”的讲解路径。
+- **为什么这样改：** 比赛版本的首要风险是展示中断而非工业级覆盖不足。一键案例减少现场键入和数据差异，流程文档让功能价值按可理解的顺序呈现。
+- **收益：** ① 可快速复现完整演示；② 展示数据与技能匹配场景更有说服力；③ 保留手动操作体现人机协作。
+
+### 打磨（P3）
+
+**6. 配置示例、接入文档与版本号同步**
+
+- **问题：** README 仍写“未来接入”，`.env.example` 曾包含真实外观的上游密钥，应用元数据仍为 v4.8，容易误导部署和验收。
+- **修改前：**
+  ```python
+  app = FastAPI(title="协作分工智能体", version="4.8")
+  ```
+- **修改后：**
+  ```python
+  app = FastAPI(title="协作分工智能体", version="4.9")
+  QINGXIAODA_API_KEY="replace-with-a-long-random-key"
+  ```
+- **为什么这样改：** 接入能力必须有可复制的 Base URL、Model 和鉴权配置说明；示例文件只能使用占位值。版本元数据与文档统一后，比赛验收和问题定位不会出现版本歧义。
+- **收益：** ① 部署者可按文档直接配置；② 避免示例密钥泄露风险；③ API、数据模型与 README 版本一致。
+
+### 队友改动说明
+
+本版本先合并队友 `origin/main` 的 9 个提交，保留其 CI、API 测试、全局异常处理、工时知识库及界面增强；随后重新应用本分支的 Demo 案例、技能别名、建议参与人数约束与演示验收修复。合并提交为 `b424f0b`，全量测试通过后才进入清小搭适配开发。
+
+---
+
 ## v4.8.1 —— 代码质量加固 + CI + API 测试覆盖（2026-07-22）
 
 **定位：** 在 v4.8 基础上补充 CI 配置、API 测试覆盖、全局异常处理、参数调优和目录自动初始化。
@@ -2102,6 +2230,7 @@ LLM 负责"创造性"：拆任务、分配角色、写报告
 | **v4.7.1** | **合入 v3.5-v3.8 算法修复** | **已完成** |
 | **v4.7.2** | **知识库估时、反馈学习与2h均衡分工** | **已完成** |
 | **v4.8** | **统一合并：算法修复 + 工时知识库** | **已完成** |
+| **v4.9** | **比赛 Demo 加固 + 清小搭标准协议接入** | **已完成** |
 | v2.x | 比赛阶段扩展 | 规划中 |
 ### 36. half-day ?????????????????**???** timeline.py:174 ? `start_base + timedelta(days=es[tid] / 2)` ???????Python ? `date + timedelta(days=0.5)` ????????0.5 ????? 0 ??????? half-day ??????????? 2h ?????? 4h/?????????????????**????timeline.py??**```pythons_date = start_base + timedelta(days=es[tid] / 2)  # 0.5 ?????```**????**```pythons_date = (datetime.combine(start_base, datetime.min.time()) + timedelta(days=es[tid] / 2)).date()```?? datetime ????????????? date?????? available_days ???? total_seconds ?? .days ????### 37. ??????????????**???** ??????????????????????????**????** ??????????????`bg-[repeating-linear-gradient(45deg,...)]`???????????????????????????????????### 38. ???????????????????????? <= 1h?**???** ???????????0.25 * ????????????? 2 ? 20h ????????? 2 ? 2h ???????????????????? 25.8h / 32.5h / 75.1h?**????scoring.py assign_with_balance ??????**- ?????????????????????????- ??????????????????????????- ??/??????????- ???????????????????**???** ????? ~31h???? 1.1h?### 39. ???? ceil ????**???** timeline.py:196 ? `(deadline_date - today).days` ???????.days ??????1.5 ?? 1 ?????? `Math.ceil`?1.5 ?? 2 ???????????????**????** ?? `total_seconds() / 86400` ? `ceil`?????????
 ## v4.0 —— 任务拆解与分工双确认（2026-07-18）

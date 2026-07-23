@@ -19,7 +19,7 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="协作分工智能体", version="4.8")
+app = FastAPI(title="协作分工智能体", version="4.9")
 
 # 全局异常处理器：意外错误不暴露代码堆栈，返回 JSON 错误信息
 _DEBUG = os.getenv("DEBUG", "").lower() in ("1", "true", "yes")
@@ -35,6 +35,8 @@ async def global_exception_handler(request: Request, exc: Exception):
 # 注册路由
 from app.web.routes import router as api_router
 app.include_router(api_router, prefix="/api")
+from app.compat.qingxiaoda import router as qingxiaoda_router
+app.include_router(qingxiaoda_router)
 
 # 静态文件（前端 demo 页面）：用 BASE_DIR 绝对路径，避免工作目录非项目根时导入即崩
 _STATIC_DIR = str(BASE_DIR / "app" / "web" / "static")
