@@ -128,6 +128,30 @@
 - **为什么这样改：** 接入能力必须有可复制的 Base URL、Model 和鉴权配置说明；示例文件只能使用占位值。版本元数据与文档统一后，比赛验收和问题定位不会出现版本歧义。
 - **收益：** ① 部署者可按文档直接配置；② 避免示例密钥泄露风险；③ API、数据模型与 README 版本一致。
 
+**7. 新增可复现的 Render 公网部署描述**
+
+- **问题：** 清小搭无法访问本机 `127.0.0.1`，仅完成协议代码仍缺少公网 HTTPS 服务；手工填写构建和启动参数也容易把监听地址或端口写错。
+- **修改前：**
+  ```text
+  仓库没有 render.yaml，部署平台不知道如何构建和启动 FastAPI。
+  ```
+- **修改后：**
+  ```yaml
+  services:
+    - type: web
+      runtime: python
+      plan: free
+      startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+      healthCheckPath: /api/health
+      envVars:
+        - key: QINGXIAODA_API_KEY
+          sync: false
+        - key: LLM_API_KEY
+          sync: false
+  ```
+- **为什么这样改：** 公网托管必须监听平台提供的端口及 `0.0.0.0`。Blueprint 将构建、启动、健康检查和密钥提示固化为代码，同时用 `sync: false` 确保清小搭入站密钥及千问 API 配置只在 Render 后台填写、不进入 Git。
+- **收益：** ① 可从 GitHub 一键创建服务；② 自动获得 HTTPS 公网地址；③ 部署参数可审查、可复现且不泄露密钥。
+
 ### 队友改动说明
 
 本版本先合并队友 `origin/main` 的 9 个提交，保留其 CI、API 测试、全局异常处理、工时知识库及界面增强；随后重新应用本分支的 Demo 案例、技能别名、建议参与人数约束与演示验收修复。合并提交为 `b424f0b`，全量测试通过后才进入清小搭适配开发。

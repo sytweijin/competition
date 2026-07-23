@@ -121,6 +121,18 @@ curl https://你的公网域名/v1/models \
 任务拆解、负责人和排期。网页端的“人工调整、甘特图、导出”仍保留为比赛
 Demo 的可视化工作台。
 
+### Render 一键部署
+
+仓库根目录的 `render.yaml` 已配置 Python 运行环境、启动命令、健康检查和
+清小搭入站密钥。登录 Render 后通过以下入口创建 Blueprint：
+
+[Deploy to Render](https://render.com/deploy?repo=https://github.com/sytweijin/competition)
+
+创建时填写 `QINGXIAODA_API_KEY`，并将已有千问服务的 `LLM_API_KEY`、
+`LLM_BASE_URL` 和 `LLM_MODEL` 一并作为私密环境变量填入。免费实例适合
+接入验证和比赛预演，但闲置后会休眠且本地保存记录不会永久保留；正式展示
+前请提前访问一次服务完成预热。
+
 ## v2.0 更新亮点（2026-07-16 深度审查修复）
 
 本次版本针对全量代码审查发现的 30 项问题进行系统性修复：
