@@ -173,6 +173,9 @@ def workload_snapshot(plan: FullPlan) -> dict:
         if not owner or owner not in work:
             warnings.append(f"{task.name} 尚未设置负责人")
             continue
+        # 已完成的任务不再计入剩余工作量——标记完成后成员条带应缩短
+        if task.status == "completed":
+            continue
         work[owner] += task.estimated_hours
         counts[owner] += 1
         stage_work[owner][task.execution_stage] += task.estimated_hours

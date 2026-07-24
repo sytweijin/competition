@@ -99,19 +99,57 @@ class ChatRequest(BaseModel):
     input: AssignmentInput | None = None
 
 
+def _build_chat_context(req: "ChatRequest") -> str:
+    """构建结构化方案摘要，避免截断 JSON 导致 LLM 读到残缺数据。"""
+    lines: list[str] = []
+    if req.plan:
+        fp = req.plan
+        course = fp.input.course
+        lines.append(f"项目：{course.name}")
+        lines.append(f"背景：{course.description[:200]}")
+        lines.append(f"截止日期：{fp.input.deadline}")
+        members = fp.input.members
+        lines.append("团队成员：" + "、".join(
+            f"{m.name}(技能:{','.join(m.skill_tags) or '无'}，{m.daily_available_hours:g}h/天)"
+            for m in members))
+        lines.append(f"任务共 {len(fp.plan.tasks)} 项，总工时 "
+                     f"{sum(t.estimated_hours for t in fp.plan.tasks):g}h")
+        for t in fp.plan.tasks:
+            status = f"[{t.status}]" if t.status != "pending" else ""
+            assignee = t.assignee_id or "未分配"
+            lines.append(
+                f"  {t.id} {t.name}({t.estimated_hours:g}h，{assignee}，"
+                f"需:{','.join(t.required_skills) or '通用'}){status}")
+        if fp.timeline.tasks:
+            cp = " -> ".join(fp.timeline.critical_path) if fp.timeline.critical_path else "无"
+            lines.append(f"总工期 {fp.timeline.total_days} 天，关键路径：{cp}")
+        if fp.qa_matrix.assignments:
+            lines.append("分工：")
+            for a in fp.qa_matrix.assignments:
+                support = "、".join([a.qa_primary] + (a.qa_support or []))
+                lines.append(f"  {a.task_name}：{a.presenter or '未分配'}"
+                             f"{'/' + support if support else ''}（匹配{int((a.score or 0) * 100)}%）")
+        if fp.report.risk_note:
+            lines.append(f"风险提示：{fp.report.risk_note[:200]}")
+        return "\n".join(lines)
+    if req.draft:
+        tasks = req.draft.tasks
+        lines.append(f"任务草案共 {len(tasks)} 项：")
+        for t in tasks:
+            lines.append(f"  {t.id} {t.name}({t.estimated_hours:g}h)")
+        if req.input:
+            lines.append(f"项目：{req.input.course.name}")
+            lines.append("成员：" + "、".join(m.name for m in req.input.members))
+        return "\n".join(lines)
+    return "尚未生成方案"
+
+
 @router.post("/chat")
 async def project_chat(req: ChatRequest):
+    """基于当前方案回答用户的自然语言提问。"""
     import asyncio
     from app.llm.client import LLMClient
-    if req.plan:
-        context = req.plan.model_dump_json()[:18000]
-    elif req.draft:
-        context = json.dumps({
-            "project": req.input.model_dump(mode="json") if req.input else {},
-            "draft": req.draft.model_dump(mode="json"),
-        }, ensure_ascii=False)[:18000]
-    else:
-        context = "尚未生成方案"
+    context = _build_chat_context(req)
     try:
         result = await asyncio.wait_for(
             asyncio.to_thread(
@@ -316,7 +354,7 @@ async def recompute_plan(req: FullPlan):
         "qa_matrix_section": "\n".join(
             f"{item.task_name}：{item.presenter or '未分配'}"
             for item in qa_matrix.assignments),
-        "risk_note": qa_matrix.note,
+        "risk_note": req.report.risk_note,
     })
 
     return FullPlan(

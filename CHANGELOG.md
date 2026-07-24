@@ -6,6 +6,165 @@
 
 ---
 
+## v5.0 —— 八项核心功能修复（2026-07-24）
+
+**定位：** 逐项修复用户报告的 8 个功能缺陷，确保比赛版的基础功能（成员、匹配度、工作量、报告、答辩、甘特图、AI 对话、UI）全部可用且无 bug。
+
+**审查/修改背景：** 用户对比作业版本后发现比赛版多个基础功能存在 bug。本版本对照 `AI实践基石大作业` 参考版本，逐一定位根因并修复。
+
+---
+
+### 关键缺陷（P0）
+
+**1. 成员管理预填了 3 个默认成员（张三/李四/王五），干扰用户输入**
+
+- **问题：** 页面加载即填入 3 个假成员和技能标签，用户需要先删除才能填自己的数据。
+- **修改前：**
+  ```js
+  // index.html 行182
+  addMember({name:'张三',skill_tags:['文案']});
+  addMember({name:'李四',skill_tags:['摄影']});
+  addMember({name:'王五',skill_tags:['秀米排版']});renderSteps();
+  ```
+- **修改后：**
+  ```js
+  renderSteps();
+  ```
+- **为什么这样改：** 默认值是早期开发调试残留，不应出现在面向用户的产品中。成员列表应初始为空，由用户自行填写。
+- **收益：** 页面加载即干净；用户不会被无关数据误导；减少误操作。
+
+**2. 技能匹配度为 0——同义词表覆盖不足，"文学素养"无法关联"写报告"等常见表达**
+
+- **问题：** 评分引擎的 `_SKILL_SYNONYMS` 表缺少大量常用表达（写报告、撰写报告、报告、总结报告、推文、演讲、答辩、摄影、资料整理等），导致用口语化标签时匹配度始终为 0。
+- **修改前：**
+  ```python
+  # scoring.py — 同义词表仅覆盖 ~50 个表达
+  "文学素养": "文案撰写", "报告撰写": "文案撰写",
+  # 缺少："写报告"、"撰写报告"、"报告"、"总结报告"等
+  ```
+- **修改后：**
+  ```python
+  # scoring.py — 新增 30+ 同义词映射
+  "写报告": "文案撰写", "撰写报告": "文案撰写", "报告": "文案撰写",
+  "总结报告": "文案撰写", "调研报告": "文案撰写", "推文": "文案撰写",
+  "演讲": "沟通协调", "答辩": "沟通协调", "摄影": "视频剪辑",
+  "资料收集": "调研分析", "资料整理": "调研分析", ...
+  ```
+- **为什么这样改：** 纯字符相似度无法识别"文学素养"与"写报告"的语义关联，必须靠同义词表将口语化标签归一化到标准技能词。根因是表覆盖面太窄。
+- **收益：** 匹配度从 0% 恢复到合理值（如"文学素养"对"写报告"= 100%）；分工建议更准确。
+
+**3. 工作量不随任务状态变化——标记完成后成员条带不缩短**
+
+- **问题：** `workload_snapshot` 统计负载时只看 `assignee_id` 和工时，完全忽略 `task.status`，已完成任务仍被计入工作量。
+- **修改前：**
+  ```python
+  # project_service.py workload_snapshot
+  for task in plan.plan.tasks:
+      owner = task.assignee_id
+      if not owner or owner not in work:
+          warnings.append(...)
+          continue
+      work[owner] += task.estimated_hours  # 已完成的也计入
+  ```
+- **修改后：**
+  ```python
+  for task in plan.plan.tasks:
+      owner = task.assignee_id
+      if not owner or owner not in work:
+          continue
+      if task.status == "completed":
+          continue  # 已完成的不计入剩余工作量
+      work[owner] += task.estimated_hours
+  ```
+- **为什么这样改：** 工作量面板的语义是"剩余负载"，已完成任务不应再占用产能。根因是统计逻辑遗漏了状态过滤。
+- **收益：** 标记任务完成后成员条带实时缩短；工作量面板与现实进度一致。
+
+**4. 风险提示栏显示"状态切换重算（保留原分工）"——内部调试文本泄露给用户**
+
+- **问题：** `/recompute` 端点把 `qa_matrix.note`（内部状态描述）直接塞进 `report.risk_note`，用户在报告里看到这句无意义的话。
+- **修改前：**
+  ```python
+  # routes.py /recompute
+  report = req.report.model_copy(update={
+      "timeline_section": timeline.note,
+      "qa_matrix_section": "...",
+      "risk_note": qa_matrix.note,  # 内部调试文本泄露
+  })
+  ```
+- **修改后：**
+  ```python
+  report = req.report.model_copy(update={
+      "timeline_section": timeline.note,
+      "qa_matrix_section": "...",
+      "risk_note": req.report.risk_note,  # 保留原有风险提示
+  })
+  ```
+- **为什么这样改：** `qa_matrix.note` 是算法内部标记（如"B3确定性兜底"），不是面向用户的风险提示。状态切换不应改变风险内容。根因是后端把调试信息当作用户可见输出。
+- **收益：** 报告风险栏不再出现无意义文字；状态切换不影响风险提示的稳定性。
+
+**5. 答辩模拟点击"生成"报错无结果——前端对字符串做 .map()**
+
+- **问题：** 后端 `/interview` 返回 `{"questions": "纯文本字符串"}`，前端却执行 `(data.questions||[]).map(...)`，对字符串调用 `.map()` 直接抛 TypeError。
+- **修改前：**
+  ```js
+  // index.html bindInterviewControls
+  var html=(data.questions||[]).map(function(q,i){
+    var t=typeof q==='object'?(q.question||''):String(q);
+    return '<div class="interview-q">...'+esc(t)+'</div>'
+  }).join('')||'<p>暂无问题</p>';
+  ```
+- **修改后：**
+  ```js
+  var raw=typeof data.questions==='string'?data.questions:...;
+  var items=raw.split(/\n+/).map(function(s){return s.trim()})
+    .filter(function(s){return s.length>0});
+  var html=items.length?'<div class="interview-list">'+items.map(function(item){
+    return '<div class="interview-q"><span class="interview-dot"></span><span>'+esc(item)+'</span></div>'
+  }).join('')+'</div>':'<p>暂无问题</p>';
+  ```
+- **为什么这样改：** 后端 `InterviewSimAgent.run()` 返回的是 `chat_text` 的纯文本（非结构化数组），前端必须按文本分行渲染。根因是前后端数据格式约定不一致。
+- **收益：** 答辩模拟正常生成 10-15 道问题；文本按行渲染为清晰的问题列表。
+
+**6. AI 调整建议读取方案信息错误——截断 JSON 导致 LLM 读到残缺数据**
+
+- **问题：** `/chat` 端点用 `model_dump_json()[:18000]` 硬截断 FullPlan JSON，截断点常落在字符串中间，LLM 拿到的是不完整 JSON，导致读取错误、胡乱回答。
+- **修改前：**
+  ```python
+  # routes.py project_chat
+  if req.plan:
+      context = req.plan.model_dump_json()[:18000]  # 硬截断
+  ```
+- **修改后：**
+  ```python
+  context = _build_chat_context(req)  # 结构化摘要
+  # 构建可读摘要：项目名、背景、成员技能、任务列表(含状态)、
+  # 时间线关键路径、分工匹配度、风险提示——无截断
+  ```
+- **为什么这样改：** JSON 截断破坏结构完整性，LLM 无法可靠解析。改为结构化摘要后信息密度更高且无语法断裂。
+- **收益：** AI 能准确读取方案信息（人数、工时、分工）；回答基于完整数据而非残缺片段。
+
+### 健壮性提升（P1）
+
+**7. 成员管理 + 答辩模拟 UI 完全无样式——CSS 类缺失**
+
+- **问题：** `member-edit-row`、`me-name`、`interview-q`、`legend-critical` 等类在 style.css 中完全不存在，面板以浏览器默认样式渲染。
+- **修改前：** style.css 中无 `.member-edit-row`、`.interview-q`、`.legend-*` 等规则。
+- **修改后：** 新增完整样式，复用设计令牌（`--primary`、`--line`、`--radius`），与配置面板 `.member-row` 风格对齐。
+- **为什么这样改：** 面向比赛的产品不能有未样式化的裸元素。根因是前端新增类名但未同步补充 CSS。
+- **收益：** 成员管理面板与答辩面板视觉统一；图例色块正确显示。
+
+### 打磨（P3）
+
+**8. CSS 版本号更新（4.9.0 → 5.0.0）**
+
+缓存失效。
+
+### 队友改动说明
+
+本版本在 `origin/main`（v4.9，含清小搭协议接入）基础上修复。此前已删除队友遗留的一次性补丁脚本 `fix_html.py`（提交 d3d9af7），该脚本含乱码字符串且硬编码行号，有被误跑覆盖 index.html 的风险。
+
+---
+
 ## v4.9 —— 比赛 Demo 加固与清小搭标准协议接入（2026-07-23）
 
 **定位：** 在保留完整网页演示链路的同时，提供可由清小搭直接调用的 OpenAI 兼容服务入口。
