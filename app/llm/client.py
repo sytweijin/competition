@@ -60,6 +60,18 @@ def _classify_error(e: Exception) -> str:
 class LLMClient:
     """线程安全的 LLM 调用客户端（每个 Agent 可独立实例化）"""
 
+    # 模块级单例：避免每次请求都新建 OpenAI 客户端导致首次请求冷启动超时。
+    # OpenAI SDK 内部的 httpx 连接池在同一个 client 实例上复用，
+    # 新建 client 会触发 TCP/TLS 握手，首次请求更容易超时。
+    _singleton: "LLMClient | None" = None
+
+    @classmethod
+    def get_shared(cls) -> "LLMClient":
+        """获取全局共享实例（复用连接池，消除首次请求冷启动）。"""
+        if cls._singleton is None:
+            cls._singleton = cls()
+        return cls._singleton
+
     def __init__(self, model: Optional[str] = None):
         self.model = model or LLM_MODEL
         self._enabled = bool(LLM_API_KEY)
@@ -114,15 +126,24 @@ class LLMClient:
                 if err_type == "parse_error":
                     break  # 结构化重试无意义，直接回退 plain create
                 # rate_limit / timeout / unknown：可重试，最后一次落到 fallback
-        # 网络超时或服务端错误时，重复走 plain 接口只会再等待一个完整超时。
-        # 直接返回错误，让上层立即使用确定性兜底。
+        # timeout/rate_limit 时也尝试一次 plain 回退（救回偶发冷启动/网络抖动）。
+        # 原逻辑直接返回错误走兜底，但首次请求常因连接建立慢而超时，
+        # 此时连接可能已建立，plain 回退成功率较高，值得多等一个超时周期。
         if last_error_type in ("timeout", "rate_limit", "unknown"):
-            return AgentError(
-                agent="LLMClient",
-                error_type=last_error_type,
-                message=f"LLM 调用失败：{last_error}",
-                recoverable=True,
-            )
+            try:
+                logger.info("LLM %s, trying plain fallback before giving up",
+                            last_error_type)
+                return self._try_plain_validate(
+                    system_prompt, user_prompt,
+                    response_model, temperature)
+            except Exception as e2:
+                return AgentError(
+                    agent="LLMClient",
+                    error_type=last_error_type,
+                    message=(f"LLM 调用失败（已尝试 {retries} "
+                             f"次结构化 + 1 次 plain 回退）：{e2}"),
+                    recoverable=True,
+                )
         try:
             logger.info("Falling back to plain create + validate")
             return self._try_plain_validate(

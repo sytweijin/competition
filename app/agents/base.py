@@ -26,7 +26,9 @@ class BaseAgent(Generic[T]):
     response_model: type[T] | None = None
 
     def __init__(self, llm: LLMClient | None = None):
-        self.llm = llm or LLMClient()
+        # 默认使用全局共享 LLMClient，复用 OpenAI SDK 的 httpx 连接池，
+        # 避免每次请求新建客户端导致首次请求冷启动超时。
+        self.llm = llm or LLMClient.get_shared()
 
     def _call_llm(self, user_prompt: str, temperature: float = 0.3) -> T | AgentError:
         """调用 LLM 并校验输出格式"""

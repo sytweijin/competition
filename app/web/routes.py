@@ -153,7 +153,7 @@ async def project_chat(req: ChatRequest):
     try:
         result = await asyncio.wait_for(
             asyncio.to_thread(
-                LLMClient().chat_text,
+                LLMClient.get_shared().chat_text,
                 "你是项目协作助手。基于当前方案简洁回答，可指出冲突并给出调整建议。",
                 f"当前方案：{context}\n用户：{req.message}", 0.2),
             timeout=20,

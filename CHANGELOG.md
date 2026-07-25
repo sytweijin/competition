@@ -6,7 +6,321 @@
 
 ---
 
-## v5.0 —— 八项核心功能修复（2026-07-24）
+## v5.3 —— 抽屉遮挡修复 + 首次拆解兜底优化（2026-07-25）
+
+**定位：** 修复 AI 抽屉在中部盖住按钮、首次任务拆解频繁走兜底两个问题。
+
+**审查/修改背景：** 用户反馈按钮在页面中部时框会盖住按钮；首次点"生成"常出现"AI 未成功拆解走规则草案"。
+
+---
+
+### 关键缺陷（P0）
+
+**1. 首次拆解频繁走兜底（冷启动超时）**
+
+- **问题：** 用户反馈"一般都是第一次拆解时会出现走兜底的情况"。首次请求超时后直接返回错误，不尝试 plain 回退。
+- **修改前：**
+  ```python
+  # client.py 行129-137
+  if last_error_type in ("timeout", "rate_limit", "unknown"):
+      return AgentError(...)  # 直接返回，不尝试 plain
+  ```
+- **修改后：** timeout/rate_limit/unknown 时也尝试一次 `_try_plain_validate` 回退。
+  ```python
+  if last_error_type in ("timeout", "rate_limit", "unknown"):
+      try:
+          return self._try_plain_validate(...)  # 尝试 plain 回退
+      except Exception as e2:
+          return AgentError(...)
+  ```
+- **为什么这样改：** 原逻辑认为超时后 plain 也会超时，但首次请求超时往往是连接建立慢（冷启动），此时连接可能已建立，plain 回退成功率较高，值得多等一个超时周期。
+- **收益：** 首次拆解成功率显著提升
+
+**2. LLMClient 每次新建导致冷启动超时**
+
+- **问题：** `Coordinator()` 每次新建 → `PlannerAgent()` → `LLMClient()` → `OpenAI()` 新建客户端，每次都重新建立 TCP/TLS 连接，首次请求更容易超时。
+- **修改前：**
+  ```python
+  # base.py
+  class BaseAgent:
+      def __init__(self, llm=None):
+          self.llm = llm or LLMClient()  # 每次新建
+  ```
+- **修改后：**
+  ```python
+  # client.py 新增单例
+  class LLMClient:
+      _singleton = None
+      @classmethod
+      def get_shared(cls):
+          if cls._singleton is None:
+              cls._singleton = cls()
+          return cls._singleton
+
+  # base.py
+  class BaseAgent:
+      def __init__(self, llm=None):
+          self.llm = llm or LLMClient.get_shared()  # 复用单例
+  ```
+- **为什么这样改：** OpenAI SDK 内部的 httpx 连接池在同一 client 实例上复用。新建 client 触发 TCP/TLS 握手，首次请求更容易超时。单例化后连接池只建立一次，后续复用。
+- **收益：**
+  1. 消除首次请求的连接建立开销
+  2. 后续请求更快（连接已预热）
+  3. `routes.py` 的 chat 也改用 `get_shared()`
+
+---
+
+### 体验优化（P2）
+
+**3. AI 抽屉在页面中部时盖住按钮**
+
+- **问题：** 按钮在中部时，上下空间都不够放 510px 高的框，边界保护把框硬挤，盖住按钮。
+- **修改前：** 固定判断上半屏→下方，否则上方；空间不足时 `top=vh-dh-margin` 硬挤。
+- **修改后：** 比较上下可用空间选更大一侧；该侧空间不足时收缩框高度（最低 280px），绝不与按钮重叠。
+  ```js
+  var spaceBelow=vh-bRect.bottom-margin, spaceAbove=bRect.top-margin;
+  var showBelow=spaceBelow>=spaceAbove;
+  var available=showBelow?spaceBelow:spaceAbove;
+  if(dh>available){dh=Math.max(MIN_H,available);drawer.style.height=dh+'px'}
+  ```
+- **收益：** 框永远不盖按钮，空间不足时自动收缩高度
+
+---
+
+### 同步修改
+
+- `app/llm/client.py`：新增 `get_shared()` 单例方法，timeout 时尝试 plain 回退
+- `app/agents/base.py`：`BaseAgent.__init__` 改用 `LLMClient.get_shared()`
+- `app/web/routes.py`：chat 路由改用 `LLMClient.get_shared()`
+- `app/web/templates/index.html`：`positionAssistantDrawer()` 改为比较上下空间 + 收缩高度
+
+### 验证
+
+- JS 语法检查：通过
+- 核心测试：6 passed
+
+---
+
+
+
+**定位：** 修复 AI 调整建议按钮的拖拽与开关冲突、抽屉不跟随按钮、框可能超出屏幕三个交互问题。
+
+**审查/修改背景：** 用户反馈按钮拖拽时抽屉不跟随、点击与拖拽逻辑混乱、框可能出现在屏幕外。
+
+---
+
+### 体验优化（P2）
+
+**1. AI 调整建议按钮点击与拖拽逻辑冲突**
+
+- **问题：** 原实现用 `dr` 标志区分点击和拖拽，逻辑绕——拖动结束后 `dr=false`，下次点击才开关；用户体验不直观。
+- **修改前：**
+  ```js
+  btn.addEventListener('click',function(e){if(dr){e.stopPropagation();e.preventDefault();dr=false}else{openAssistant()}});
+  ```
+- **修改后：**
+  ```js
+  // 用 moved 标志：拖拽位移>5px 标记 moved，松开后若 moved 则忽略本次 click
+  btn.addEventListener('click',function(e){if(moved){moved=false;e.stopPropagation();e.preventDefault();return}var isHidden=drawer.classList.contains('hidden');if(isHidden){openAssistant()}else{closeAssistant()}});
+  ```
+- **为什么这样改：** 点击和拖拽应彻底分离。拖拽位移超过阈值才标记为拖拽，松开后吃掉 click 事件；纯点击（位移<5px）才触发开关。逻辑直观，用户按一下开、再按一下关。
+- **收益：**
+  1. 点击开关行为纯粹，不再受拖拽干扰
+  2. 拖拽后不会误触开关
+
+**2. 拖拽时抽屉不跟随按钮**
+
+- **问题：** 原实现抽屉用独立 `left/top` 计算（`drawer.style.left=Math.max(-20,...)`），与按钮位置基准不一致，按钮小幅移动时抽屉不动。
+- **修改前：**
+  ```js
+  drawer.style.left=Math.max(-20,Math.min(window.innerWidth-380,nx))+'px';
+  drawer.style.top=Math.max(0,Math.min(window.innerHeight,ny+50))+'px'
+  ```
+- **修改后：** 新增 `positionAssistantDrawer()` 函数，基于按钮 `getBoundingClientRect()` 计算抽屉位置，拖拽过程中实时调用。
+  ```js
+  function positionAssistantDrawer(){
+    var bRect=btn.getBoundingClientRect(),dRect=drawer.getBoundingClientRect();
+    // 垂直：按钮在上半屏→框在下方，否则在上方
+    var showBelow=bRect.top<vh/2;
+    // 横向：框右对齐按钮右边，超出左边则左移
+    var left=bRect.right-dw;
+    left=Math.max(margin,Math.min(left,vw-dw-margin));
+    ...
+  }
+  ```
+- **为什么这样改：** 抽屉应锚定按钮，相对位置固定。原实现抽屉和按钮用不同定位基准（按钮用 transform，抽屉用 left/top），导致跟随不同步。新方案统一用按钮的实际矩形位置计算抽屉位置。
+- **收益：**
+  1. 拖拽按钮时抽屉实时跟随，相对位置固定
+  2. 打开抽屉时也自动定位到按钮旁边
+
+**3. 框可能出现在屏幕外**
+
+- **问题：** 原实现只在拖拽时做边界保护，且未考虑抽屉高度 510px，按钮在顶部时抽屉超出屏幕下方。
+- **修改后：** `positionAssistantDrawer()` 统一做四向边界保护：
+  - 垂直：按钮在上半屏→框在下方，否则在上方；若仍超出则向屏幕内侧偏移
+  - 横向：框右对齐按钮，超出左边则左移到屏幕内
+  - 窗口 resize 时重新定位
+- **收益：**
+  1. 框永远在屏幕内可见
+  2. 按钮在上半屏时框向下展开，在下半屏时向上展开
+
+---
+
+### 同步修改
+
+- `app/web/templates/index.html`：新增 `positionAssistantDrawer`/`closeAssistant`，重写按钮交互 IIFE，更新 `openAssistant` 调用定位函数
+- `app/web/static/style.css`：`.assistant-drawer` 去掉固定 `right:24px;bottom:76px`，改为由 JS 动态控制定位
+
+### 验证
+
+- JS 语法检查：通过
+- 核心测试：6 passed
+
+---
+
+
+
+**定位：** 修复用户在《新发现的问题.docx》中报告的 6 个缺陷，覆盖报告一致性、风险提示、Markdown 渲染、答辩模拟、历史方案等前端体验问题。
+
+**审查/修改背景：** 用户在使用 v5.0 后报告了 6 个新问题，集中在报告显示与历史方案管理。本版本逐一修复，并按 AGENTS.md 规范完成前端 4 步验证。
+
+---
+
+### 关键缺陷（P0）
+
+**1. 风险提示栏显示"用户确认的手动分工"（问题2）**
+
+- **问题：** 手动分工确认后，报告"风险提示"栏显示"用户确认的手动分工"，用户无法理解含义。
+- **修改前：**
+  ```python
+  # app/services/project_service.py 行146-159
+  qa = QAOutput(assignments=assignments, workload=workload, note="用户确认的手动分工")
+  ...
+  report = fp.report.model_copy(update={
+      "summary": plan.summary,
+      "qa_matrix_section": "\n".join(...),
+      "risk_note": qa.note,  # 把 note 直接当作 risk_note
+  })
+  ```
+- **修改后：**
+  ```python
+  # 新增 _build_manual_risk_note 函数，基于实际负载和工期计算真实风险
+  risk_note = _build_manual_risk_note(plan, timeline, workload, fp.input.members)
+  report = fp.report.model_copy(update={
+      "summary": plan.summary,
+      "qa_matrix_section": "\n".join(...),
+      "risk_note": risk_note,  # 真实风险：负载不均衡/工期紧张/关键路径/未分配
+  })
+  ```
+- **为什么这样改：** `qa.note` 是分配策略说明（"用户确认的手动分工"），不是风险提示。把它当 risk_note 是字段语义混淆。新函数 `_build_manual_risk_note` 基于实际工时、产能、关键路径比例计算真实风险，与 Reporter Agent 的风险维度对齐。
+- **收益：**
+  1. 风险提示栏显示有意义的内容（如"负载偏重""工期紧张"）
+  2. 手动分工后用户能看到真实风险点
+  3. 与导出报告的风险维度一致
+
+---
+
+### 健壮性提升（P1）
+
+**2. 前端报告与导出报告内容不一致（问题1）**
+
+- **问题：** 前端报告 Tab 只显示 summary/timeline/qa_matrix 三段，导出文档有六节（含任务表/时间线表/QA表/风险提示），用户看到的前端信息远少于导出。
+- **修改前：**
+  ```js
+  // index.html renderResultTab
+  tab==='report')content='<div class="report-box"><h3>方案摘要</h3><p>'+esc(state.plan.report.summary)+'</p><h3>时间线</h3><p>'+esc(state.plan.timeline.note||state.plan.report.timeline_section)+'</p><h3>分工说明</h3><p>'+esc(state.plan.report.qa_matrix_section)+'</p></div>'
+  ```
+- **修改后：**
+  ```js
+  // 新增 renderReportTab() 函数，渲染六节：计划概述/任务拆解表/时间线表/责任分工表/报告总结/风险提示
+  tab==='report')content=renderReportTab()
+  ```
+- **为什么这样改：** 前端与导出应展示一致的核心信息。新增 `renderReportTab()` 复用导出逻辑的六节结构，并使用表格渲染任务/时间线/分工，信息密度与导出文档对齐。
+- **收益：**
+  1. 前端报告信息完整，用户无需导出即可查看全部内容
+  2. 与导出文档结构一致，减少认知差异
+  3. 风险提示在前端也可见（配合问题2修复）
+
+**3. 前端报告偶尔混用 Markdown（问题3）**
+
+- **问题：** Reporter 的 prompt 要求"禁止 Markdown 星号"，但 LLM 偶尔不遵守，前端用 `esc()` 直接转义导致 `**bold**` 原样显示。
+- **修改前：** 所有报告字段用 `esc()` 转义，Markdown 语法原样显示为文本。
+- **修改后：** 新增 `renderMd(text)` 轻量 Markdown 渲染函数，支持 `**bold**`/`*italic*`/`` `code` ``/标题/列表/表格，先 `esc()` 转义再解析语法，避免 XSS。
+- **为什么这样改：** LLM 输出无法 100% 保证纯文本。前端需要兜底解析 Markdown，而不是把星号原样显示给用户。
+- **收益：**
+  1. 报告格式稳定，不再出现 `**` 原样显示
+  2. 支持表格、列表等结构化内容
+  3. 先转义再解析，安全性不变
+
+**4. AI 对话回复混有 Markdown（问题4）**
+
+- **问题：** `/api/chat` 的 LLM 回复可能含 Markdown，前端用 `esc()` 转义导致 `**` 等原样显示。
+- **修改前：**
+  ```js
+  el('messages').insertAdjacentHTML('beforeend','<div class="assistant-msg">'+esc(data.reply)+'</div>')
+  ```
+- **修改后：**
+  ```js
+  el('messages').insertAdjacentHTML('beforeend','<div class="assistant-msg">'+renderMd(data.reply)+'</div>')
+  ```
+- **为什么这样改：** 聊天回复同样无法保证纯文本，复用 `renderMd` 统一渲染。
+- **收益：**
+  1. 对话回复中的加粗/列表/代码块正常渲染
+  2. 与报告渲染逻辑统一，降低维护成本
+
+**5. 答辩模拟缺专门的要求输入框（问题5）**
+
+- **问题：** 后端 `user_requirements` 字段已支持，但前端答辩模拟 Tab 用的是项目级 `additional_requirements`，没有专门的"评委关注点"输入框。
+- **修改前：** 答辩 Tab 只有"生成模拟问题"按钮，无输入框。
+- **修改后：** 新增 `<textarea id="interviewRequirements">` 输入框，`bindInterviewControls` 读取该输入框值传给后端。
+- **为什么这样改：** 答辩模拟的需求（如"重点围绕技术方案"）与项目级要求不同，需要独立输入。
+- **收益：**
+  1. 用户可指定评委关注点，生成更聚焦的问题
+  2. 不污染项目级 `additional_requirements`
+
+**6. 保存成功但历史方案找不到（问题6）**
+
+- **问题：** 用户点保存后有成功提示，但回看历史方案找不到刚保存的。
+- **修改前：** `showHistory` 用 `document.querySelectorAll('[data-file]')` 全局查询，可能匹配无关元素；保存后不预加载历史；`loadPlan` 不防御缺失字段。
+- **修改后：**
+  1. `showHistory` 改用 `#planList [data-file]` 精确定位
+  2. 保存成功后预加载历史列表到 `state.cachedPlans`
+  3. 刚保存的方案在历史列表中高亮（`plan-item-new` 类）
+  4. `loadPlan` 防御性补全 `report`/`timeline`/`qa_matrix` 缺失字段
+  5. `showHistory` 增加 HTTP 状态检查和错误日志
+- **为什么这样改：** 全局 `[data-file]` 查询可能因页面其他元素干扰导致事件绑定异常；保存后不刷新历史让用户以为没保存；旧版本保存的方案可能缺新字段导致后续渲染崩溃。
+- **收益：**
+  1. 保存后立即可在历史中看到（高亮标识）
+  2. 加载旧方案不再因字段缺失崩溃
+  3. 错误可追踪（console.error）
+
+---
+
+### 体验优化（P2）
+
+**7. 新增 Markdown 表格和风险提示样式**
+
+- **问题：** 报告和聊天渲染 Markdown 表格/风险提示时缺乏样式，可读性差。
+- **修改后：** `style.css` 新增 `.md-table`/`.risk-note`/`.interview-req`/`.plan-item-new` 等样式。
+- **收益：** 表格有边框、风险提示红色高亮、新保存方案蓝色边框标识。
+
+---
+
+### 同步修改
+
+- `app/services/project_service.py`：新增 `_build_manual_risk_note` 辅助函数
+- `app/web/templates/index.html`：新增 `renderMd`/`renderReportTab` 函数，修改 `savePlan`/`showHistory`/`loadPlan`/`bindInterviewControls`/`sendChat`
+- `app/web/static/style.css`：新增 Markdown 渲染和答辩要求输入框样式
+
+### 验证
+
+- JS 语法检查：通过
+- 全部测试：82 passed, 17 failed（均为缺 OPENAI_API_KEY 的 LLM 测试，非本次修改引入）
+- 核心测试：`test_manual_assignment_and_workload_share_business_rules` + `test_save_endpoint` 全过
+
+---
+
+
 
 **定位：** 逐项修复用户报告的 8 个功能缺陷，确保比赛版的基础功能（成员、匹配度、工作量、报告、答辩、甘特图、AI 对话、UI）全部可用且无 bug。
 

@@ -151,15 +151,47 @@ def apply_manual_assignment(req: ManualAssignmentRequest) -> FullPlan:
     plan = fp.plan.model_copy(update={"tasks": updated_tasks})
     timeline = TimelineAgent().run(
         plan, fp.input.deadline.isoformat(), assignment_map, fp.input.members)
+    # 基于实际负载和工期计算真实风险，而不是把 note 当作 risk_note
+    risk_note = _build_manual_risk_note(plan, timeline, workload, fp.input.members)
     report = fp.report.model_copy(update={
         "summary": plan.summary,
         "qa_matrix_section": "\n".join(
             f"{item.task_name}：{item.presenter or '未分配'}" for item in assignments),
-        "risk_note": qa.note,
+        "risk_note": risk_note,
     })
     return FullPlan(
         input=fp.input, plan=plan, timeline=timeline, qa_matrix=qa,
         report=report, version=fp.version)
+
+
+def _build_manual_risk_note(plan: PlanOutput, timeline, workload: dict,
+                           members) -> str:
+    """基于实际负载和工期计算真实风险提示，供手动分工后的报告使用。"""
+    risks: list[str] = []
+    # 1. 负载不均衡风险
+    values = [v for v in workload.values() if v > 0]
+    if values:
+        avg = sum(values) / len(values)
+        for name, hours in workload.items():
+            if hours == 0:
+                risks.append(f"{name} 尚未分配任务，可能影响全员参与度")
+            elif hours > avg * 1.35 and hours - avg > 2:
+                risks.append(f"{name} 负载偏重（{hours:g}h，高于团队平均 {avg:.1f}h）")
+    # 2. 工期紧张风险
+    total_hours = sum(t.estimated_hours for t in plan.tasks if t.status != "completed")
+    capacity = sum(m.available_hours for m in members) or 1
+    if total_hours > capacity * 1.1:
+        risks.append(f"总工时 {total_hours:g}h 接近或超出团队产能 {capacity:g}h，建议缩减范围或延期")
+    # 3. 关键路径风险
+    if timeline.critical_path and len(timeline.critical_path) >= len(plan.tasks) * 0.7:
+        risks.append("关键路径占比较高，任务串行依赖多，单点延期易影响整体")
+    # 4. 未分配负责人
+    unassigned = [t for t in plan.tasks if not t.assignee_id]
+    if unassigned:
+        risks.append(f"{len(unassigned)} 项任务尚未设置负责人")
+    if not risks:
+        return "当前分工未发现明显风险，负载分布和工期安排合理。"
+    return "\n".join(risks)
 
 
 def workload_snapshot(plan: FullPlan) -> dict:
