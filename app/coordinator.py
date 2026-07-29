@@ -124,7 +124,7 @@ class Coordinator:
             qa_matrix_section="\n".join(
                 f"{a.task_name}：{a.presenter}（{a.reasoning}）"
                 for a in qa_matrix.assignments),
-            risk_note=qa_matrix.note,
+            risk_note=self._build_risk_note(plan, timeline, qa_matrix, inp.members),
         )
         by_task = {a.task_id: a for a in qa_matrix.assignments}
         assigned_tasks = [
@@ -133,7 +133,7 @@ class Coordinator:
                 "collaborator_ids": (
                     ([by_task[t.id].qa_primary] if by_task[t.id].qa_primary else [])
                     + list(by_task[t.id].qa_support or [])
-                )[:max(0, t.suggested_people - 1)] if t.id in by_task else []
+                ) if t.id in by_task else []
             }) for t in plan.tasks
         ]
         final_plan = plan.model_copy(update={"tasks": assigned_tasks})
@@ -145,6 +145,74 @@ class Coordinator:
                         reflection=reflection)
 
     # ──────────── 各步骤 ────────────
+
+
+    @staticmethod
+    def _build_risk_note(plan, timeline, qa_matrix, members) -> str:
+        """生成详细的风险提示"""
+        risks = []
+        
+        # 1. 工作量分析
+        workload = qa_matrix.workload or {}
+        values = [v for v in workload.values() if v > 0]
+        if values:
+            avg = sum(values) / len(values)
+            for name, hours in workload.items():
+                if hours == 0:
+                    risks.append(f'- **{name}**：未分配任何任务，可能存在分工遗漏')
+                elif hours > avg * 1.35 and hours - avg > 2:
+                    risks.append(f'- **{name}**：承担 {hours:g}h，显著高于团队平均 {avg:.1f}h，建议检查是否过载')
+                elif hours < avg * 0.5 and avg - hours > 3:
+                    risks.append(f'- **{name}**：仅承担 {hours:g}h，远低于团队平均 {avg:.1f}h，可考虑增加任务')
+        
+        # 2. 总工时与产能对比
+        total_hours = sum(t.estimated_hours for t in plan.tasks)
+        capacity = sum(m.available_hours for m in members) or 1
+        if total_hours > capacity * 1.1:
+            risks.append(f'- **总工时超负荷**：任务总计 {total_hours:g}h，超过团队总可用 {capacity:g}h，建议削减低优先级任务或延长排期')
+        elif total_hours < capacity * 0.5:
+            risks.append(f'- **产能利用率低**：任务总计 {total_hours:g}h，仅占团队可用 {capacity:g}h 的 {total_hours/capacity*100:.0f}%，可考虑增加任务深度')
+        
+        # 3. 关键路径风险
+        if timeline.critical_path and len(timeline.critical_path) >= max(1, len(plan.tasks) * 0.7):
+            risks.append(f'- **关键路径过长**：{len(timeline.critical_path)}/{len(plan.tasks)} 个任务处于关键路径，任一延迟都会影响整体交付')
+        
+        # 4. 未分配任务
+        unassigned = [t for t in plan.tasks if not t.assignee_id]
+        if unassigned:
+            risks.append(f'- **{len(unassigned)} 个任务未分配负责人**：{", ".join(t.name for t in unassigned[:3])}{"等" if len(unassigned) > 3 else ""}')
+        
+        # 5. 技能匹配风险
+        skill_mismatches = []
+        for task in plan.tasks:
+            if task.required_skills and task.assignee_id:
+                assignee = next((m for m in members if m.name == task.assignee_id), None)
+                if assignee:
+                    member_skills = set(s.name if hasattr(s, 'name') else s for s in assignee.skill_tags)
+                    required = set(task.required_skills)
+                    if not required.intersection(member_skills):
+                        skill_mismatches.append(task.name)
+        if skill_mismatches:
+            risks.append(f'- **技能匹配度低**：{", ".join(skill_mismatches[:2])}{"等" if len(skill_mismatches) > 2 else ""} 的负责人可能缺乏相关技能')
+        
+        # 6. 时间线风险
+        if timeline.total_days == 0 and timeline.tasks:
+            risks.append('- **时间线计算异常**：总工期为 0 天，请检查任务依赖关系')
+        
+        deadline = plan.input.deadline if hasattr(plan, 'input') else None
+        if deadline and timeline.total_days > 0:
+            from datetime import datetime
+            try:
+                deadline_date = datetime.fromisoformat(str(deadline)[:10])
+                if timeline.total_days > (deadline_date - datetime.now()).days:
+                    risks.append(f'- **可能延期**：预估工期 {timeline.total_days} 天，超过截止日期剩余天数')
+            except:
+                pass
+        
+        if not risks:
+            return '当前方案整体风险较低，建议关注任务执行过程中的突发情况。'
+        
+        return chr(10).join(risks)
 
     def _step_planner(self, inp: AssignmentInput) -> PlanOutput | AgentError:
         # 为 Planner 提供丰富的成员信息（含技能和可用工时）
@@ -313,7 +381,7 @@ class Coordinator:
                       1: (6, "方案设计与技术选型", ["设计", "架构"]),
                       2: (8, "核心模块开发", ["开发", "编程"]),
                       3: (6, "测试与联调", ["测试", "调试"]),
-                      4: (4, "文档撰写与答辩准备", ["文档", "PPT"])}
+                      4: (4, "文档撰写与汇报材料", ["文档", "PPT"])}
         # 按团队总产能自适应阶段数：小团队砍掉测试/文档，保留核心链路
         total_capacity = sum(m.available_hours for m in inp.members)
         num_stages = 3 if total_capacity <= 30 else (4 if total_capacity <= 60 else 5)
@@ -392,7 +460,7 @@ def _domain_fallback_specs(
     if any(word in lowered for word in ("ppt", "答辩", "汇报", "展示")):
         add("设计汇报结构与演示逻辑", "策划", 2.5, ["汇报策划"], "收尾")
         add("制作演示文稿与视觉排版", "设计", 5, ["PPT", "视觉设计"], "收尾")
-        add("答辩演练与问题准备", "答辩", 3, ["表达", "应答"], "收尾", 2)
+        add("汇报演练与问题准备", "汇报", 3, ["表达", "应答"], "收尾", 2)
     if any(word in lowered for word in ("开发", "系统", "网站", "程序", "小程序")):
         add("梳理功能需求与验收标准", "产品", 3, ["需求分析"], "准备")
         add("完成核心功能设计与实现", "开发", 10, ["技术开发"], "执行", 2)
@@ -477,9 +545,9 @@ def _friendly_fallback_cause(error_msg: str) -> str:
     lowered = (error_msg or "").lower()
     if "未配置" in error_msg or "auth" in lowered or "鉴权" in error_msg:
         return "原因：AI 服务鉴权未通过或访问凭据不可用"
-    if any(word in lowered for word in ("timeout", "connection", "connect")) \
+    if any(word in lowered for word in ("timeout", "timed out", "connection", "connect")) \
             or any(word in error_msg for word in ("超时", "连接")):
-        return "原因：AI 服务连接或响应超时"
+        return "原因：AI 服务连接或响应超时（模型生成较慢，可重试或调大 LLM_TIMEOUT）"
     if any(word in lowered for word in ("parse", "json", "validation")) \
             or any(word in error_msg for word in ("格式", "解析", "校验")):
         return (

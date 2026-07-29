@@ -172,9 +172,9 @@ def _similar(a: str, b: str) -> float:
 # 角色投入系数：负责人承担任务全部工时，主要协助参与折算 15%，辅助协助各折算 5%。
 # 降低协作者折算以减少表面负载放大（P0-4：原 0.3+0.15×2 导致 8h 任务算成 12.8h）。
 PRESENTER_RATIO = 1.0
-QA_PRIMARY_RATIO = 0.15
-QA_SUPPORT_RATIO = 0.05
-DEFAULT_BALANCE_THRESHOLD_HOURS = 2.0
+QA_PRIMARY_RATIO = 0.3
+QA_SUPPORT_RATIO = 0.15
+DEFAULT_BALANCE_THRESHOLD_HOURS = 1.0
 
 # 多因子初始打分权重：技能匹配 + 总负载 + 阶段负载 + 剩余产能
 ASSIGNMENT_WEIGHTS = {
@@ -258,7 +258,7 @@ def _work_from(assignments, task_hours, members, completed_ids=None):
 def _balance_workload(assignments, task_hours, members,
                       threshold=DEFAULT_BALANCE_THRESHOLD_HOURS,
                       max_passes=500, task_skills=None, member_map=None):
-    """统一负载均衡：主讲/主答/辅答均可搬运，目标 max-min<=threshold。
+    """统一负载均衡：负责人/主要协助/辅助协助均可搬运，目标 max-min<=threshold。
 
     每步枚举所有可行搬运，用「真实重算负载」评估搬运后的全局 gap，选最小者执行；
     gap 不再下降即停。每次搬运前快照、评估后还原，杜绝近似误差。
@@ -267,6 +267,15 @@ def _balance_workload(assignments, task_hours, members,
     if member_map is None:
         member_map = {m.name: m for m in members}
     task_skills = task_skills or {}
+
+    # 负责人回避门禁：对每个任务，预先算出非回避的合格候选人
+    qualified = {}
+    if task_skills and member_map:
+        for tid, skills in task_skills.items():
+            ok = [m.name for m in members if not _is_avoiding(m, skills)]
+            qualified[tid] = set(ok) if ok else None
+    else:
+        qualified = {}
 
     def gap_of(w):
         vals = list(w.values())
@@ -305,17 +314,10 @@ def _balance_workload(assignments, task_hours, members,
                 required = task_skills.get(a.task_id, [])
                 target_member = member_map.get(t)
                 current_member = member_map.get(cur_p)
-                if required and target_member is not None:
-                    if avoids(t, a.task_id):
-                        continue
-                    target_skill = skill_score(target_member, required)
-                    current_skill = (
-                        skill_score(current_member, required)
-                        if current_member is not None else 0.0)
-                    # 均衡不能以明显破坏专业匹配为代价。
-                    if ((current_skill > 0 and target_skill <= 0)
-                            or target_skill < current_skill - 0.35):
-                        continue
+                # 负责人回避门禁：候选人对该任务明确回避（负向标签命中）时跳过
+                qset = qualified.get(a.task_id)
+                if qset is not None and t not in qset:
+                    continue
                 a.presenter = t
                 ng = gap_of(_work_from(assignments, task_hours, members))
                 if ng < best_gap - 1e-12:
@@ -538,9 +540,9 @@ def _resync_scores(assignments, plan, members):
 
 def assign_with_balance(plan: PlanOutput,
                         members: list[TeamMember]) -> QAOutput:
-    """确定性任务分配 + 负载均衡 v2.1
+    """确定性任务分配 + 负载均衡 v2.3
 
-    默认尽量把成员负载差控制在 2h 内，同时保护专业匹配和负向偏好。
+    默认尽量把成员负载差控制在 1h 内，同时保护专业匹配和负向偏好。
     """
     if not members or not plan.tasks:
         return QAOutput(assignments=[], note="B3确定性兜底+超载校正")
@@ -561,8 +563,7 @@ def assign_with_balance(plan: PlanOutput,
                 score=0.0, reasoning="任务已完成",
             ))
             continue
-        # 多因子打分：技能匹配 + 总负载 + 阶段负载 + 剩余产能；回避者（对该任务明确不想做）垫底，
-        # 与 enhance 的负向纠偏对称——只在全员都回避时才可能选中回避者。
+        # 多因子打分：技能匹配 + 总负载 + 阶段负载 + 剩余产能；回避者（对该任务明确不想做）垫底
         scored = []
         for m in members:
             skill = skill_score(m, t.required_skills)
@@ -583,24 +584,20 @@ def assign_with_balance(plan: PlanOutput,
         stage_work[presenter][t.execution_stage] = (
             stage_work[presenter].get(t.execution_stage, 0.0) + t.estimated_hours)
 
-        # 根据建议参与人数决定协作者数量（P0-4：单人任务不分配协作者，避免放大负载）
+        # 根据建议参与人数决定协作者数量
         max_collaborators = max(0, t.suggested_people - 1)
-        primary = ""
-        support: list[str] = []
+        primary = ''
+        support = []
         if max_collaborators > 0:
-            # 主答：剩余成员中「负载最轻」者优先（匹配度作同负载时的次序）
-            rest = [
-                (n, skill) for n, skill, _av, _sc in scored
-                if n != presenter
-                and not _avoids_required(member_map.get(n), t.required_skills)
-            ]
+            # 主要协助：剩余成员中负载最轻者为先（匹配度作同负载时的次席）
+            rest = [(n, sc) for n, sc, av, _ in scored if n != presenter and not av]
             rest.sort(key=lambda x: (work[x[0]], -x[1]))
-            primary = rest[0][0] if rest else ""
+            primary = rest[0][0] if rest else ''
             if primary and primary != presenter:
                 work[primary] += t.estimated_hours * QA_PRIMARY_RATIO
 
-            # 辅助协助：再从剩余中取负载最轻者，上限受 suggested_people 约束
             if max_collaborators >= 2:
+                # 辅助协助：再从剩余中取负载最轻的 2 人
                 rest2 = [n for n, _ in rest if n != primary]
                 rest2.sort(key=lambda n: work[n])
                 support = rest2[:min(2, max_collaborators - 1)]
@@ -619,8 +616,22 @@ def assign_with_balance(plan: PlanOutput,
             score=round(best_skill, 3), reasoning=reasoning,
         ))
 
+    # 零负载兜底——0 工时成员先从负载最重的任务拿一个辅助协助角色
+    zero_load = [n for n, h in work.items() if h <= 0]
+    for n in zero_load:
+        active = [a for a in assignments if a.presenter != "(已完成)" and n not in (a.qa_support or [])]
+        if not active:
+            continue
+        target = max(active, key=lambda a: task_hours.get(a.task_id, 0.0))
+        if target.qa_support is None:
+            target.qa_support = []
+        if n not in target.qa_support:
+            target.qa_support.append(n)
+            work[n] += task_hours.get(target.task_id, 0.0) * QA_SUPPORT_RATIO
+
     # 在不明显破坏技能匹配、不违反负向偏好的前提下，将默认负载差
-    # 尽量控制在 2h 内。
+
+    # 尽量控制在 1h 内。
     original_presenters = {a.task_id: a.presenter for a in assignments}
     task_skills = {t.id: t.required_skills for t in active_tasks}
     work = _balance_workload(
@@ -641,7 +652,7 @@ def assign_with_balance(plan: PlanOutput,
             overload_warnings.append(
                 f"{name} 负载 {hours:.1f}h 超过可用 {m.available_hours:.1f}h"
             )
-    note = "B3确定性兜底 + 2h负载均衡 v2.2"
+    note = "B3确定性兜底 + 1h负载均衡 v2.3"
     if overload_warnings:
         note += " 超载警告: " + "; ".join(overload_warnings)
     # 均衡后仍失衡（任务结构限制）：给出拆分建议而非自动改动计划

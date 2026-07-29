@@ -19,7 +19,7 @@ from pydantic import BaseModel, ValidationError
 
 from app.config import (
     LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, LLM_MAX_RETRIES, LLM_TIMEOUT,
-    LLM_PREFER_PLAIN,
+    LLM_PREFER_PLAIN, LLM_MAX_TOKENS,
 )
 from app.models.schemas import AgentError
 
@@ -184,40 +184,107 @@ class LLMClient:
 
     def _try_plain_validate(self, system_prompt, user_prompt,
                             response_model, temperature) -> T:
-        """回退：普通 create + 手动提取 JSON + 验证。"""
-        # 在 prompt 里强调 JSON 输出
+        """普通 create + 手动提取 JSON + 验证。
+
+        推理模型（如 deepseek-v4-flash）思考慢、首字延迟高，网络/模型偶发超时；
+        这里对超时做有限重试（默认 2 次），以容忍慢响应。若响应被截断
+        （finish_reason=="length"），再把预算翻倍重试一次（上限 32000）。
+        """
         enhanced_system = system_prompt + "\n\n重要：你必须输出合法 JSON，不要包含 markdown 代码块标记。"
-        resp = self._client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": enhanced_system},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=temperature,
-            max_tokens=8000,
-            timeout=LLM_TIMEOUT,
-        )
-        raw = resp.choices[0].message.content or ""
-        # 尝试提取 JSON（去掉 markdown 代码块包裹）
-        raw = self._extract_json(raw)
-        try:
-            return response_model.model_validate_json(raw)
-        except (ValidationError, ValueError):
-            repaired = self._repair_response(raw, response_model)
-            if repaired is not None:
-                logger.info("LLM response passed local schema repair")
-                return repaired
-            raise
+        messages = [
+            {"role": "system", "content": enhanced_system},
+            {"role": "user", "content": user_prompt},
+        ]
+        budget = LLM_MAX_TOKENS
+        for _ in range(2):  # 首次 + 截断后重试一次
+            resp = self._call_with_timeout_retry(messages, budget, temperature)
+            msg = resp.choices[0].message
+            raw = msg.content or ""
+            # 推理模型正文为空但思考含 JSON 时回退抽取（避免把思考当正文误用）。
+            if not raw.strip():
+                rc = getattr(msg, "reasoning_content", None) or ""
+                if "{" in rc:
+                    raw = rc
+            finish = getattr(resp.choices[0], "finish_reason", None)
+            logger.info("=== LLM Plain Response Start (budget=%d) ===", budget)
+            logger.info("Raw response length: %d chars, finish_reason=%s",
+                        len(raw), finish)
+            # 不再把完整原文/JSON 倾倒到终端——这些内容含 presenter/qa_primary
+            # 等内部字段名，以及模型可能回吐的「主讲/主答/辅答」等遗留术语，
+            # 会给用户造成"系统还在围绕答辩责任"的误解。改为只记长度与状态。
+            extracted = self._extract_json(raw)
+            logger.info("Extracted JSON length: %d chars", len(extracted))
+            try:
+                result = response_model.model_validate_json(extracted)
+                logger.info("✓ LLM plain validate SUCCESS")
+                logger.info("=== LLM Plain Response End ===")
+                return result
+            except (ValidationError, ValueError) as e:
+                logger.warning("✗ LLM plain validate FAILED: %s", str(e)[:500])
+                logger.info("Attempting schema repair...")
+                repaired = self._repair_response(extracted, response_model)
+                if repaired is not None:
+                    logger.info("✓ LLM response passed local schema repair")
+                    logger.info("=== LLM Plain Response End ===")
+                    return repaired
+                logger.error("✗ LLM plain validate and repair both failed")
+                # 校验彻底失败时才在 DEBUG 级别打印原文，便于排查但不污染正常运行输出
+                logger.debug("Full extracted JSON for debugging:\n%s", extracted)
+                # 若确属截断且还能加预算，重试一次；否则放弃。
+                if finish == "length" and budget < 32000:
+                    budget = min(32000, budget * 2)
+                    logger.warning("Response truncated (length); retrying with budget=%d", budget)
+                    continue
+                    logger.info("=== LLM Plain Response End ===")
+                    raise
+        # 两次都失败（含一次截断重试）；抛出以走上层兜底。
+        raise ValueError("LLM 返回的 JSON 经校验与本地修复均不可用（可能仍未完整）")
+
+    def _call_with_timeout_retry(self, messages, budget, temperature,
+                                 max_retries: int = 2):
+        """带超时重试的 create 调用，容忍推理模型的慢响应。"""
+        last_exc: Exception | None = None
+        for i in range(max_retries + 1):
+            try:
+                return self._client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=budget,
+                    timeout=LLM_TIMEOUT,
+                )
+            except Exception as e:  # noqa: BLE001
+                if _classify_error(e) == "timeout" and i < max_retries:
+                    logger.warning("LLM 请求超时，第 %d/%d 次重试", i + 1, max_retries)
+                    last_exc = e
+                    continue
+                raise
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("unreachable")
 
     @staticmethod
     def _repair_response(raw: str, response_model: type[T]) -> T | None:
-        """本地修复 Planner 的轻微 JSON/字段问题，不再次请求模型。"""
+        """本地修复 Planner 的轻微 JSON/字段问题，不再次请求模型。
+
+        兼容两类异常：
+        1) 字段缺失/类型偏差：走 _normalize_task_objs 规范化；
+        2) JSON 被截断/不完整（推理模型 max_tokens 预算被思考吃掉）：
+           走 _salvage_task_objs 抢救已完整落地的任务对象，而非整次失败。
+        """
         if response_model.__name__ != "PlanOutput":
             return None
         try:
             payload = json.loads(raw)
         except (json.JSONDecodeError, TypeError):
-            return None
+            payload = None
+        if payload is None:
+            # 截断/不完整：尝试从残缺 JSON 中抢救完整任务对象
+            salvaged = LLMClient._salvage_task_objs(raw)
+            if not salvaged:
+                return None
+            payload = {"tasks": salvaged,
+                       "summary": "AI 返回被截断，系统已尽力保留已生成的任务"}
         if isinstance(payload, list):
             payload = {"tasks": payload}
         if not isinstance(payload, dict):
@@ -226,10 +293,101 @@ class LLMClient:
             if isinstance(payload.get(wrapper), dict):
                 payload = payload[wrapper]
                 break
-        tasks = payload.get("tasks", payload.get("subtasks", payload.get("task_list")))
-        if not isinstance(tasks, list):
+        task_objs = payload.get("tasks", payload.get("subtasks", payload.get("task_list")))
+        if not isinstance(task_objs, list):
+            return None
+        normalized = LLMClient._normalize_task_objs(task_objs)
+        if not normalized:
+            return None
+        repaired_payload = {
+            "tasks": normalized,
+            "summary": str(payload.get("summary", "AI 任务草案（本地修复）")),
+            "reasoning": str(payload.get("reasoning", "")),
+        }
+        try:
+            return response_model.model_validate(repaired_payload)
+        except (ValidationError, ValueError):
             return None
 
+    @staticmethod
+    def _salvage_task_objs(raw: str) -> list[dict]:
+        """AI 返回 JSON 被截断/不完整时，尽量抽取其中已完整闭合的任务对象。
+
+        支持 tasks / subtasks / task_list 三种数组键名；若都找不到，则退化为
+        整段扫描所有含 name 的顶层 {...} 对象（仅当对象带有任务特征字段，避免
+        把推理模型的思考过程误当正文）。对字段类型不做要求，交给
+        _normalize_task_objs 兜底。
+        """
+        if not raw:
+            return []
+        candidate = None
+        for key in ("tasks", "subtasks", "task_list"):
+            m = re.search(rf'"{key}"\s*:\s*\[', raw)
+            if m:
+                candidate = raw[m.end():]
+                break
+        if candidate is not None:
+            return LLMClient._extract_balanced_objs(candidate)
+        # 兜底：整段扫描，但只接受"看起来像任务"的对象，降低误抓率。
+        return [
+            o for o in LLMClient._extract_balanced_objs(raw)
+            if isinstance(o, dict) and o.get("name")
+            and any(k in o for k in (
+                "estimated_hours", "dependencies", "required_skills",
+                "description", "task_name", "hours", "duration"))
+        ]
+
+    @staticmethod
+    def _extract_balanced_objs(body: str) -> list[dict]:
+        """括号配平扫描，逐条取出深度归零的 {...} 对象。"""
+        objs: list[dict] = []
+        depth = 0
+        buf: list[str] = []
+        in_str = False
+        esc = False
+        for ch in body:
+            if in_str:
+                if depth >= 1:
+                    buf.append(ch)
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+                if depth >= 1:
+                    buf.append(ch)
+                continue
+            if ch == "{":
+                depth += 1
+                if depth == 1:
+                    buf = ["{"]          # 新对象开始：丢弃此前空白/逗号
+                else:
+                    buf.append(ch)
+                continue
+            if ch == "}":
+                depth -= 1
+                buf.append(ch)
+                if depth == 0:
+                    seg = "".join(buf)
+                    try:
+                        obj = json.loads(seg)
+                        if isinstance(obj, dict) and obj.get("name"):
+                            objs.append(obj)
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                    buf = []
+                continue
+            if depth >= 1:
+                buf.append(ch)
+        return objs
+
+    @staticmethod
+    def _normalize_task_objs(task_objs: list) -> list[dict] | None:
+        """把原始任务对象列表规范化为 SubTask 兼容的 dict 列表。"""
         from app.file_analysis import (
             _classify_requirement_unit, _looks_like_constraint,
             _strip_dangling_brackets,
@@ -238,7 +396,7 @@ class LLMClient:
         normalized: list[dict] = []
         old_to_new: dict[str, str] = {}
         raw_dependencies: list[list[str]] = []
-        for item in tasks[:40]:
+        for item in task_objs[:40]:
             if not isinstance(item, dict):
                 continue
             original_name = str(
@@ -345,15 +503,7 @@ class LLMClient:
                 old_to_new[value] for value in dependencies
                 if value in old_to_new and old_to_new[value] != task["id"]
             ))
-        repaired_payload = {
-            "tasks": normalized,
-            "summary": str(payload.get("summary", "AI 任务草案")),
-            "reasoning": str(payload.get("reasoning", "")),
-        }
-        try:
-            return response_model.model_validate(repaired_payload)
-        except (ValidationError, ValueError):
-            return None
+        return normalized
 
     @staticmethod
     def _extract_json(raw: str) -> str:

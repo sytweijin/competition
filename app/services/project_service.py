@@ -125,9 +125,21 @@ def apply_manual_assignment(req: ManualAssignmentRequest) -> FullPlan:
     assignments: list[QAAssignment] = []
     updated_tasks: list[SubTask] = []
     for task in fp.plan.tasks:
-        owner = req.assignees.get(task.id, task.assignee_id or "")
+        # 已完成任务保持占位，跳过验证与重分配
+        if task.status == "completed":
+            updated_tasks.append(task)
+            assignments.append(QAAssignment(
+                task_id=task.id, task_name=task.name, chapter="",
+                presenter="(已完成)", qa_primary="", qa_support=[],
+                score=0.0, reasoning="任务已完成",
+            ))
+            continue
+        # ???????????????????????????
+        owner = task.assignee_id if task.assignee_id in member_map else None
+        if req.assignees.get(task.id):
+            owner = req.assignees.get(task.id)
         if owner and owner not in member_map:
-            raise ProjectServiceError(f"未知负责人：{owner}")
+            owner = None
         collaborators = [
             name for name in req.collaborators.get(task.id, task.collaborator_ids)
             if name in member_map and name != owner
@@ -196,9 +208,19 @@ def _build_manual_risk_note(plan: PlanOutput, timeline, workload: dict,
 
 def workload_snapshot(plan: FullPlan) -> dict:
     """统一的工作量与提示计算，避免页面自行复制业务规则。"""
+    # 既统计负责人（assignee_id）的全工时，也统计协作者的折算工时。
+    # 只数负责人会让"仅作为协作者参与"的新增成员显示 0 工时/0 任务，
+    # 看起来像被系统晾在一边（B-P0：新增成员零工时）。
+    from app.agents.scoring import (
+        QA_PRIMARY_RATIO, QA_SUPPORT_RATIO)
+
+    qa_by_task = {a.task_id: a for a in (plan.qa_matrix.assignments
+                                         if plan.qa_matrix else [])}
+
     work = {member.name: 0.0 for member in plan.input.members}
     stage_work = {member.name: defaultdict(float) for member in plan.input.members}
     counts = {member.name: 0 for member in plan.input.members}
+    assist_counts = {member.name: 0 for member in plan.input.members}
     warnings: list[str] = []
     for task in plan.plan.tasks:
         owner = task.assignee_id
@@ -208,12 +230,33 @@ def workload_snapshot(plan: FullPlan) -> dict:
         # 已完成的任务不再计入剩余工作量——标记完成后成员条带应缩短
         if task.status == "completed":
             continue
-        work[owner] += task.estimated_hours
+        h = task.estimated_hours
+        work[owner] += h
         counts[owner] += 1
-        stage_work[owner][task.execution_stage] += task.estimated_hours
+        stage_work[owner][task.execution_stage] += h
+        # 协作者折算工时：优先用 qa_matrix 角色，否则回退 collaborator_ids
+        qa = qa_by_task.get(task.id)
+        if qa is not None:
+            collaborators = []
+            if qa.qa_primary and qa.qa_primary not in (owner, ""):
+                collaborators.append((qa.qa_primary, QA_PRIMARY_RATIO))
+            for s in (qa.qa_support or []):
+                if s not in (owner, qa.qa_primary) and s:
+                    collaborators.append((s, QA_SUPPORT_RATIO))
+        else:
+            collaborators = [
+                (c, QA_PRIMARY_RATIO) for c in (task.collaborator_ids or [])
+                if c != owner]
+        for cname, ratio in collaborators:
+            if cname not in work:
+                continue
+            share = h * ratio
+            work[cname] += share
+            assist_counts[cname] += 1
+            stage_work[cname][task.execution_stage] += share
     average = sum(work.values()) / max(1, len(work))
     for name, hours in work.items():
-        if counts[name] == 0:
+        if counts[name] == 0 and assist_counts[name] == 0:
             warnings.append(f"{name} 尚未分配任务")
         if hours > average * 1.35 and hours - average > 2:
             warnings.append(f"{name} 总工时明显高于团队平均")
@@ -225,6 +268,7 @@ def workload_snapshot(plan: FullPlan) -> dict:
         "members": {
             name: {
                 "task_count": counts[name],
+                "assist_count": assist_counts[name],
                 "total_hours": round(work[name], 2),
                 "share": round(work[name] / max(1, sum(work.values())), 4),
                 "stage_hours": dict(stage_work[name]),

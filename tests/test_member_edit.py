@@ -106,6 +106,30 @@ def test_cannot_remove_all_members():
     assert resp.status_code == 400
 
 
+def test_add_member_with_no_skills_gets_nonzero_workload():
+    """新增一名无技能标签的成员后，其工作量不应为零（P0：新增成员零工时）。"""
+    client = TestClient(app)
+    fp = _make_test_plan()
+    resp = client.post("/api/edit-members", json={
+        "plan": json.loads(fp.model_dump_json()),
+        "removed_members": [],
+        "updated_members": {},
+        "added_members": [{"name": "Dave", "daily_available_hours": 4, "skill_tags": []}],
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    names = [m["name"] for m in data["input"]["members"]]
+    assert "Dave" in names
+    # Dave 至少作为协作者或负责人参与某项任务（修复前会被完全排除 → 零工时）
+    dave_works = any(
+        (a.get("presenter") == "Dave")
+        or (a.get("qa_primary") == "Dave")
+        or ("Dave" in (a.get("qa_support") or []))
+        for a in data["qa_matrix"]["assignments"]
+    )
+    assert dave_works, "新增成员 Dave 被完全排除在分工之外（零工时 bug 复现）"
+
+
 def test_no_changes_returns_plan_unchanged():
     """没有变动时返回原计划。"""
     client = TestClient(app)

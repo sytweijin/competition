@@ -26,14 +26,14 @@ class ReporterAgent(BaseAgent[ReportOutput]):
             f"{' [关键]' if t.is_critical else ''}"
             for t in timeline.tasks) or '无时间线数据'
         qa_lines = '\n'.join(
-            f"- {a.task_name}: 主讲 {a.presenter}，主答 {a.qa_primary}，"
-            f"辅答 {', '.join(a.qa_support) or '无'}"
+            f"- {a.task_name}: 负责人 {a.presenter}，主要协助 {a.qa_primary}，"
+            f"辅助协助 {', '.join(a.qa_support) or '无'}"
             for a in qa_matrix.assignments) or '无分配数据'
         user = (
             f"请根据以下信息生成最终报告：\n\n"
             f"## 任务计划（共 {len(plan.tasks)} 个任务）\n{task_lines}\n\n"
             f"## 时间线（总工期 {timeline.total_days} 天）\n{tl_lines}\n\n"
-            f"## QA矩阵\n{qa_lines}"
+            f"## 责任分工\n{qa_lines}"
         )
         result = self._call_llm(user, temperature=0.5)
 
@@ -63,7 +63,7 @@ class ReporterAgent(BaseAgent[ReportOutput]):
         for a in qa_matrix.assignments:
             support = ", ".join(a.qa_support) if a.qa_support else "无"
             qa_lines.append(
-                f"- {a.task_name}：主讲 {a.presenter}，主答 {a.qa_primary}，辅答 {support}"
+                f"- {a.task_name}：负责人 {a.presenter}，主要协助 {a.qa_primary}，辅助协助 {support}"
             )
         qa_text = "\n".join(qa_lines) if qa_lines else "无 QA 分配数据"
 

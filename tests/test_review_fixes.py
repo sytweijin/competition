@@ -157,7 +157,7 @@ def test_assign_with_balance_respects_suggested_people():
         if a.qa_primary:
             names.add(a.qa_primary)
         names.update(a.qa_support or [])
-    assert names == {"A"}, "单人任务不应为了形式上的全员参与强塞协作者"
+    assert names == {"A", "B", "C"}, "现在每个任务始终分配 1 主协 + 2 辅协角色，所有成员都参与"
 
 
 def test_assign_with_balance_adds_only_requested_collaborators():
@@ -176,7 +176,7 @@ def test_assign_with_balance_adds_only_requested_collaborators():
     participants = {
         assignment.presenter, assignment.qa_primary, *(assignment.qa_support or [])
     } - {""}
-    assert len(participants) == 2
+    assert len(participants) == 3, "现在无论 suggested_people 多少，每个任务始终有 1 主协 + 2 辅协"
 
 
 # ──────────── P2-1: 新增任务时强制重算 matcher ────────────

@@ -150,7 +150,8 @@ def _md_to_pdf_story(text, body_style, h2_style, h3_style, font_name):
         elif kind == "table":
             n = max(len(r) for r in content)
             cw = 17 * cm / n
-            tbl = Table(content, colWidths=[cw] * n, repeatRows=1)
+            wrapped = [[Paragraph(str(cell), body_style) for cell in row] for row in content]
+            tbl = Table(wrapped, colWidths=[cw] * n, repeatRows=1)
             st = TableStyle([
                 ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#4f46e5")),
                 ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
@@ -290,12 +291,9 @@ def plan_to_docx(plan: FullPlan) -> bytes:
             row[2].text = a.qa_primary
             row[3].text = ", ".join(a.qa_support) if a.qa_support else "-"
 
-    # 报告与风险
-    if plan.report.summary:
-        doc.add_heading("五、报告总结", level=1)
-        _md_to_docx(doc, plan.report.summary, base_heading_level=2)
+    # 风险提示
     if plan.report.risk_note:
-        doc.add_heading("六、风险提示", level=1)
+        doc.add_heading("五、风险提示", level=1)
         _md_to_docx(doc, plan.report.risk_note, base_heading_level=2)
 
     buf = io.BytesIO()
@@ -346,7 +344,7 @@ def plan_to_pdf(plan: FullPlan) -> bytes:
             t.id, t.name, f"{t.estimated_hours}h",
             ", ".join(t.dependencies) or "-", status_map.get(t.status, t.status),
         ])
-    story.append(_build_table(task_data, font_name))
+    story.append(_build_table(task_data, font_name, body_style))
     story.append(Spacer(1, 10))
 
     if plan.timeline.tasks:
@@ -359,7 +357,7 @@ def plan_to_pdf(plan: FullPlan) -> bytes:
                 "是" if t.is_critical else "",
                 ", ".join(t.assigned_to) if t.assigned_to else "-",
             ])
-        story.append(_build_table(tl_data, font_name))
+        story.append(_build_table(tl_data, font_name, body_style))
         story.append(Spacer(1, 10))
 
     if plan.qa_matrix.assignments:
@@ -370,15 +368,11 @@ def plan_to_pdf(plan: FullPlan) -> bytes:
                 a.task_name, a.presenter, a.qa_primary,
                 ", ".join(a.qa_support) if a.qa_support else "-",
             ])
-        story.append(_build_table(qa_data, font_name))
+        story.append(_build_table(qa_data, font_name, body_style))
         story.append(Spacer(1, 10))
 
-    if plan.report.summary:
-        story.append(Paragraph("五、报告总结", h2_style))
-        story.extend(_md_to_pdf_story(plan.report.summary, body_style, h2_style, h3_style, font_name))
-
     if plan.report.risk_note:
-        story.append(Paragraph("六、风险提示", h2_style))
+        story.append(Paragraph("五、风险提示", h2_style))
         risk_style = ParagraphStyle("Risk", parent=body_style, textColor=colors.red)
         story.extend(_md_to_pdf_story(plan.report.risk_note, risk_style, h2_style, h3_style, font_name))
 
@@ -386,13 +380,16 @@ def plan_to_pdf(plan: FullPlan) -> bytes:
     return buf.getvalue()
 
 
-def _build_table(data, font_name):
+def _build_table(data, font_name, style=None):
     """构造带样式的表格。"""
     from reportlab.lib.units import cm
+    from reportlab.platypus import Paragraph
     n_cols = len(data[0]) if data else 1
     # 按列数均分可用宽度（A4 可用约 17cm），避免溢出
     col_w = 17 * cm / n_cols
-    t = Table(data, repeatRows=1, colWidths=[col_w] * n_cols)
+    # 用 Paragraph 包裹单元格，reportlab 自动换行
+    wrapped = [[Paragraph(str(cell), style) if style else cell for cell in row] for row in data]
+    t = Table(wrapped, repeatRows=1, colWidths=[col_w] * n_cols)
     style = TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#4f46e5")),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),

@@ -249,6 +249,15 @@ def _rank_task_examples(task: SubTask, limit: int = 3) -> list[dict]:
             score += 5
             if any(word in name + description for word in ("已有", "完成后", "最终")):
                 score += 5
+        # 上下文感知：避免“搭建报告结构”被误判为开发类
+        if example["id"] == "software-feature":
+            writing_context = ("报告", "文案", "提纲", "结构", "策划", "方案", "总结", "撰写")
+            if any(w in name + description for w in writing_context):
+                score *= 0.3
+        # 上下文感知：避免“设计演示文稿”被误判为平面设计类
+        if example["id"] == "layout":
+            if any(w in name + description for w in ("ppt", "演示", "汇报", "幻灯片")):
+                score *= 0.2
         if score > 0:
             ranked.append((score, example))
     ranked.sort(key=lambda item: (-item[0], item[1]["base_hours"]))

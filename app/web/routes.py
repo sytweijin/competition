@@ -471,12 +471,9 @@ def _plan_to_markdown(data: dict) -> str:
         lines.append("")
 
     report = data.get("report", {})
-    if report.get("summary"):
-        lines.append("## 报告")
-        lines.append(report["summary"])
-        if report.get("risk_note"):
-            lines.append("")
-            lines.append("**风险提示：** " + report["risk_note"])
+    if report.get("risk_note"):
+        lines.append("## 风险提示")
+        lines.append(report["risk_note"])
         lines.append("")
 
     return "\n".join(lines)
@@ -535,6 +532,19 @@ async def edit_members_endpoint(req: MemberEditRequest):
         # Recompute matcher with new members
         qa_matrix = assign_with_balance(fp.plan, new_members)
 
+        # 将新的分工结果写回 plan tasks（与 coordinator 同步）
+        by_task = {a.task_id: a for a in qa_matrix.assignments}
+        updated_tasks = [
+            t.model_copy(update={
+                'assignee_id': by_task[t.id].presenter if t.id in by_task else None,
+                'collaborator_ids': (
+                    ([by_task[t.id].qa_primary] if by_task[t.id].qa_primary else [])
+                    + list(by_task[t.id].qa_support or [])
+                ) if t.id in by_task else []
+            }) for t in fp.plan.tasks
+        ]
+        fp = fp.model_copy(update={'plan': fp.plan.model_copy(update={'tasks': updated_tasks})})
+
         # Recompute timeline
         assignments = {}
         for a in qa_matrix.assignments:
@@ -559,15 +569,19 @@ async def edit_members_endpoint(req: MemberEditRequest):
             report = ReporterAgent().run(plan=fp.plan, timeline=timeline, qa_matrix=qa_matrix)
         except Exception as exc:
             logger.exception("reporter rerun failed after member edit")
-            report = fp.report.model_copy(update={
-                "risk_note": (fp.report.risk_note + f"\n（成员已变动，报告重生成失败: {exc}）").strip()})
+            report = fp.report.model_copy(update={})
 
+        
+        # ????????????? risk_note??????
+        from app.coordinator import Coordinator
+        detailed_risk = Coordinator._build_risk_note(fp.plan, timeline, qa_matrix, new_members)
         return FullPlan(
             input=new_input,
             plan=fp.plan,
             timeline=timeline,
             qa_matrix=qa_matrix,
-            report=report,
+            report=report.model_copy(update={"risk_note": detailed_risk}),
+
         )
     except HTTPException:
         raise

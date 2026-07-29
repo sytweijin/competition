@@ -12,6 +12,7 @@ def test_skill_score_exact_match():
 
 def test_skill_score_no_skills():
     m = TeamMember(name="A", skill_tags=[])
+    # 没有技能标签时返回中性分数 0.0
     assert skill_score(m, ["前端"]) == 0.0
 
 
@@ -76,7 +77,7 @@ def test_impossible_two_hour_balance_returns_split_suggestion():
     out = assign_with_balance(plan, members)
     gap = max(out.workload.values()) - min(out.workload.values())
     assert gap > 2.0
-    assert "超过 2h" in out.note
+    assert "超过 1h" in out.note
     assert "建议拆分" in out.note
 
 

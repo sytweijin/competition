@@ -101,4 +101,7 @@ def test_manual_assignment_and_workload_share_business_rules():
     assert result.plan.tasks[1].assignee_id == "小文"
     assert result.plan.tasks[1].collaborator_ids == ["小摄"]
     assert snapshot["members"]["小文"]["total_hours"] == 6
-    assert any("小摄" in warning for warning in snapshot["warnings"])
+    # 小摄作为协作者参与 T2，应被计入工时而非被判定为"尚未分配任务"（P0：协作者工时不再为零）
+    assert snapshot["members"]["小摄"]["total_hours"] > 0
+    assert snapshot["members"]["小摄"]["assist_count"] == 1
+    assert not any("尚未分配任务" in w for w in snapshot["warnings"])

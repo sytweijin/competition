@@ -5,7 +5,279 @@
 > 按时间倒序排列（最新在最上面），随项目同步更新。
 
 ---
+## v5.5 —— 新增成员零工时修复 + 任务分工术语清理（2026-07-29）
 
+**定位：** 彻底修复"前端新增成员后工时显示为 0"，并清除系统中遗留的"答辩/QA 责任"术语，让流程回归"任务分工"本意。
+
+**审查/修改背景：** 用户反馈两点——(1) 运行任务时终端仍能看到「主讲/主答/辅答」等遗留的答辩责任术语，整个系统似乎仍围绕旧作业的答辩分工展开；(2) 在"成员管理"里新增一人并应用变更后，该成员任务量/工时为 0。此前多次尝试改 `skill_score` 的 0.0→0.3→0.0 均未奏效，因为根因不在打分。
+
+---
+
+### 关键缺陷（P0）
+
+#### 1. 新增成员被分配为协作者后，看板与工作量视图仍显示 0 工时/0 任务
+
+**问题：** 新增成员因为无可匹配技能标签（skill_score=0），贪心分配只会让他做"主要协助（qa_primary）"而非"负责人（presenter）"。但前端看板按 `task.assignee_id` 分组、后端 `workload_snapshot` 也只累加负责人工时，完全忽略协作者折算工时——于是这个"只做协助"的新成员在所有界面都显示 0，看起来像被系统晾在一边。
+
+**修改前：**（`app/services/project_service.py` workload_snapshot 只数负责人）
+```python
+for task in plan.plan.tasks:
+    owner = task.assignee_id
+    ...
+    work[owner] += task.estimated_hours
+    counts[owner] += 1
+```
+（`app/web/templates/index.html` renderBoard 按负责人分组）
+```js
+state.plan.plan.tasks.forEach(function(task){groups[task.assignee_id||'未分配'].push(task)});
+// 协作者从不出现，新成员列空白 → "0 项任务 · 0.0h"
+```
+
+**修改后：**
+```python
+# 协作者折算工时：优先用 qa_matrix 角色，否则回退 collaborator_ids
+qa = qa_by_task.get(task.id)
+if qa is not None:
+    collaborators = [(qa.qa_primary, QA_PRIMARY_RATIO)] + [(s, QA_SUPPORT_RATIO) for s in qa.qa_support ...]
+for cname, ratio in collaborators:
+    work[cname] += h * ratio
+    assist_counts[cname] += 1
+```
+```js
+// renderBoard 现在同时收集协作者任务，渲染为浅色"协助"卡片
+state.plan.plan.tasks.forEach(function(task){...collabs.forEach(function(cn){assistGroups[cn].push(task)})});
+// 列头：负责 N 项 · 协助 M 项 · 总工时
+```
+
+**为什么这样改：** 真正的根因不是"分配算法没给新成员活干"——算法已经把他安排为协作者（有真实折算工时）；而是"展示层只认负责人、不认协作者"，把已分配的工作隐形了。之前反复改 skill_score 之所以无效，正是因为问题根本不在打分阶段。让展示层忠实反映协作者工时，是从根上解决。
+
+**收益：**
+1. 新增成员立即显示真实工时（如 2.7h、3 项协助），不再是误导性的"0"。
+2. 看板里新成员列有"协助"卡片，全员参与情况一目了然。
+3. 与 `qa_matrix.workload` 的负载口径统一，看板/工作量/报告三处不再矛盾。
+
+**同步修改：** `tests/test_project_service.py`（协作者不再误报"尚未分配"）、`tests/test_member_edit.py`（新增"Dave 无技能"回归用例）、`app/web/static/style.css`（`.assist-card` 浅色样式）。
+
+---
+
+### 健壮性提升（P1）
+
+#### 2. 终端日志泄漏原始 LLM JSON，残留答辩术语污染运行输出
+
+**问题：** `logging.basicConfig(level=INFO)` 下，LLM 客户端会把 matcher 的原始 JSON（含 `presenter`/`qa_primary` 字段名，以及模型可能回吐的「主讲/主答/辅答」）整段打印到终端——这正是用户"运行任务的过程"里看到的来源。
+
+**修改前：**
+```python
+logger.info("Raw response (first 1000 chars):
+%s", raw[:1000])
+logger.info("Extracted JSON (first 1000 chars):
+%s", extracted[:1000])
+...
+logger.info("Full extracted JSON for debugging:
+%s", extracted)
+```
+
+**修改后：**
+```python
+# 不再倾倒原文/JSON 到终端，改为只记长度与状态
+logger.info("Raw response length: %d chars, finish_reason=%s", len(raw), finish)
+...
+logger.debug("Full extracted JSON for debugging:
+%s", extracted)  # 仅 DEBUG 级别
+```
+
+**为什么这样改：** INFO 是正常运行级别，不该出现调试用的大段原文。这些原文里的内部字段名和遗留术语会让用户误以为"系统还在围绕答辩责任跑"。降级到 DEBUG 后，正常运行终端只剩简洁的状态行；需要排查时设 DEBUG 即可恢复。
+
+**收益：**
+1. 运行过程终端干净，不再暴露 presenter/qa_primary 等内部字段与遗留术语。
+2. 排查能力不损失（DEBUG 级别仍可看完整原文）。
+
+---
+
+### 体验优化（P2）
+
+#### 3. 清除任务分工流程中的"答辩/QA"遗留术语，回归任务分工本意
+
+**问题：** 系统由旧作业（答辩分工）衍生， Reporter/Matcher 的用户提示词仍写「## QA矩阵」「QA 分配」，Planner 兜底仍生成「答辩准备」任务，UI 仍叫「答辩模拟」——让整个任务分工流程读起来仍像在排答辩。
+
+**修改前：**
+```python
+# reporter.py
+f"## QA矩阵
+{qa_lines}"
+# interview_sim.py
+f"以下是学生的作业计划和QA分配：
+
+## QA矩阵
+{qa_lines}"
+# coordinator.py 兜底任务
+add("答辩演练与问题准备", "答辩", 3, ...)
+# index.html
+<button data-tab="interview">答辩模拟</button>
+```
+
+**修改后：**
+```python
+f"## 责任分工
+{qa_lines}"
+f"以下是团队的项目计划和责任分工：
+
+## 责任分工
+{qa_lines}"
+add("汇报演练与问题准备", "汇报", 3, ...)
+<button data-tab="interview">评审预演</button>
+```
+
+**为什么这样改：** 任务分工 ≠ 答辩。Reporter/MMatcher 提示词用「QA 矩阵」会诱导模型沿用作业里的答辩角色语义；兜底默认塞"答辩演练"任务则把答辩强加给所有项目。统一改为「责任分工/汇报/评审预演」后，输出语言与工具定位一致。`qa_matrix` 作为内部标识符保留（不破坏数据结构与持久化兼容）。
+
+**收益：**
+1. 提示词不再诱导模型回吐"答辩/QA"角色术语。
+2. 默认任务、UI 文案与"任务分工"定位一致。
+3. 模拟提问（原答辩模拟）后处理增加裸 `QA` 整词替换，杜绝"做 QA"类泄漏。
+
+**同步修改：** `app/llm/prompts.py`（INTERVIEW_SYSTEM 改"评审提问"、Matcher/Planner 去答辩措辞）。
+
+---
+## v5.6 —— 成员变动后分工失衡 + 导出与报告问题修复（2026-07-30）
+
+**定位：** 修复成员变动后重算分工严重失衡的根因，同步修复 PDF 表格溢出和风险提示过于简略。
+
+**审查/修改背景：** 用户反馈三个问题：（1）成员变动后重算分工特别不均衡；（2）PDF 导出表格文字溢出重叠；（3）风险提示过于简略。前两者经分析和参考 AI实践基石大作业（homework）版本锁定根因。
+
+---
+
+### 关键缺陷（P0）
+
+#### 1. _balance_workload 技能守卫阻止均衡搬运，导致成员变动后 gap 无法收敛
+
+1. **问题：** 用户反馈此前“成员没变时分工是均衡的，成员一变就不均衡了”。根因在 `_balance_workload` 的 presenter 换人处有一段 homework 版本没有的额外技能分数守卫：
+
+   ```python
+   # 均衡不能以明显破坏专业匹配为代价。
+   if ((current_skill > 0 and target_skill <= 0)
+           or target_skill < current_skill - 0.35):
+       continue
+   ```
+
+2. **修改前：**（competition 版本技能分数守卫）
+   ```python
+   if required and target_member is not None:
+       if avoids(t, a.task_id):
+           continue
+       target_skill = skill_score(target_member, required)
+       current_skill = (skill_score(current_member, required)
+                       if current_member is not None else 0.0)
+       if ((current_skill > 0 and target_skill <= 0)
+               or target_skill < current_skill - 0.35):
+           continue
+   ```
+
+3. **修改后：**（homework 版本 qualified 方案，只检查回避）
+   ```python
+   qset = qualified.get(a.task_id)
+   if qset is not None and t not in qset:
+       continue
+   ```
+
+4. **为什么这样改：** 根因不是初始分配算法（多因子打分公式原来就是好的，用户确认“没动成员时分工是均衡的”），而是 `_balance_workload` 搬运时被技能守卫卡住。homework 版本只检查“目标成员是否明确回避该任务”，不检查技能分数差——只要没人写“不想做”，任务就可以搬过去，gap 才能真正收敛。初始分配的多因子公式保持不变。
+
+5. **收益：**
+   - 成员变动后重算 gap 可从 3-4h 收敛到 <=1h。
+   - 初始分配算法不变，用户确认“原来就是好的”版本不受影响。
+   - 只拦明确回避者（负向标签），不拦低技能但未回避者。
+
+---
+
+### 健壮性提升（P1）
+
+#### 2. apply_manual_assignment 对已完成/进行中/阻塞任务报“未知负责人”
+
+1. **问题：** `assign_with_balance` 对已完成任务返回 `presenter=“(已完成)”`，该值被写入 `task.assignee_id`。然后 `apply_manual_assignment` 遍历所有任务时把 `“(已完成)”` 当成成员名去查 `member_map`，找不到就报错。同理，进行中/阻塞任务的负责人如果在成员变动中被移除，也会触发同一错误。
+
+2. **修改前：**
+   ```python
+   owner = req.assignees.get(task.id, task.assignee_id or "")
+   if owner and owner not in member_map:
+       raise ProjectServiceError(f"未知负责人：{owner}")
+   ```
+
+3. **修改后：**
+   ```python
+   if task.status == "completed":
+       updated_tasks.append(task)
+       assignments.append(QAAssignment(
+           task_id=task.id, task_name=task.name, chapter="",
+           presenter="(已完成)", qa_primary="", qa_support=[],
+           score=0.0, reasoning="任务已完成",
+       ))
+       continue
+   owner = task.assignee_id if task.assignee_id in member_map else None
+   if req.assignees.get(task.id):
+       owner = req.assignees.get(task.id)
+   if owner and owner not in member_map:
+       owner = None
+   ```
+
+4. **为什么这样改：** 已完成任务的分工已经确定，不需要验证或重分配。进行中/阻塞任务的负责人如果被移出成员名单，应该清空而非报错——让用户重新分配，而不是中断流程。
+
+5. **收益：** 无论任务状态如何、成员如何变动，“确认最终分工”都不会再 500 报错。
+
+---
+
+### 体验优化（P2）
+
+#### 3. PDF 导出表格文字超出格子重叠
+
+1. **问题：** `_build_table` 和 `_md_to_pdf_story` 把单元格内容作为纯文本传给 reportlab Table。reportlab 对纯字符串不会自动换行，当文字超过列宽时就溢出、与相邻单元格重叠。
+
+2. **修改前：**
+   ```python
+   t = Table(data, repeatRows=1, colWidths=[col_w] * n_cols)
+   ```
+
+3. **修改后：**
+   ```python
+   from reportlab.platypus import Paragraph
+   wrapped = [[Paragraph(str(cell), style) if style else cell for cell in row] for row in data]
+   t = Table(wrapped, repeatRows=1, colWidths=[col_w] * n_cols)
+   ```
+
+4. **为什么这样改：** reportlab 的 Table 对 `Paragraph` 对象会自动换行、行高自适应。
+
+5. **收益：** 长任务名在 PDF 表格中自动换行，不再溢出重叠。
+
+---
+
+#### 4. 风险提示内容过于简略（LLM 版本 vs 确定性分析）
+
+1. **问题：** `edit-members` 端点调用了 `ReporterAgent`（LLM），LLM 成功时返回的 `risk_note` 往往是一两句自然语言总结，不如 `Coordinator._build_risk_note` 生成的逐项定量分析详细。
+
+2. **修改前：** `edit-members` 端点完全依赖 LLM 报告的 risk_note 字段。
+
+3. **修改后：** 在 `edit-members` 端点中，无论 LLM 报告是否成功，最后都用 `Coordinator._build_risk_note()` 覆盖 risk_note。LLM 仍负责生成 summary/timeline_section/qa_matrix_section 的叙述性文本。
+
+4. **为什么这样改：** LLM 倾向于生成概括性总结而非定量风险分析。确定性版本的 `_build_risk_note` 逐项检查 6 种风险类型（负载均衡、总工时/产能、关键路径、未分配任务、技能匹配、时间线），两者互补——LLM 写正文，确定性逻辑写风险。
+
+5. **收益：** 报告中的风险提示始终包含定量分析和具体数值。
+
+---
+
+### 打磨（P3）
+
+#### 5. 协作者数量尊重 suggested_people
+
+1. **问题：** 每个任务都分配了主要负责人 + 2 名辅助协助（共 3 人），即使 `suggested_people=1` 的任务也被强制安排协作者。
+
+2. **修改前：** 固定分配 presenter + primary + 2 support。
+
+3. **修改后：**
+   ```python
+   max_collaborators = max(0, t.suggested_people - 1)
+   if max_collaborators > 0:
+       ...
+   ```
+
+4. **收益：** 只有 `suggested_people >= 2` 的任务才有协作者，不再强制三人分工。
 ## v5.3 —— 抽屉遮挡修复 + 首次拆解兜底优化（2026-07-25）
 
 **定位：** 修复 AI 抽屉在中部盖住按钮、首次任务拆解频繁走兜底两个问题。
@@ -2728,6 +3000,10 @@ LLM 负责"创造性"：拆任务、分配角色、写报告
 | **v4.7.2** | **知识库估时、反馈学习与2h均衡分工** | **已完成** |
 | **v4.8** | **统一合并：算法修复 + 工时知识库** | **已完成** |
 | **v4.9** | **比赛 Demo 加固 + 清小搭标准协议接入** | **已完成** |
+| **v5.3** | **抽屉遮挡修复 + 首次拆解兜底优化** | **已完成** |
+| **v5.4** | **DeepSeek 超时根因修复 + 推理模型容错加固** | **已完成** |
+| **v5.5** | **新增成员零工时修复 + 任务分工术语清理** | **已完成** |
+| **v5.6** | **成员变动后分工失衡 + 导出与报告问题修复** | **已完成** |
 | v2.x | 比赛阶段扩展 | 规划中 |
 ### 36. half-day ?????????????????**???** timeline.py:174 ? `start_base + timedelta(days=es[tid] / 2)` ???????Python ? `date + timedelta(days=0.5)` ????????0.5 ????? 0 ??????? half-day ??????????? 2h ?????? 4h/?????????????????**????timeline.py??**```pythons_date = start_base + timedelta(days=es[tid] / 2)  # 0.5 ?????```**????**```pythons_date = (datetime.combine(start_base, datetime.min.time()) + timedelta(days=es[tid] / 2)).date()```?? datetime ????????????? date?????? available_days ???? total_seconds ?? .days ????### 37. ??????????????**???** ??????????????????????????**????** ??????????????`bg-[repeating-linear-gradient(45deg,...)]`???????????????????????????????????### 38. ???????????????????????? <= 1h?**???** ???????????0.25 * ????????????? 2 ? 20h ????????? 2 ? 2h ???????????????????? 25.8h / 32.5h / 75.1h?**????scoring.py assign_with_balance ??????**- ?????????????????????????- ??????????????????????????- ??/??????????- ???????????????????**???** ????? ~31h???? 1.1h?### 39. ???? ceil ????**???** timeline.py:196 ? `(deadline_date - today).days` ???????.days ??????1.5 ?? 1 ?????? `Math.ceil`?1.5 ?? 2 ???????????????**????** ?? `total_seconds() / 86400` ? `ceil`?????????
 ## v4.0 —— 任务拆解与分工双确认（2026-07-18）

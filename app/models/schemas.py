@@ -145,11 +145,11 @@ class QAAssignment(BaseModel):
     """单个任务的 QA 责任分配"""
     task_id: str
     task_name: str
-    chapter: str = Field(default="", description="所属答辩章节/段落")
-    presenter: str = Field(description="主讲人姓名")
-    qa_primary: str = Field(description="主答人姓名")
+    chapter: str = Field(default="", description="所属章节/段落")
+    presenter: str = Field(description="负责人姓名")
+    qa_primary: str = Field(description="主要协助人姓名")
     qa_support: list[str] = Field(default_factory=list,
-                                  description="辅答人列表")
+                                  description="辅助协助人列表")
     score: float = Field(default=0.0,
                          description="B3：该分配的技能匹配得分（0-1）")
     reasoning: str = Field(default="",
