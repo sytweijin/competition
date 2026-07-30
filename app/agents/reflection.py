@@ -1,7 +1,7 @@
 """
-Reflection Agent（C4 加分项）
-负责：对 Planner + Matcher + Timeline 生成的完整计划进行批判性自我审查，
-      发现潜在问题并给出改进建议，支持 LLM + 确定性兜底双保险。
+Reflection Agent
+负责：对完整计划进行批判性自我审查，发现潜在问题并给出改进建议。
+      支持 LLM + 确定性兜底双保险。
 """
 
 from __future__ import annotations

@@ -1,13 +1,7 @@
 """
 Coordinator 总调度
-负责：编排 Planner -> Matcher -> Timeline -> Reporter 主链路
+负责：编排 Planner -> Matcher -> Timeline -> Reporter -> Reflection 主链路
 同时负责：输出校验 + 重试 + 日志
-负责人：B（提交人）
-
-v0.3 改进：
-- 将成员信息传递给 TimelineAgent，支持按成员实际可用工时折算
-- 将 extra_requirements 传入 Planner
-- 增强错误处理和日志
 """
 
 from __future__ import annotations
