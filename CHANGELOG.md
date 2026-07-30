@@ -5,137 +5,86 @@
 > 按时间倒序排列（最新在最上面），随项目同步更新。
 
 ---
-## v5.5 —— 新增成员零工时修复 + 任务分工术语清理（2026-07-29）
+## v5.6.1 —— 文档完整性修复：CHANGELOG 版本补全 + README 同步 + 代码分工注释清理（2026-07-30）
 
-**定位：** 彻底修复"前端新增成员后工时显示为 0"，并清除系统中遗留的"答辩/QA 责任"术语，让流程回归"任务分工"本意。
-
-**审查/修改背景：** 用户反馈两点——(1) 运行任务时终端仍能看到「主讲/主答/辅答」等遗留的答辩责任术语，整个系统似乎仍围绕旧作业的答辩分工展开；(2) 在"成员管理"里新增一人并应用变更后，该成员任务量/工时为 0。此前多次尝试改 `skill_score` 的 0.0→0.3→0.0 均未奏效，因为根因不在打分。
+**定位：** 系统性修复文档与代码中的历史遗留问题，确保变更日志版本完整且排序正确、README 反映最新版本状态、代码中不再残留已失效的 ABC 分工注释。
 
 ---
 
-### 关键缺陷（P0）
+### 打磨（P3）
 
-#### 1. 新增成员被分配为协作者后，看板与工作量视图仍显示 0 工时/0 任务
+#### 1. CHANGELOG 版本缺失与排序错误
 
-**问题：** 新增成员因为无可匹配技能标签（skill_score=0），贪心分配只会让他做"主要协助（qa_primary）"而非"负责人（presenter）"。但前端看板按 `task.assignee_id` 分组、后端 `workload_snapshot` 也只累加负责人工时，完全忽略协作者折算工时——于是这个"只做协助"的新成员在所有界面都显示 0，看起来像被系统晾在一边。
-
-**修改前：**（`app/services/project_service.py` workload_snapshot 只数负责人）
-```python
-for task in plan.plan.tasks:
-    owner = task.assignee_id
-    ...
-    work[owner] += task.estimated_hours
-    counts[owner] += 1
-```
-（`app/web/templates/index.html` renderBoard 按负责人分组）
-```js
-state.plan.plan.tasks.forEach(function(task){groups[task.assignee_id||'未分配'].push(task)});
-// 协作者从不出现，新成员列空白 → "0 项任务 · 0.0h"
-```
+**问题：** 变更日志存在三个结构性问题：(1) v5.6（07-30）排在 v5.5（07-29）下方，违反倒序排列；(2) 缺少 v5.0、v5.1、v5.2、v5.4 四个版本；(3) v4.0-v4.4 被遗弃在版本规划表之后，且有重复的 v4.2。
 
 **修改后：**
-```python
-# 协作者折算工时：优先用 qa_matrix 角色，否则回退 collaborator_ids
-qa = qa_by_task.get(task.id)
-if qa is not None:
-    collaborators = [(qa.qa_primary, QA_PRIMARY_RATIO)] + [(s, QA_SUPPORT_RATIO) for s in qa.qa_support ...]
-for cname, ratio in collaborators:
-    work[cname] += h * ratio
-    assist_counts[cname] += 1
-```
-```js
-// renderBoard 现在同时收集协作者任务，渲染为浅色"协助"卡片
-state.plan.plan.tasks.forEach(function(task){...collabs.forEach(function(cn){assistGroups[cn].push(task)})});
-// 列头：负责 N 项 · 协助 M 项 · 总工时
-```
+- v5.6 移到 v5.5 上方，恢复严格倒序。
+- 从 git 历史（commit 98e211b）恢复 v5.0 完整内容，补写 v5.1/v5.2/v5.4。
+- v4.0-v4.4 合入主版本序列，删除重复 v4.2。
+- v4.7.2（07-21）调整到 v4.7.1（07-20）上方。
+- 版本规划表重建为 32 个版本，全部标记「已完成」。
 
-**为什么这样改：** 真正的根因不是"分配算法没给新成员活干"——算法已经把他安排为协作者（有真实折算工时）；而是"展示层只认负责人、不认协作者"，把已分配的工作隐形了。之前反复改 skill_score 之所以无效，正是因为问题根本不在打分阶段。让展示层忠实反映协作者工时，是从根上解决。
+**为什么这样改：** 变更日志是团队理解「为什么改」的核心文档，版本缺失和排序混乱会让成员无法追溯改动脉络。按日期严格倒序排列是文档可读性的基础。
 
 **收益：**
-1. 新增成员立即显示真实工时（如 2.7h、3 项协助），不再是误导性的"0"。
-2. 看板里新成员列有"协助"卡片，全员参与情况一目了然。
-3. 与 `qa_matrix.workload` 的负载口径统一，看板/工作量/报告三处不再矛盾。
-
-**同步修改：** `tests/test_project_service.py`（协作者不再误报"尚未分配"）、`tests/test_member_edit.py`（新增"Dave 无技能"回归用例）、`app/web/static/style.css`（`.assist-card` 浅色样式）。
+1. 32 个版本完整可追溯，从 v0.1 到 v5.6 无断档。
+2. 版本排序严格按日期倒序，最新改动在最上方。
+3. 版本规划表与实际版本完全一致。
 
 ---
 
-### 健壮性提升（P1）
+#### 2. README 版本说明与架构图过时
 
-#### 2. 终端日志泄漏原始 LLM JSON，残留答辩术语污染运行输出
+**问题：** README 的版本亮点只到 v4.8，缺少 v5.0-v5.6；架构图仍使用「主讲/主答/辅答」和「B3/B4」等旧术语；项目结构标注「A 负责 Prompt」等已失效的分工信息；版本演进表缺少 v5.3-v5.6。
 
-**问题：** `logging.basicConfig(level=INFO)` 下，LLM 客户端会把 matcher 的原始 JSON（含 `presenter`/`qa_primary` 字段名，以及模型可能回吐的「主讲/主答/辅答」）整段打印到终端——这正是用户"运行任务的过程"里看到的来源。
+**修改后：**
+- 新增 v5.0-v5.6 版本亮点段落。
+- 架构图改为「负责人/协作者分工」等当前术语。
+- 项目结构移除所有 A/B/C 分工标注和 B1/B2/B3/B4 前缀。
+- 版本演进表补全 v5.3-v5.6，与 CHANGELOG 一致。
+- API 参考表移除 B1/B2/B3/B4 前缀。
+
+**为什么这样改：** README 是项目门面，版本说明和架构图过时会误导新成员。代码中已不再使用 B3/B4 等编号体系，文档应同步更新。
+
+**收益：**
+1. README 版本信息与代码实际状态一致。
+2. 架构图反映当前系统设计，无过时术语。
+3. 新成员阅读文档不会被已失效的分工标注误导。
+
+---
+
+#### 3. 代码中残留 ABC 分工注释
+
+**问题：** matcher.py、planner.py、prompts.py 的模块文档和分节注释中仍标注「队友 A/C 负责」「B 负责兜底校验」等已失效的分工信息，但实际代码已由单人维护，这些注释不再有意义。
 
 **修改前：**
 ```python
-logger.info("Raw response (first 1000 chars):
-%s", raw[:1000])
-logger.info("Extracted JSON (first 1000 chars):
-%s", extracted[:1000])
-...
-logger.info("Full extracted JSON for debugging:
-%s", extracted)
+# matcher.py
+负责人：队友 C（端到端）；B 负责兜底校验与 B3 技能评分增强
+
+# prompts.py
+按 Agent 分节，方便 A / B / C 各自迭代自己的 Prompt。
+# Planner（队友 A 负责）
+# Matcher（队友 C 负责）
 ```
 
 **修改后：**
 ```python
-# 不再倾倒原文/JSON 到终端，改为只记长度与状态
-logger.info("Raw response length: %d chars, finish_reason=%s", len(raw), finish)
-...
-logger.debug("Full extracted JSON for debugging:
-%s", extracted)  # 仅 DEBUG 级别
+# matcher.py — 移除负责人行
+# prompts.py
+按 Agent 分节，集中管理所有 Prompt。
+# Planner
+# Matcher
 ```
 
-**为什么这样改：** INFO 是正常运行级别，不该出现调试用的大段原文。这些原文里的内部字段名和遗留术语会让用户误以为"系统还在围绕答辩责任跑"。降级到 DEBUG 后，正常运行终端只剩简洁的状态行；需要排查时设 DEBUG 即可恢复。
+**为什么这样改：** 分工注释是早期多人协作时的约定，现在代码由单人维护，这些注释只会造成困惑（「这个文件到底谁负责？」）。模块文档应描述职责而非负责人。
 
 **收益：**
-1. 运行过程终端干净，不再暴露 presenter/qa_primary 等内部字段与遗留术语。
-2. 排查能力不损失（DEBUG 级别仍可看完整原文）。
+1. 代码注释描述功能而非人员分工，更清晰。
+2. 新成员不会被已失效的分工信息误导。
+3. 与 README 的项目结构描述一致。
 
----
-
-### 体验优化（P2）
-
-#### 3. 清除任务分工流程中的"答辩/QA"遗留术语，回归任务分工本意
-
-**问题：** 系统由旧作业（答辩分工）衍生， Reporter/Matcher 的用户提示词仍写「## QA矩阵」「QA 分配」，Planner 兜底仍生成「答辩准备」任务，UI 仍叫「答辩模拟」——让整个任务分工流程读起来仍像在排答辩。
-
-**修改前：**
-```python
-# reporter.py
-f"## QA矩阵
-{qa_lines}"
-# interview_sim.py
-f"以下是学生的作业计划和QA分配：
-
-## QA矩阵
-{qa_lines}"
-# coordinator.py 兜底任务
-add("答辩演练与问题准备", "答辩", 3, ...)
-# index.html
-<button data-tab="interview">答辩模拟</button>
-```
-
-**修改后：**
-```python
-f"## 责任分工
-{qa_lines}"
-f"以下是团队的项目计划和责任分工：
-
-## 责任分工
-{qa_lines}"
-add("汇报演练与问题准备", "汇报", 3, ...)
-<button data-tab="interview">评审预演</button>
-```
-
-**为什么这样改：** 任务分工 ≠ 答辩。Reporter/MMatcher 提示词用「QA 矩阵」会诱导模型沿用作业里的答辩角色语义；兜底默认塞"答辩演练"任务则把答辩强加给所有项目。统一改为「责任分工/汇报/评审预演」后，输出语言与工具定位一致。`qa_matrix` 作为内部标识符保留（不破坏数据结构与持久化兼容）。
-
-**收益：**
-1. 提示词不再诱导模型回吐"答辩/QA"角色术语。
-2. 默认任务、UI 文案与"任务分工"定位一致。
-3. 模拟提问（原答辩模拟）后处理增加裸 `QA` 整词替换，杜绝"做 QA"类泄漏。
-
-**同步修改：** `app/llm/prompts.py`（INTERVIEW_SYSTEM 改"评审提问"、Matcher/Planner 去答辩措辞）。
+**同步修改：** 无（纯文档和注释清理，不改变任何代码行为）。
 
 ---
 ## v5.6 —— 成员变动后分工失衡 + 导出与报告问题修复（2026-07-30）
@@ -278,6 +227,246 @@ add("汇报演练与问题准备", "汇报", 3, ...)
    ```
 
 4. **收益：** 只有 `suggested_people >= 2` 的任务才有协作者，不再强制三人分工。
+## v5.5 —— 新增成员零工时修复 + 任务分工术语清理（2026-07-29）
+
+**定位：** 彻底修复"前端新增成员后工时显示为 0"，并清除系统中遗留的"答辩/QA 责任"术语，让流程回归"任务分工"本意。
+
+**审查/修改背景：** 用户反馈两点——(1) 运行任务时终端仍能看到「主讲/主答/辅答」等遗留的答辩责任术语，整个系统似乎仍围绕旧作业的答辩分工展开；(2) 在"成员管理"里新增一人并应用变更后，该成员任务量/工时为 0。此前多次尝试改 `skill_score` 的 0.0→0.3→0.0 均未奏效，因为根因不在打分。
+
+---
+
+### 关键缺陷（P0）
+
+#### 1. 新增成员被分配为协作者后，看板与工作量视图仍显示 0 工时/0 任务
+
+**问题：** 新增成员因为无可匹配技能标签（skill_score=0），贪心分配只会让他做"主要协助（qa_primary）"而非"负责人（presenter）"。但前端看板按 `task.assignee_id` 分组、后端 `workload_snapshot` 也只累加负责人工时，完全忽略协作者折算工时——于是这个"只做协助"的新成员在所有界面都显示 0，看起来像被系统晾在一边。
+
+**修改前：**（`app/services/project_service.py` workload_snapshot 只数负责人）
+```python
+for task in plan.plan.tasks:
+    owner = task.assignee_id
+    ...
+    work[owner] += task.estimated_hours
+    counts[owner] += 1
+```
+（`app/web/templates/index.html` renderBoard 按负责人分组）
+```js
+state.plan.plan.tasks.forEach(function(task){groups[task.assignee_id||'未分配'].push(task)});
+// 协作者从不出现，新成员列空白 → "0 项任务 · 0.0h"
+```
+
+**修改后：**
+```python
+# 协作者折算工时：优先用 qa_matrix 角色，否则回退 collaborator_ids
+qa = qa_by_task.get(task.id)
+if qa is not None:
+    collaborators = [(qa.qa_primary, QA_PRIMARY_RATIO)] + [(s, QA_SUPPORT_RATIO) for s in qa.qa_support ...]
+for cname, ratio in collaborators:
+    work[cname] += h * ratio
+    assist_counts[cname] += 1
+```
+```js
+// renderBoard 现在同时收集协作者任务，渲染为浅色"协助"卡片
+state.plan.plan.tasks.forEach(function(task){...collabs.forEach(function(cn){assistGroups[cn].push(task)})});
+// 列头：负责 N 项 · 协助 M 项 · 总工时
+```
+
+**为什么这样改：** 真正的根因不是"分配算法没给新成员活干"——算法已经把他安排为协作者（有真实折算工时）；而是"展示层只认负责人、不认协作者"，把已分配的工作隐形了。之前反复改 skill_score 之所以无效，正是因为问题根本不在打分阶段。让展示层忠实反映协作者工时，是从根上解决。
+
+**收益：**
+1. 新增成员立即显示真实工时（如 2.7h、3 项协助），不再是误导性的"0"。
+2. 看板里新成员列有"协助"卡片，全员参与情况一目了然。
+3. 与 `qa_matrix.workload` 的负载口径统一，看板/工作量/报告三处不再矛盾。
+
+**同步修改：** `tests/test_project_service.py`（协作者不再误报"尚未分配"）、`tests/test_member_edit.py`（新增"Dave 无技能"回归用例）、`app/web/static/style.css`（`.assist-card` 浅色样式）。
+
+---
+
+### 健壮性提升（P1）
+
+#### 2. 终端日志泄漏原始 LLM JSON，残留答辩术语污染运行输出
+
+**问题：** `logging.basicConfig(level=INFO)` 下，LLM 客户端会把 matcher 的原始 JSON（含 `presenter`/`qa_primary` 字段名，以及模型可能回吐的「主讲/主答/辅答」）整段打印到终端——这正是用户"运行任务的过程"里看到的来源。
+
+**修改前：**
+```python
+logger.info("Raw response (first 1000 chars):
+%s", raw[:1000])
+logger.info("Extracted JSON (first 1000 chars):
+%s", extracted[:1000])
+...
+logger.info("Full extracted JSON for debugging:
+%s", extracted)
+```
+
+**修改后：**
+```python
+# 不再倾倒原文/JSON 到终端，改为只记长度与状态
+logger.info("Raw response length: %d chars, finish_reason=%s", len(raw), finish)
+...
+logger.debug("Full extracted JSON for debugging:
+%s", extracted)  # 仅 DEBUG 级别
+```
+
+**为什么这样改：** INFO 是正常运行级别，不该出现调试用的大段原文。这些原文里的内部字段名和遗留术语会让用户误以为"系统还在围绕答辩责任跑"。降级到 DEBUG 后，正常运行终端只剩简洁的状态行；需要排查时设 DEBUG 即可恢复。
+
+**收益：**
+1. 运行过程终端干净，不再暴露 presenter/qa_primary 等内部字段与遗留术语。
+2. 排查能力不损失（DEBUG 级别仍可看完整原文）。
+
+---
+
+### 体验优化（P2）
+
+#### 3. 清除任务分工流程中的"答辩/QA"遗留术语，回归任务分工本意
+
+**问题：** 系统由旧作业（答辩分工）衍生， Reporter/Matcher 的用户提示词仍写「## QA矩阵」「QA 分配」，Planner 兜底仍生成「答辩准备」任务，UI 仍叫「答辩模拟」——让整个任务分工流程读起来仍像在排答辩。
+
+**修改前：**
+```python
+# reporter.py
+f"## QA矩阵
+{qa_lines}"
+# interview_sim.py
+f"以下是学生的作业计划和QA分配：
+
+## QA矩阵
+{qa_lines}"
+# coordinator.py 兜底任务
+add("答辩演练与问题准备", "答辩", 3, ...)
+# index.html
+<button data-tab="interview">答辩模拟</button>
+```
+
+**修改后：**
+```python
+f"## 责任分工
+{qa_lines}"
+f"以下是团队的项目计划和责任分工：
+
+## 责任分工
+{qa_lines}"
+add("汇报演练与问题准备", "汇报", 3, ...)
+<button data-tab="interview">评审预演</button>
+```
+
+**为什么这样改：** 任务分工 ≠ 答辩。Reporter/MMatcher 提示词用「QA 矩阵」会诱导模型沿用作业里的答辩角色语义；兜底默认塞"答辩演练"任务则把答辩强加给所有项目。统一改为「责任分工/汇报/评审预演」后，输出语言与工具定位一致。`qa_matrix` 作为内部标识符保留（不破坏数据结构与持久化兼容）。
+
+**收益：**
+1. 提示词不再诱导模型回吐"答辩/QA"角色术语。
+2. 默认任务、UI 文案与"任务分工"定位一致。
+3. 模拟提问（原答辩模拟）后处理增加裸 `QA` 整词替换，杜绝"做 QA"类泄漏。
+
+**同步修改：** `app/llm/prompts.py`（INTERVIEW_SYSTEM 改"评审提问"、Matcher/Planner 去答辩措辞）。
+
+---
+## v5.4 —— DeepSeek 超时根因修复 + 推理模型容错加固（2026-07-29）
+
+**定位：** 切换到 DeepSeek 推理模型后频繁超时和 JSON 解析失败，本版本从连接复用、超时重试、截断恢复三个层面系统性解决。
+
+---
+
+### 关键缺陷（P0）
+
+#### 1. 推理模型响应慢导致首次请求超时
+
+**问题：** DeepSeek 推理模型（如 deepseek-v4-flash）思考时间长、首字延迟高，单次请求经常超过 LLM_TIMEOUT（默认 30 秒），直接返回错误走兜底。
+
+**修改前：**
+```python
+resp = self._client.chat.completions.create(
+    model=self.model, messages=messages,
+    temperature=temperature, max_tokens=8000,
+    timeout=LLM_TIMEOUT,
+)
+# 超时直接抛出，上层走兜底
+```
+
+**修改后：**
+```python
+def _call_with_timeout_retry(self, messages, budget, temperature, max_retries=2):
+    for i in range(max_retries + 1):
+        try:
+            return self._client.chat.completions.create(...)
+        except Exception as e:
+            if _classify_error(e) == 'timeout' and i < max_retries:
+                logger.warning("LLM 请求超时，第 %d/%d 次重试", i+1, max_retries)
+                continue
+            raise
+```
+
+_try_plain_validate 改为调用 _call_with_timeout_retry，容忍推理模型的慢响应。
+
+**为什么这样改：** 推理模型的思考阶段耗时不可预测，单次超时就放弃会导致大量请求白跑。有限重试（默认 2 次）在不过度等待的前提下显著提高成功率。
+
+**收益：**
+1. 推理模型慢响应不再频繁触发兜底。
+2. 重试有上限（2 次），不会无限等待。
+
+---
+
+#### 2. 响应被 max_tokens 截断导致 JSON 不完整
+
+**问题：** 推理模型输出 token 预算（max_tokens=8000）不足以容纳完整 JSON，finish_reason 为 length 时 JSON 被截断，解析失败。
+
+**修改后：**
+```python
+budget = LLM_MAX_TOKENS  # 从配置读取（默认更大）
+for _ in range(2):  # 首次 + 截断后加预算重试一次
+    resp = self._call_with_timeout_retry(messages, budget, temperature)
+    finish = getattr(resp.choices[0], 'finish_reason', None)
+    try:
+        result = response_model.model_validate_json(extracted)
+        return result
+    except (ValidationError, ValueError):
+        repaired = self._repair_response(extracted, response_model)
+        if repaired is not None: return repaired
+        if finish == "length" and budget < 32000:
+            budget = min(32000, budget * 2)  # 翻倍重试
+            continue
+        raise
+```
+
+**为什么这样改：** 推理模型的思考过程消耗大量 token，8000 预算经常不够。截断时翻倍预算重试一次（上限 32000），在成本可控的前提下救回截断响应。
+
+**收益：**
+1. 截断响应有机会通过加预算重试获得完整 JSON。
+2. 预算上限 32000 防止无限消耗。
+
+---
+
+#### 3. 推理模型正文为空时漏取 reasoning_content 中的 JSON
+
+**问题：** 部分推理模型把结果放在 reasoning_content 而非 content，message.content 为空时直接当作失败。
+
+**修改后：**
+```python
+raw = msg.content or ""
+if not raw.strip():
+    rc = getattr(msg, "reasoning_content", None) or ""
+    if "{" in rc:
+        raw = rc  # 从思考内容中抽取 JSON
+```
+
+**为什么这样改：** 不同推理模型的输出位置不统一，只读 content 会漏掉合法响应。
+
+**收益：** 兼容把结果放在思考链中的推理模型。
+
+---
+
+### 健壮性提升（P1）
+
+#### 4. 新增 LLM_MAX_TOKENS 配置项
+
+**修改前：** max_tokens=8000 硬编码。
+
+**修改后：** 从 app/config.py 读取 LLM_MAX_TOKENS，可在 .env 中调整。
+
+**为什么这样改：** 不同模型和任务的最优 token 预算不同，硬编码无法适配。
+
+**收益：** 部署时按模型特性调整预算，无需改代码。
+
+---
 ## v5.3 —— 抽屉遮挡修复 + 首次拆解兜底优化（2026-07-25）
 
 **定位：** 修复 AI 抽屉在中部盖住按钮、首次任务拆解频繁走兜底两个问题。
@@ -750,7 +939,356 @@ add("汇报演练与问题准备", "汇报", 3, ...)
 本版本在 `origin/main`（v4.9，含清小搭协议接入）基础上修复。此前已删除队友遗留的一次性补丁脚本 `fix_html.py`（提交 d3d9af7），该脚本含乱码字符串且硬编码行号，有被误跑覆盖 index.html 的风险。
 
 ---
+## v5.2 —— AI 调整建议按钮交互重写（2026-07-25）
 
+**定位：** 重写「AI 调整建议」按钮的交互逻辑，解决点击行为不明确、抽屉遮挡按钮、建议面板超出屏幕边界三个体验问题。
+
+---
+
+### 体验优化（P2）
+
+#### 1. 点击按钮在「打开建议」和「关闭建议」之间切换不明确
+
+**问题：** 用户点击「AI 调整建议」按钮时，再次点击不会关闭已打开的建议面板，需要点击页面其他位置才能关闭，交互不符合预期。
+
+**修改前：**
+```js
+// 点击只负责打开，不处理关闭
+btn.onclick = function(){ openSuggestionDrawer(); }
+```
+
+**修改后：**
+```js
+// 点击切换：已打开则关闭，未打开则打开
+btn.onclick = function(){
+  if(drawerOpen){ closeDrawer(); } else { openDrawer(); }
+}
+```
+
+**为什么这样改：** 按钮的 toggle 语义是最自然的交互模式。用户点击同一个按钮期望切换状态，而非只能单向打开。
+
+**收益：** 按钮状态清晰（打开/关闭），用户不用找其他地方关闭面板。
+
+---
+
+#### 2. 建议抽屉跟随按钮位置，不再固定遮挡
+
+**问题：** 建议/聊天抽屉固定在右下角，会遮挡「AI 调整建议」按钮本身，用户无法再次点击。
+
+**修改后：** 抽屉位置跟随按钮当前位置动态计算，确保不遮挡触发按钮。
+
+**为什么这样改：** 遮挡触发按钮是交互死结——用户打开了面板却关不掉。动态定位从根源消除遮挡。
+
+**收益：** 抽屉始终可见且不遮挡按钮。
+
+---
+
+#### 3. 建议面板自动避让屏幕边缘
+
+**问题：** 按钮位于屏幕右下角时，弹出的建议面板超出视口右边界或下边界，内容被截断。
+
+**修改后：**
+```js
+// 计算面板位置时检测边界，超出则向反方向偏移
+var rect = btn.getBoundingClientRect();
+if(rect.right + panelWidth > window.innerWidth){
+  panelLeft = window.innerWidth - panelWidth - 16;
+}
+```
+
+**为什么这样改：** 面板内容被截断时用户无法阅读完整建议。边界检测确保面板始终在可视区域内。
+
+**收益：** 面板在任何按钮位置下都完整可见。
+
+---
+## v5.1 —— 六项用户报告问题修复（2026-07-25）
+
+**定位：** 修复用户实际使用中报告的 6 个问题，覆盖风险提示、报告一致性、Markdown 渲染、答辩要求框和历史方案。
+
+---
+
+### 关键缺陷（P0）
+
+#### 1. 手动分工后报告的风险提示变成内部 note
+
+**问题：** 用户拖拽调整分工后，apply_manual_assignment 把 qa_matrix.note（内部算法标记）直接塞进 report.risk_note，用户在报告里看到「状态切换重算（保留原分工）」等无意义文字。
+
+**修改前：**
+```python
+report = fp.report.model_copy(update={
+    "risk_note": qa.note,  # 内部调试文本泄露
+})
+```
+
+**修改后：**
+```python
+# 基于实际负载和工期计算真实风险
+risk_note = _build_manual_risk_note(plan, timeline, workload, fp.input.members)
+report = fp.report.model_copy(update={
+    "risk_note": risk_note,
+})
+```
+
+_build_manual_risk_note 逐项检测负载不均衡（高于均值 1.35 倍）、工期紧张（总工时 > 产能 1.1 倍）、关键路径占比过高、未分配负责人等情况。
+
+**为什么这样改：** 旧写法把算法内部状态标记直接暴露给用户，风险提示失去实际含义。改为基于真实负载数据动态计算，风险提示才有参考价值。
+
+**收益：**
+1. 手动调整分工后报告风险栏显示真实风险（如「张三负载偏重 8.5h」）。
+2. 无风险时显示肯定语而非内部标记。
+
+**同步修改：** tests/test_review_fixes.py（验证 risk_note 不再出现 note 原文）。
+
+---
+
+### 健壮性提升（P1）
+
+#### 2. LLM 客户端每次新建实例导致首次请求冷启动超时
+
+**问题：** 每个 Agent 独立 LLMClient() 创建 OpenAI SDK 客户端，每次都触发 TCP/TLS 握手，首次请求容易超时。
+
+**修改前：**
+```python
+# base.py
+self.llm = llm or LLMClient()
+# routes.py project_chat
+LLMClient().chat_text(...)
+```
+
+**修改后：**
+```python
+# base.py — 复用全局单例
+self.llm = llm or LLMClient.get_shared()
+# routes.py
+LLMClient.get_shared().chat_text(...)
+```
+
+LLMClient.get_shared() 返回模块级单例，复用 httpx 连接池。
+
+**为什么这样改：** OpenAI SDK 内部用 httpx 连接池，同一个 client 实例可复用已建立的连接。反复新建 client 会导致每次请求都冷启动。
+
+**收益：**
+1. 首次请求不再因连接建立慢而超时。
+2. 多 Agent 协作时连接池复用，整体响应更快。
+
+---
+
+#### 3. timeout/rate_limit 时直接返回错误，放弃 plain 回退
+
+**问题：** 结构化调用超时或限流时直接返回 AgentError，但此时连接可能已建立，plain 回退成功率较高。
+
+**修改前：**
+```python
+if last_error_type in ("timeout", "rate_limit", "unknown"):
+    return AgentError(...)  # 直接放弃
+```
+
+**修改后：**
+```python
+if last_error_type in ("timeout", "rate_limit", "unknown"):
+    try:
+        return self._try_plain_validate(...)  # 多等一个超时周期尝试 plain
+    except Exception:
+        return AgentError(...)
+```
+
+**为什么这样改：** 首次请求常因连接建立慢超时，但连接可能已就绪，plain 回退利用已建立的连接，成功概率显著高于完全重试。
+
+**收益：**
+1. 偶发网络抖动不再直接失败走兜底。
+2. 兜底仅在确实无法恢复时触发。
+
+---
+
+#### 4. 报告区域不支持 Markdown 表格和列表渲染
+
+**问题：** 报告内容含 Markdown 表格、加粗、列表等语法，前端直接 textContent 渲染，用户看到的是原始 Markdown 源码。
+
+**修改后：**
+```js
+function renderMd(text){
+  // 解析标题、表格、加粗/斜体/行内代码、有序/无序列表、段落
+  // 表格：检测连续 | 行，渲染为 <table>
+}
+```
+
+**为什么这样改：** 报告是核心产出物，Markdown 源码直接展示严重影响可读性。新增轻量 Markdown 解析器（约 1KB），无需引入外部库。
+
+**收益：**
+1. 报告表格、列表、加粗正确渲染。
+2. 无外部依赖，首屏加载不受影响。
+
+---
+
+### 打磨（P3）
+
+#### 5-6. 答辩要求框显示与历史方案载入
+
+**问题：** 答辩要求输入框在切换页面后内容丢失；历史方案载入时 input.members 等字段未正确恢复。
+
+**修改：** 答辩要求存入 state 持久化；历史方案载入时补全缺失字段（members、version 等），与新建方案结构一致。
+
+**收益：** 答辩要求跨页面保留；历史方案载入后可正常编辑和重算。
+
+---
+## v5.0 —— 八项核心功能修复（2026-07-24）
+
+**定位：** 逐项修复用户报告的 8 个功能缺陷，确保比赛版的基础功能（成员、匹配度、工作量、报告、答辩、甘特图、AI 对话、UI）全部可用且无 bug。
+
+**审查/修改背景：** 用户对比作业版本后发现比赛版多个基础功能存在 bug。本版本对照 `AI实践基石大作业` 参考版本，逐一定位根因并修复。
+
+---
+
+### 关键缺陷（P0）
+
+**1. 成员管理预填了 3 个默认成员（张三/李四/王五），干扰用户输入**
+
+- **问题：** 页面加载即填入 3 个假成员和技能标签，用户需要先删除才能填自己的数据。
+- **修改前：**
+  ```js
+  // index.html 行182
+  addMember({name:'张三',skill_tags:['文案']});
+  addMember({name:'李四',skill_tags:['摄影']});
+  addMember({name:'王五',skill_tags:['秀米排版']});renderSteps();
+  ```
+- **修改后：**
+  ```js
+  renderSteps();
+  ```
+- **为什么这样改：** 默认值是早期开发调试残留，不应出现在面向用户的产品中。成员列表应初始为空，由用户自行填写。
+- **收益：** 页面加载即干净；用户不会被无关数据误导；减少误操作。
+
+**2. 技能匹配度为 0——同义词表覆盖不足，"文学素养"无法关联"写报告"等常见表达**
+
+- **问题：** 评分引擎的 `_SKILL_SYNONYMS` 表缺少大量常用表达（写报告、撰写报告、报告、总结报告、推文、演讲、答辩、摄影、资料整理等），导致用口语化标签时匹配度始终为 0。
+- **修改前：**
+  ```python
+  # scoring.py — 同义词表仅覆盖 ~50 个表达
+  "文学素养": "文案撰写", "报告撰写": "文案撰写",
+  # 缺少："写报告"、"撰写报告"、"报告"、"总结报告"等
+  ```
+- **修改后：**
+  ```python
+  # scoring.py — 新增 30+ 同义词映射
+  "写报告": "文案撰写", "撰写报告": "文案撰写", "报告": "文案撰写",
+  "总结报告": "文案撰写", "调研报告": "文案撰写", "推文": "文案撰写",
+  "演讲": "沟通协调", "答辩": "沟通协调", "摄影": "视频剪辑",
+  "资料收集": "调研分析", "资料整理": "调研分析", ...
+  ```
+- **为什么这样改：** 纯字符相似度无法识别"文学素养"与"写报告"的语义关联，必须靠同义词表将口语化标签归一化到标准技能词。根因是表覆盖面太窄。
+- **收益：** 匹配度从 0% 恢复到合理值（如"文学素养"对"写报告"= 100%）；分工建议更准确。
+
+**3. 工作量不随任务状态变化——标记完成后成员条带不缩短**
+
+- **问题：** `workload_snapshot` 统计负载时只看 `assignee_id` 和工时，完全忽略 `task.status`，已完成任务仍被计入工作量。
+- **修改前：**
+  ```python
+  # project_service.py workload_snapshot
+  for task in plan.plan.tasks:
+      owner = task.assignee_id
+      if not owner or owner not in work:
+          warnings.append(...)
+          continue
+      work[owner] += task.estimated_hours  # 已完成的也计入
+  ```
+- **修改后：**
+  ```python
+  for task in plan.plan.tasks:
+      owner = task.assignee_id
+      if not owner or owner not in work:
+          continue
+      if task.status == "completed":
+          continue  # 已完成的不计入剩余工作量
+      work[owner] += task.estimated_hours
+  ```
+- **为什么这样改：** 工作量面板的语义是"剩余负载"，已完成任务不应再占用产能。根因是统计逻辑遗漏了状态过滤。
+- **收益：** 标记任务完成后成员条带实时缩短；工作量面板与现实进度一致。
+
+**4. 风险提示栏显示"状态切换重算（保留原分工）"——内部调试文本泄露给用户**
+
+- **问题：** `/recompute` 端点把 `qa_matrix.note`（内部状态描述）直接塞进 `report.risk_note`，用户在报告里看到这句无意义的话。
+- **修改前：**
+  ```python
+  # routes.py /recompute
+  report = req.report.model_copy(update={
+      "timeline_section": timeline.note,
+      "qa_matrix_section": "...",
+      "risk_note": qa_matrix.note,  # 内部调试文本泄露
+  })
+  ```
+- **修改后：**
+  ```python
+  report = req.report.model_copy(update={
+      "timeline_section": timeline.note,
+      "qa_matrix_section": "...",
+      "risk_note": req.report.risk_note,  # 保留原有风险提示
+  })
+  ```
+- **为什么这样改：** `qa_matrix.note` 是算法内部标记（如"B3确定性兜底"），不是面向用户的风险提示。状态切换不应改变风险内容。根因是后端把调试信息当作用户可见输出。
+- **收益：** 报告风险栏不再出现无意义文字；状态切换不影响风险提示的稳定性。
+
+**5. 答辩模拟点击"生成"报错无结果——前端对字符串做 .map()**
+
+- **问题：** 后端 `/interview` 返回 `{"questions": "纯文本字符串"}`，前端却执行 `(data.questions||[]).map(...)`，对字符串调用 `.map()` 直接抛 TypeError。
+- **修改前：**
+  ```js
+  // index.html bindInterviewControls
+  var html=(data.questions||[]).map(function(q,i){
+    var t=typeof q==='object'?(q.question||''):String(q);
+    return '<div class="interview-q">...'+esc(t)+'</div>'
+  }).join('')||'<p>暂无问题</p>';
+  ```
+- **修改后：**
+  ```js
+  var raw=typeof data.questions==='string'?data.questions:...;
+  var items=raw.split(/\n+/).map(function(s){return s.trim()})
+    .filter(function(s){return s.length>0});
+  var html=items.length?'<div class="interview-list">'+items.map(function(item){
+    return '<div class="interview-q"><span class="interview-dot"></span><span>'+esc(item)+'</span></div>'
+  }).join('')+'</div>':'<p>暂无问题</p>';
+  ```
+- **为什么这样改：** 后端 `InterviewSimAgent.run()` 返回的是 `chat_text` 的纯文本（非结构化数组），前端必须按文本分行渲染。根因是前后端数据格式约定不一致。
+- **收益：** 答辩模拟正常生成 10-15 道问题；文本按行渲染为清晰的问题列表。
+
+**6. AI 调整建议读取方案信息错误——截断 JSON 导致 LLM 读到残缺数据**
+
+- **问题：** `/chat` 端点用 `model_dump_json()[:18000]` 硬截断 FullPlan JSON，截断点常落在字符串中间，LLM 拿到的是不完整 JSON，导致读取错误、胡乱回答。
+- **修改前：**
+  ```python
+  # routes.py project_chat
+  if req.plan:
+      context = req.plan.model_dump_json()[:18000]  # 硬截断
+  ```
+- **修改后：**
+  ```python
+  context = _build_chat_context(req)  # 结构化摘要
+  # 构建可读摘要：项目名、背景、成员技能、任务列表(含状态)、
+  # 时间线关键路径、分工匹配度、风险提示——无截断
+  ```
+- **为什么这样改：** JSON 截断破坏结构完整性，LLM 无法可靠解析。改为结构化摘要后信息密度更高且无语法断裂。
+- **收益：** AI 能准确读取方案信息（人数、工时、分工）；回答基于完整数据而非残缺片段。
+
+### 健壮性提升（P1）
+
+**7. 成员管理 + 答辩模拟 UI 完全无样式——CSS 类缺失**
+
+- **问题：** `member-edit-row`、`me-name`、`interview-q`、`legend-critical` 等类在 style.css 中完全不存在，面板以浏览器默认样式渲染。
+- **修改前：** style.css 中无 `.member-edit-row`、`.interview-q`、`.legend-*` 等规则。
+- **修改后：** 新增完整样式，复用设计令牌（`--primary`、`--line`、`--radius`），与配置面板 `.member-row` 风格对齐。
+- **为什么这样改：** 面向比赛的产品不能有未样式化的裸元素。根因是前端新增类名但未同步补充 CSS。
+- **收益：** 成员管理面板与答辩面板视觉统一；图例色块正确显示。
+
+### 打磨（P3）
+
+**8. CSS 版本号更新（4.9.0 → 5.0.0）**
+
+缓存失效。
+
+### 队友改动说明
+
+本版本在 `origin/main`（v4.9，含清小搭协议接入）基础上修复。此前已删除队友遗留的一次性补丁脚本 `fix_html.py`（提交 d3d9af7），该脚本含乱码字符串且硬编码行号，有被误跑覆盖 index.html 的风险。
+
+---
 ## v4.9 —— 比赛 Demo 加固与清小搭标准协议接入（2026-07-23）
 
 **定位：** 在保留完整网页演示链路的同时，提供可由清小搭直接调用的 OpenAI 兼容服务入口。
@@ -902,7 +1440,6 @@ add("汇报演练与问题准备", "汇报", 3, ...)
 本版本先合并队友 `origin/main` 的 9 个提交，保留其 CI、API 测试、全局异常处理、工时知识库及界面增强；随后重新应用本分支的 Demo 案例、技能别名、建议参与人数约束与演示验收修复。合并提交为 `b424f0b`，全量测试通过后才进入清小搭适配开发。
 
 ---
-
 ## v4.8.1 —— 代码质量加固 + CI + API 测试覆盖（2026-07-22）
 
 **定位：** 在 v4.8 基础上补充 CI 配置、API 测试覆盖、全局异常处理、参数调优和目录自动初始化。
@@ -942,7 +1479,6 @@ add("汇报演练与问题准备", "汇报", 3, ...)
 - 新增 `MEMORY_DIR.mkdir(parents=True, exist_ok=True)`，应用启动时自动创建 `memory/` 目录，不再依赖 `/api/save` 端点来创建。
 
 ---
-
 ## v4.8 —— 统一合并：v4.7 算法修复 + 知识库增强工时估算（2026-07-22）
 
 **定位：** v4.7.2 在 v4.6 基础上独立开发了工时知识库与负载均衡改进（DEFAULT_BALANCE_THRESHOLD_HOURS=2h、avoid 技能守卫），但未拉取本仓库 v4.7 的三大算法修复后 force push。本版本将两条独立发展线合并到同一代码基础，保留双方全部功能。
@@ -1001,8 +1537,66 @@ v4.7.2 在本版本基础上贡献了完整的工时估算系统，全部保留�
 - 全量测试：92 passed（合并前本地 80 + v4.7.2 新增 12）。
 
 ---
+## v4.7.2 —— 知识库增强的合理工时估算（2026-07-21）
 
+**定位：** 让任务工时由实际工作范围和相似案例决定，不再为了贴近团队总可用时间而把短任务拉长。
 
+**审查/修改背景：** 用户反馈自动拆解中的部分短任务仍显示过长，并要求默认分工尽量均匀、成员负载差控制在 2 小时内。第一阶段只能修正明显的关键词固定值，尚未区分字数上限、规定活动时长和负责人制作工时，也没有利用用户后续手动修正。
+
+---
+
+#### 1. 团队可用时间反向放大任务工时
+
+1. **问题：** 通用兜底把团队总可用时间换算成 `scale`，相同工作在成员可用 100h 时会比可用 10h 时自动显示更长。
+2. **修改前：** `hours = round(hours * scale)`，其中 `scale = total_capacity / 60.0`。
+3. **修改后：** 删除产能缩放；新增 `duration_examples.json` 与 `calibrate_plan_estimates()`，任务按相似案例、工作范围和成果规模估算。
+4. **为什么这样改：** 可用时间回答“能否做完”，任务范围回答“需要多久”，二者因果方向不同。把产能当估时目标会产生“时间越多，任务越慢”的反常结果。
+5. **收益：** ① 同一任务不随团队空闲时间膨胀；② AI 与快速草案使用同一估时标准；③ 短任务可稳定回到 0.5～3h 的常见范围。
+
+#### 2. 字数上限和规定活动时长被误当成实际制作工时
+
+1. **问题：** “报告不超过10000字”被当作默认写满10000字；“讲座共2学时”又与负责人准备、组织工作的投入混成一个字段。
+2. **修改前：** 正则提取到数字后直接按最大字数放大，任意 `X 学时` 都可能覆盖 `estimated_hours`。
+3. **修改后：** `_scope_multiplier()` 识别“不超过/至多/上限”等语气，按常见实际篇幅估算；`_explicit_time_info()` 将明确制作人时与 `required_duration_hours` 分开保存。
+4. **为什么这样改：** 上限是约束而不是目标值；活动持续时间描述“要在场多久”，制作人时描述“负责人要投入多少工作”，只有拆开后才能准确排期和解释。
+5. **收益：** ① 10000字上限报告不再默认写满；② 讲座、研讨会和现场活动的规定时长可追溯；③ 页面能解释长时长来自课程要求还是系统预测。
+
+### 健壮性提升（P1）
+
+#### 3. 默认确认分工没有执行负载拉平
+
+1. **问题：** `assign_with_balance()` 为保护技能匹配跳过了 `_balance_workload()`，导致确认草案后的默认分工可能明显失衡；另一条 LLM 后处理路径仍使用 1h 阈值，两个入口标准不一致。
+2. **修改前：** 默认入口仅 `_work_from(...)` 统计负载；LLM 后处理调用 `_balance_workload(..., threshold=1.0)`。
+3. **修改后：** 两个入口统一使用 `DEFAULT_BALANCE_THRESHOLD_HOURS = 2.0`；再平衡同时检查技能下降幅度和成员负向偏好，无法达到目标时由 `_split_suggestion()` 指出应拆分的任务。
+4. **为什么这样改：** 完全不平衡违背默认分工直觉，强行追求1h又容易牺牲技能匹配。2h 是更合理的软目标，应在专业匹配和明确回避约束内尽量实现。
+5. **收益：** ① 可均摊场景默认负载差不超过2h；② “不想做PPT”等偏好不会因拉平被破坏；③ 不可均摊时给出明确拆分建议。
+
+#### 4. 用户修正工时不会反哺后续估算
+
+1. **问题：** 用户把“秀米排版 2h”改为“1h”后，下一次相似任务仍重复给出原建议，系统无法从真实使用中学习。
+2. **修改前：** `mutate_draft()` 只保存新的 `estimated_hours`，原值与修正值随请求结束丢失。
+3. **修改后：** `record_duration_feedback()` 在本地 JSONL 中记录匿名化任务签名、案例类型、建议值和修正值；`_feedback_multiplier()` 仅在至少3条相似修正后采用中位数校准，并限制倍率在0.5～1.5之间。
+4. **为什么这样改：** 单次修改可能是误操作，不能立即污染知识库；三条相似证据加中位数能过滤偶然值，同时让系统逐步适应用户团队的真实工作速度。
+5. **收益：** ① 相似任务会随持续使用变准；② 不保存完整任务说明；③ 少量异常修改不会造成估时漂移。
+
+### 体验优化（P2）
+
+#### 5. 页面只有单一工时数字，用户无法判断来源
+
+1. **问题：** 任务卡只显示 `estimated_hours`，无法区分知识库建议、人工确认和课程规定活动时长。
+2. **修改前：** 页面只渲染“预计工时”输入框。
+3. **修改后：** 任务卡增加参考范围、可信度、估算依据悬浮提示和规定活动时长；用户改动后标记“用户已确认”。
+4. **为什么这样改：** 估时本质上存在不确定性。展示范围和来源比伪精确的单一数字更利于用户发现异常并修正。
+5. **收益：** ① 用户能快速定位低可信度任务；② 长时长有可读解释；③ 保留原有直接编辑能力。
+
+**同步修改：** Planner Prompt 明确“先估任务、后看产能”；新增会议组织案例、阶段二回归测试和 README 说明。
+
+### 验证
+
+- 前端脚本语法检查通过，未发现 `\\u0022` 或异常字符串拼接。
+- 全量自动化测试：92 项通过，1 条第三方测试客户端弃用警告与本次修改无关。
+
+---
 ## v4.7.1 —— 合入 v3.5–v3.8 算法修复：负载均衡全局重排 + 状态切换分工保留 + 健壮性加固（2026-07-20）
 
 **定位：** v4.x 系列在 v3.4 基础上分叉发展，缺少 v3.5–v3.8 的核心算法修复。本版本将这些修复移植到 v4.6 代码基础上，并保留v4.6 的全部 新功能（文件上传、任务拆解工作流、反思 agent 等）。
@@ -1085,68 +1679,6 @@ v4.7.2 在本版本基础上贡献了完整的工时估算系统，全部保留�
 本版本在其基础上的增强：将 v3.5–v3.8 独立发展线的算法修复移植过来，与v4.6 的多因子打分融合——`_balance_workload` 增加全局重排 + 回避门槛，`enhance` 改为条件式均衡，`recompute_preserve` 保留原分工，`_fallback_plan` 自适应阶段数。
 
 ---
-
-## v4.7.2 —— 知识库增强的合理工时估算（2026-07-21）
-
-**定位：** 让任务工时由实际工作范围和相似案例决定，不再为了贴近团队总可用时间而把短任务拉长。
-
-**审查/修改背景：** 用户反馈自动拆解中的部分短任务仍显示过长，并要求默认分工尽量均匀、成员负载差控制在 2 小时内。第一阶段只能修正明显的关键词固定值，尚未区分字数上限、规定活动时长和负责人制作工时，也没有利用用户后续手动修正。
-
----
-
-#### 1. 团队可用时间反向放大任务工时
-
-1. **问题：** 通用兜底把团队总可用时间换算成 `scale`，相同工作在成员可用 100h 时会比可用 10h 时自动显示更长。
-2. **修改前：** `hours = round(hours * scale)`，其中 `scale = total_capacity / 60.0`。
-3. **修改后：** 删除产能缩放；新增 `duration_examples.json` 与 `calibrate_plan_estimates()`，任务按相似案例、工作范围和成果规模估算。
-4. **为什么这样改：** 可用时间回答“能否做完”，任务范围回答“需要多久”，二者因果方向不同。把产能当估时目标会产生“时间越多，任务越慢”的反常结果。
-5. **收益：** ① 同一任务不随团队空闲时间膨胀；② AI 与快速草案使用同一估时标准；③ 短任务可稳定回到 0.5～3h 的常见范围。
-
-#### 2. 字数上限和规定活动时长被误当成实际制作工时
-
-1. **问题：** “报告不超过10000字”被当作默认写满10000字；“讲座共2学时”又与负责人准备、组织工作的投入混成一个字段。
-2. **修改前：** 正则提取到数字后直接按最大字数放大，任意 `X 学时` 都可能覆盖 `estimated_hours`。
-3. **修改后：** `_scope_multiplier()` 识别“不超过/至多/上限”等语气，按常见实际篇幅估算；`_explicit_time_info()` 将明确制作人时与 `required_duration_hours` 分开保存。
-4. **为什么这样改：** 上限是约束而不是目标值；活动持续时间描述“要在场多久”，制作人时描述“负责人要投入多少工作”，只有拆开后才能准确排期和解释。
-5. **收益：** ① 10000字上限报告不再默认写满；② 讲座、研讨会和现场活动的规定时长可追溯；③ 页面能解释长时长来自课程要求还是系统预测。
-
-### 健壮性提升（P1）
-
-#### 3. 默认确认分工没有执行负载拉平
-
-1. **问题：** `assign_with_balance()` 为保护技能匹配跳过了 `_balance_workload()`，导致确认草案后的默认分工可能明显失衡；另一条 LLM 后处理路径仍使用 1h 阈值，两个入口标准不一致。
-2. **修改前：** 默认入口仅 `_work_from(...)` 统计负载；LLM 后处理调用 `_balance_workload(..., threshold=1.0)`。
-3. **修改后：** 两个入口统一使用 `DEFAULT_BALANCE_THRESHOLD_HOURS = 2.0`；再平衡同时检查技能下降幅度和成员负向偏好，无法达到目标时由 `_split_suggestion()` 指出应拆分的任务。
-4. **为什么这样改：** 完全不平衡违背默认分工直觉，强行追求1h又容易牺牲技能匹配。2h 是更合理的软目标，应在专业匹配和明确回避约束内尽量实现。
-5. **收益：** ① 可均摊场景默认负载差不超过2h；② “不想做PPT”等偏好不会因拉平被破坏；③ 不可均摊时给出明确拆分建议。
-
-#### 4. 用户修正工时不会反哺后续估算
-
-1. **问题：** 用户把“秀米排版 2h”改为“1h”后，下一次相似任务仍重复给出原建议，系统无法从真实使用中学习。
-2. **修改前：** `mutate_draft()` 只保存新的 `estimated_hours`，原值与修正值随请求结束丢失。
-3. **修改后：** `record_duration_feedback()` 在本地 JSONL 中记录匿名化任务签名、案例类型、建议值和修正值；`_feedback_multiplier()` 仅在至少3条相似修正后采用中位数校准，并限制倍率在0.5～1.5之间。
-4. **为什么这样改：** 单次修改可能是误操作，不能立即污染知识库；三条相似证据加中位数能过滤偶然值，同时让系统逐步适应用户团队的真实工作速度。
-5. **收益：** ① 相似任务会随持续使用变准；② 不保存完整任务说明；③ 少量异常修改不会造成估时漂移。
-
-### 体验优化（P2）
-
-#### 5. 页面只有单一工时数字，用户无法判断来源
-
-1. **问题：** 任务卡只显示 `estimated_hours`，无法区分知识库建议、人工确认和课程规定活动时长。
-2. **修改前：** 页面只渲染“预计工时”输入框。
-3. **修改后：** 任务卡增加参考范围、可信度、估算依据悬浮提示和规定活动时长；用户改动后标记“用户已确认”。
-4. **为什么这样改：** 估时本质上存在不确定性。展示范围和来源比伪精确的单一数字更利于用户发现异常并修正。
-5. **收益：** ① 用户能快速定位低可信度任务；② 长时长有可读解释；③ 保留原有直接编辑能力。
-
-**同步修改：** Planner Prompt 明确“先估任务、后看产能”；新增会议组织案例、阶段二回归测试和 README 说明。
-
-### 验证
-
-- 前端脚本语法检查通过，未发现 `\\u0022` 或异常字符串拼接。
-- 全量自动化测试：92 项通过，1 条第三方测试客户端弃用警告与本次修改无关。
-
----
-
 ## v4.6 —— 任务与附属限制分离、AI JSON 本地容错（2026-07-19）
 
 **定位：** 禁止把“命令行即可、不要求图形界面”等实现限制生成新任务，并让轻微不规范的 AI JSON 无需再次请求即可本地修复。
@@ -1245,7 +1777,6 @@ v4.7.2 在本版本基础上贡献了完整的工时估算系统，全部保留�
 - `tests/test_review_fixes.py`：新增 AI 近似 JSON 本地修复、纯限制任务合并测试。
 
 ---
-
 ## v4.5 —— 长课程手册的成果识别与递归拆解（2026-07-19）
 
 **定位：** 从长篇课程手册中先识别“学生真正要做什么、交什么”，再把推送、Vlog、报告等复合成果继续拆成可分工步骤。
@@ -1366,7 +1897,83 @@ v4.7.2 在本版本基础上贡献了完整的工时估算系统，全部保留�
 - `tests/test_workflow_v4.py`：新增教学说明过滤、思政手册任务蓝图、推送/Vlog 细分、个人报告逐人展开和 AI 失败解释测试。
 
 ---
+## v4.4 —— AI 调整建议按钮可拖拽 + 生成按钮反馈修复（2026-07-19）
 
+**定位：** 修复两个实际体验问题：AI 调整建议按钮无法拖动且拖拽后误触抽屉弹出；AI 生成时 spinner 跑到了不可见的按钮上。
+
+**审查/修改背景：** v4.4 初版（19日13:38）实现了基础拖拽逻辑，但有两个隐藏问题：`onclick` 绑定方式导致拖拽松手后 click 仍触发弹出抽屉；`generateDraft(true)` 调用按钮参数指向 draft view 中的 `redraftBtn`（不可见），用户看不到加载反馈。本版是 v4.4 的完整修复版。
+
+---
+
+### 关键缺陷（P0）
+
+#### 1. 拖拽后 click 事件仍触发抽屉弹出
+
+1. **问题：** `onclick=openAssistant` 绑定 + `mousedown` 拖拽是两条独立事件路径。拖拽松手后浏览器仍会触发 click 事件，抽屉弹出，用户无法靠拖拽移开按钮。
+2. **修改前：**
+   ```js
+   el('assistantBtn').onclick=openAssistant;
+   // onEnd 中试图 btn.click=function(){} 覆盖 .click() 方法（无效）
+   ```
+3. **修改后：**
+   ```js
+   // 移除 onclick，在 IIFE 中用 addEventListener 统一管理点击
+   btn.addEventListener('click',function(e){
+       if(dragging){e.stopPropagation();e.preventDefault();dragging=false}
+       else{openAssistant()}
+   });
+   ```
+4. **为什么这样改：** `onclick` 属性无法被其他事件处理器条件拦截；`addEventListener('click')` 配合 `dragging` 状态标志可精确控制：拖拽时 `preventDefault`，非拖拽时正常调用 `openAssistant`。
+5. **收益：** 拖拽松手不再弹出抽屉；点击行为不受影响。
+
+#### 2. 表单提交时加载 spinner 跑到了不可见的 `redraftBtn` 上
+
+1. **问题：** `generateDraft(true)` 内 `var button=useAi===true?el('redraftBtn'):el('generateBtn')`，表单提交走 `true` 分支找 `redraftBtn`，该按钮在 draft view 中（不可见），用户看到的 `generateBtn` 无任何反馈。
+2. **修改前：**
+   ```js
+   el('projectForm').onsubmit=function(event){event.preventDefault();generateDraft(true)};
+   async function generateDraft(useAi){
+       var button=useAi===true?el('redraftBtn'):el('generateBtn');
+       // 在不可见的 redraftBtn 上显示 spinner...
+   }
+   ```
+3. **修改后：**
+   ```js
+   el('projectForm').onsubmit=function(event){event.preventDefault();generateDraft(true,el('generateBtn'))};
+   async function generateDraft(useAi,btn){
+       var button=btn||(useAi===true?el('redraftBtn'):el('generateBtn'));
+       // 在用户可见的 generateBtn 上显示 spinner
+   }
+   ```
+4. **为什么这样改：** 表单提交是用户视角的"首次生成"，反馈必须出现在用户点击的那个按钮上；`redraftBtn` 调用不传 btn，函数自动退回到 `redraftBtn` 自身——单一接口兼容两处调用。
+5. **收益：** 首次生成时 `generateBtn` 正确显示 "AI 正在生成…" spinner；"重新拆解"按钮 spinner 行为不变。
+## v4.3 —— 修复：首次提交不走"快速模式"，默认调 AI（2026-07-19）
+
+**定位：** 覆盖 v4.2 的"快速模式优先"策略，让首次表单提交直接走 LLM。
+
+**审查/修改背景：** v4.2 设计目标是首屏秒出——前端的 `generateDraft(false)` 配合后端的 `_fallback_plan`，确保第一次点击"生成草案"立即出结果，AI 增强留给"重新拆解"按钮。但实际体验上，首次生成"快速草案"后用户还要手动点"重新拆解"才能看到 LLM 效果，流程多了一步；且"快速模式"产物是模板化的瀑布兜底，无法体现 LLM 的理解能力。
+
+---
+
+### 关键缺陷（P0）
+
+#### 1. 前端硬编码 `false` 导致首次生成不走 AI
+
+1. **问题：** `index.html` 表单提交事件绑定了 `generateDraft(false)`，传参匹配了后端 v4.2 的 `use_ai=False` 调用，但用户首次生成时期望直接看到 AI 拆解结果，而不是先看模板再看 AI。
+2. **修改前：**
+   ```js
+   // app/web/templates/index.html:159
+   el('projectForm').onsubmit=function(event){event.preventDefault();generateDraft(false)};
+   ```
+3. **修改后：**
+   ```js
+   // app/web/templates/index.html:159
+   el('projectForm').onsubmit=function(event){event.preventDefault();generateDraft(true)};
+   ```
+4. **为什么这样改：** v4.2 的"快速模式优先"策略在用户体验上多了一步冗余操作——用户每次都要点两次（生成 + 重新拆解）才能看到 AI 效果。更合理的策略是默认走 AI，若 AI 超时后端自动兜底（`Coordinator` 内已内置超时降级），不需要前端手动挡掉 LLM。
+5. **收益：** 首次生成即看到 LLM 拆解效果；AI 超时时后端自带兜底，前端的 `use_ai=true` 不会导致白屏；"重新拆解"仍保留供用户迭代。
+
+---
 ## v4.2 —— 文件驱动的具体任务拆解与自由编辑（2026-07-19）
 
 **定位：** 让任务书中的具体要求真正决定任务名称和验收标准，同时恢复任务卡内的文字拖选编辑，且不增加 LLM 调用次数。
@@ -1466,8 +2073,248 @@ v4.7.2 在本版本基础上贡献了完整的工时估算系统，全部保留�
 - `tests/test_workflow_v4.py`：新增文件要求个性化任务、禁用宽泛名称、手柄限定拖拽和两种模式均分析文件的回归测试。
 
 ---
+## v4.1 —— 恢复工作台视觉与共享业务服务（2026-07-18）
 
+**定位：** 恢复成熟的左右工作台布局，并让网页与未来清小搭适配层共享同一套项目业务逻辑。
 
+---
+
+### 关键缺陷（P0）
+
+#### 1. 核心任务修改只存在于页面脚本
+
+1. **问题：** 拆分、合并、排序和负责人调整由页面直接改 JSON，未来自然语言入口无法复用。
+2. **修改前：**
+   ```javascript
+   state.draft.tasks.splice(index, 1)
+   task.assignee_id = owner
+   ```
+3. **修改后：**
+   ```python
+   mutate_draft(plan, operations)
+   apply_manual_assignment(request)
+   ```
+4. **为什么这样改：** 界面行为不是业务规则的可靠载体；将规则下沉到无 FastAPI 依赖的服务层后，Web、CLI 和未来 OpenAI 兼容适配层均可调用。
+5. **收益：** 任务操作统一校验；自然语言入口可复用；前后端规则不再漂移。
+
+### 健壮性提升（P1）
+
+#### 2. 工作量统计由页面重复实现
+
+1. **问题：** 页面自行统计工时和失衡提示，后续其他入口容易产生不同结果。
+2. **修改前：**
+   ```javascript
+   work[owner] += task.estimated_hours
+   ```
+3. **修改后：**
+   ```python
+   snapshot = workload_snapshot(full_plan)
+   ```
+4. **为什么这样改：** 工时占比、阶段负载和提示属于领域逻辑，应由服务端统一计算。
+5. **收益：** 拖拽后统计可信；网页和未来清小搭回复一致；规则可独立测试。
+
+### 体验优化（P2）
+
+#### 3. 多个全屏步骤破坏原工作台结构
+
+1. **问题：** 新页面丢失原版左侧配置、右侧结果区的成熟操作习惯，视觉也过于简陋。
+2. **修改前：**
+   ```html
+   <section id="page-info" class="page">...</section>
+   <section id="page-draft" class="page hidden">...</section>
+   ```
+3. **修改后：**
+   ```html
+   <main class="workbench">
+     <aside class="config-panel">...</aside>
+     <section class="workspace-panel">...</section>
+   </main>
+   ```
+4. **为什么这样改：** 项目配置需要持续可见，任务拆解、分工和结果应在同一工作区渐进呈现。
+5. **收益：** 恢复原版视觉语言；功能位置稳定；桌面和移动端均可使用。
+
+#### 4. 外部 CDN 影响打开速度
+
+1. **问题：** 运行时 Tailwind CDN 在网络不可达时造成页面白屏或样式延迟。
+2. **修改前：**
+   ```html
+   <script src="https://cdn.tailwindcss.com"></script>
+   ```
+3. **修改后：**
+   ```html
+   <link rel="stylesheet" href="/static/style.css">
+   ```
+4. **为什么这样改：** 核心工作台不应依赖外部网络资源。
+5. **收益：** 页面离线可用；本地首屏稳定；实际首页返回 200。
+
+#### 5. 新 HTML 与旧 CSS 缓存导致历史弹窗自动显示
+
+1. **问题：** 浏览器保留旧样式时，新页面的 `hidden` 类失效，历史方案遮罩会在首页自动出现。
+2. **修改前：**
+   ```html
+   <link rel="stylesheet" href="/static/style.css">
+   ```
+3. **修改后：**
+   ```html
+   <style>.hidden{display:none!important}</style>
+   <link rel="stylesheet" href="/static/style.css?v=4.1.1">
+   ```
+4. **为什么这样改：** HTML 与 CSS 的缓存版本不同步；关键隐藏规则必须随 HTML 一起生效，并通过资源版本号淘汰旧缓存。
+5. **收益：** 首页不再误显示历史弹窗；样式升级立即生效；后续缓存切换更稳定。
+
+### 性能优化（P1）
+
+#### 6. 文件分析和任务拆解串行调用两次大模型
+
+1. **问题：** 上传文件后先等待要求分析模型，再等待 Planner，超时和重试可能累计超过一分钟。
+2. **修改前：**
+   ```python
+   analysis = LLMClient().chat_structured(...)
+   plan = generate_draft(input)
+   ```
+3. **修改后：**
+   ```python
+   analysis = analyze_locally(extracted_text)
+   plan = generate_draft(input)  # 全流程唯一一次 LLM
+   ```
+4. **为什么这样改：** 文件阶段主要是事实提取和文本压缩，可用确定性规则快速完成；创造性的专业拆解才需要模型。
+5. **收益：** 普通文件分析通常在数秒内完成；模型默认最长等待 25 秒；超时后立即进入确定性兜底。
+## v4.0 —— 任务拆解与分工双确认（2026-07-18）
+
+**定位：** 将一次性生成计划改为“先确认拆解、再确认分工”的可编辑工作流。
+
+---
+
+### 关键缺陷（P0）
+
+#### 1. 拆解后立即分工
+
+1. **问题：** 用户无法在人员分配前修正任务粒度、工时和日期。
+2. **修改前：**
+   ```python
+   plan = self._step_planner(inp)
+   qa_matrix = self._step_matcher(plan, inp.members)
+   ```
+3. **修改后：**
+   ```python
+   plan = Coordinator().draft(inp)
+   # 用户确认后
+   full_plan = Coordinator().confirm(inp, plan)
+   ```
+4. **为什么这样改：** 根因是协调器只暴露一次性主链路；拆成两个明确接口后，草案成为可持久化、可校验的中间状态。
+5. **收益：** 用户可先改任务；确认前无负责人；旧 `/api/run` 仍兼容。
+
+#### 2. 任务模型缺少阶段和日期
+
+1. **问题：** 只有工时无法表达实践前、中、后的执行窗口。
+2. **修改前：**
+   ```python
+   estimated_hours: float
+   required_skills: list[str]
+   ```
+3. **修改后：**
+   ```python
+   execution_stage: str = "实践中"
+   start_date: Optional[date] = None
+   end_date: Optional[date] = None
+   ```
+4. **为什么这样改：** 时间语义必须保存在任务本身，才能被编辑、分配和重新载入共同复用。
+5. **收益：** 支持阶段与具体日期并存；后端拒绝结束早于开始；旧数据由默认值兼容。
+
+### 健壮性提升（P1）
+
+#### 3. 文件要求分析
+
+1. **问题：** 项目要求只能手工复制，长文件无法安全提炼。
+2. **修改前：**
+   ```python
+   additional_requirements: str = ""
+   ```
+3. **修改后：**
+   ```python
+   text = extract_text(upload.filename, raw)
+   result = LLMClient().chat_structured(..., RequirementAnalysis, 0.1)
+   ```
+4. **为什么这样改：** 先在后端按格式提取、清理和截断，再做结构化分析，可避免直接把二进制或完整敏感原文写入日志。
+5. **收益：** 支持六类常用格式；15MB 校验；解析失败返回明确原因。
+
+#### 4. 自动分工只看任务数量
+
+1. **问题：** 强制拉平任务会牺牲摄影、文案、排版等专业匹配。
+2. **修改前：**
+   ```python
+   scored.sort(key=lambda x: (-x[1], work[x[0]]))
+   ```
+3. **修改后：**
+   ```python
+   score = 0.55 * skill - 0.20 * total_load - 0.15 * stage_load + 0.10 * capacity
+   ```
+4. **为什么这样改：** 把技能、总工时、同阶段负载和剩余产能集中为可解释评分，避免纯计数或事后强行搬运。
+5. **收益：** 专业任务更匹配；同阶段拥堵降低；分配理由可展示。
+
+### 体验优化（P2）
+
+前端改为六步向导，新增任务拆分/合并/排序、成员看板拖拽、实时负载提示和项目对话框。README、依赖和验收测试同步更新。
+
+#### 5. 文件分析按钮无响应
+
+1. **问题：** 浏览器全局 `name` 与项目名称输入框冲突，提交表单时可能无法正确读取项目名称。
+2. **修改前：**
+   ```javascript
+   course: {name: name.value}
+   addMember.onclick = function(){ addMember() }
+   ```
+3. **修改后：**
+   ```javascript
+   course: {name: projectNameEl.value}
+   document.getElementById('addMemberBtn').onclick = function(){ addMember() }
+   ```
+4. **为什么这样改：** `window.name` 和同名函数属于浏览器已有全局对象，依赖元素 ID 自动成为全局变量会产生名称遮蔽；改为显式获取元素可消除运行环境差异。
+5. **收益：** 文件分析步骤可正常进入；添加成员按钮恢复；失败时页面显示明确提示。
+
+#### 6. 文件解析期间缺少反馈
+
+1. **问题：** 上传后需等待文本提取和模型分析，页面停留在原处会被误认为按钮失效。
+2. **修改前：**
+   ```javascript
+   if (state.files.length) await analyzeFiles()
+   ```
+3. **修改后：**
+   ```javascript
+   show('analysis', 1)
+   analysis.value = '正在上传并解析文件，请稍候…'
+   await analyzeFiles()
+   ```
+4. **为什么这样改：** 文件解析是异步操作，必须先呈现明确的阶段切换和加载状态，并在异常时保留可编辑的错误信息。
+5. **收益：** 点击立即有响应；重复提交被禁用；分析失败后用户仍可手动填写要求继续操作。
+
+#### 7. 手动调整、对话和等待时间优化
+
+1. **问题：** 步骤条只是静态展示；聊天无等待状态；确认分工会再次串行调用多个模型。
+2. **修改前：**
+   ```javascript
+   steps.innerHTML = '<div>手动调整</div>'
+   ```
+3. **修改后：**
+   ```javascript
+   steps.innerHTML = '<button data-step="3">手动调整</button>'
+   ```
+4. **为什么这样改：** 导航必须绑定到已有草案/方案状态；技能匹配与负载均衡已有确定性算法，无需在确认阶段重复等待模型。
+5. **收益：** 手动调整可点击返回；文件分析在后台完成；聊天最长等待 20 秒；模型默认超时由 120 秒降至可配置的 35 秒；确认分工由分钟级降至秒级。
+
+#### 8. 本地首页被外部样式 CDN 阻塞
+
+1. **问题：** Tailwind CDN 在网络较慢或不可达时同步阻塞 HTML 解析，本地页面也会长时间白屏。
+2. **修改前：**
+   ```html
+   <script src="https://cdn.tailwindcss.com"></script>
+   ```
+3. **修改后：**
+   ```html
+   <script async src="https://cdn.tailwindcss.com"></script>
+   ```
+4. **为什么这样改：** 外部装饰性资源不应阻塞本地应用首屏；关键布局样式改由本地 `style.css` 提供。
+5. **收益：** 断网也能立即打开；CDN 失败不影响操作；页面保留本地响应式布局。
 ## v3.4 —— 报告自动重生 + 报告表格渲染修复 + LLM 空鉴权快速兜底（2026-07-17）
 
 **定位：** 修复两个体验缺陷：编辑计划/成员变动后报告不会自动更新、报告页 Markdown 表格渲染错乱；顺带修一个隐藏的健壮性隐患（空 API key 挂死网络）。
@@ -1540,8 +2387,6 @@ v4.7.2 在本版本基础上贡献了完整的工时估算系统，全部保留�
 
 - 报告表格：2 表头格 `<th>` + 4 数据格 `<td>` + 0 错乱 `<thead>`（修复前表头数据混用）。
 - 全量测试：`pytest tests/ -q` → 52 passed（含 conftest stub 后的编辑/重算/成员测试）。
-
-
 ## v3.3 —— 完成不重排 + 负向技能标签识别（2026-07-17）
 
 **定位：** 修复两个用户实测发现的行为缺陷：完成任务触发全员重排、负向技能标签被当成正向匹配。
@@ -1615,8 +2460,6 @@ v4.7.2 在本版本基础上贡献了完整的工时估算系统，全部保留�
 - 负向标签：`skill_score(小明[前端,不太想做PPT], [PPT])` 由 0.85 降为 0.0；PPT 任务改派给有 PPT 标签者。
 - 完成重排：小明完成 T1 后，T2/T3 主讲保持原分工不变（小红/小刚），小明未被塞入后续任务。
 - 全量测试：`pytest tests/ -q` → 52 passed；`app/` 全模块编译通过。
-
-
 ## v3.2 —— 用户验收六连击修复（2026-07-17）
 
 **定位：** 上一版 v3.1 交付后用户实测发现的 6 个回归/残留问题，逐条定位根因并修复。
@@ -1716,9 +2559,6 @@ v4.7.2 在本版本基础上贡献了完整的工时估算系统，全部保留�
 - 甘特图末位任务条 rightEdge 数值验证：Case A/B/C 末位均 = 100.00。
 - Markdown 解析验证：标题/列表/粗体/斜体/表格均正确切分，无裸符号残留。
 - 负载均衡验证：可均摊场景 gap 严格 ≤1h；不可均摊场景 note 含拆分建议。
-
-
-
 ## v3.1 —— workbuddy 审查复核后的选择性修复（2026-07-17）
 
 **定位：** 对提交的《代码全面审查报告》逐条核对代码后，修复其中确实成立且值得动手的 12 项；明确驳回/暂不改若干项并给出理由。
@@ -1822,7 +2662,6 @@ v4.7.2 在本版本基础上贡献了完整的工时估算系统，全部保留�
 - **未改（设计取舍，非 bug）：** P1-1（负载折算=1.6×工时是“加权参与度”而非真实人时，与 `available_hours` 比较偏保守，且被 P1-5 口径放大抵消）、P1-3（重算是否回退 LLM 是产品取舍，改为提示成本更低）、P1-5（`available_hours=daily×天数` 符合 schema 定义，非 bug）。
 - **驳回：** P2-4（PLANNER 示例给的是 30h/8h 两档、默认 20h 居中，不存在漂移，属断章取义）。
 - **审查报告笔误（无需改代码）：** P2-9 实为 3 个 LLM Agent 串行（Timeline 纯算法），非 4 个。
-
 ## v3.0 —— 七轮审查全量修复：健壮性/一致性/测试/死代码清理（2026-07-16）
 
 **定位：** 经过多轮代码审查，针对发现的10+项真实问题进行系统性修复。覆盖字符编码、依赖重映射、PDF导出、负载计算、时间线off-by-one、前端ID碰撞、提示词一致性等。
@@ -1883,8 +2722,6 @@ v4.7.2 在本版本基础上贡献了完整的工时估算系统，全部保留�
 - CPM 算法、角色匹配、validate_plan 去重、half-day 排期、PDF/DOCX/MD 导出均确认可用
 
 ---
-
-
 ## v2.0 —— 深度审查修复：核心链路 / 健壮性 / 体验 / 文档（2026-07-16）
 
 **定位：** 针对四轮全量代码审查（Codex × 2 + workbuddy × 2）发现的 33 项问题进行系统性修复。覆盖前端与后端、提示词、算法与安全性、导出与报告，使系统趋近生产可用。
@@ -2464,7 +3301,6 @@ for t in plan.tasks:
 - 所有其他改动保持其原始提示词结构不变
 
 ---
-
 ## v1.2 - 进度追踪 + 突发情况处理 + 代码质量（2026-07-15）
 
 **定位：** 从「生成计划」升级为「生成 + 追踪执行」，系统有了完整的生命周期。
@@ -2530,7 +3366,6 @@ for t in plan.tasks:
 - 测试总数从 39 提升到 **43 个**
 
 ---
-
 ## v1.1 - 代码质量加固（2026-07-15）
 
 **定位：** 在 v1.0 功能完整的基础上，修复 代码审查 审查报告指出的 6 个"暗雷"。
@@ -2771,7 +3606,6 @@ def _sanitize(qa, plan, members):
 - **依赖锁定**：requirements.txt 加版本上限，新增 pytest-asyncio
 
 ---
-
 ## v1.0 - 功能完整正式版（2026-07-14）
 
 **定位：** 经历骨架 -> 算法 -> 打磨后，整合为第一个正式版本。
@@ -2832,7 +3666,6 @@ durations[t.id] = max(1, round(t.estimated_hours / _task_daily_capacity(t.id)))
 - **Bug 修复**：routes.py 未传 user_requirements、editor.py 未传 members、f-string 语法错误
 
 ---
-
 ## v0.4 - B3 评分 + B4 编辑 + 精细打磨（2026-07-14）
 
 **定位：** 第一次系统性精细打磨。
@@ -2893,7 +3726,6 @@ def apply_edits(plan, edits):
 - ID 去重、悬空依赖剔除、环检测（Kahn 拓扑排序）
 
 ---
-
 ## v0.3 - Web 重做 + Memory + 答辩模拟（2026-07-14）
 
 **定位：** 从"能跑"到"好用"的第一次大提升。
@@ -2944,7 +3776,6 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
 - **Prompt 全面重构**：从简单指令升级为结构化 Prompt Engineering
 
 ---
-
 ## v0.2 - 核心算法 + API 接入（2026-07-14）
 
 - Timeline CPM 关键路径法（详见上方 v0.3 对照）
@@ -2953,7 +3784,6 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
 - 修复 config 泄露（.env 不再被 git 追踪）
 
 ---
-
 ## v0.1 - 初始骨架（2026-07-12）
 
 **定位：** 项目从零到一。搭好架构骨架，所有 Agent 能跑通。
@@ -2977,416 +3807,40 @@ LLM 负责"创造性"：拆任务、分配角色、写报告
 - test_api.py：健康检查接口
 
 ---
-
-
 ## 版本规划
 
 | 版本 | 定位 | 状态 |
 |------|------|------|
-| v0.1 | 初始骨架 | 已完成 |
-| v0.2 | 核心算法实现 | 已完成 |
-| v0.3 | Web 重做 + Memory + 答辩模拟 | 已完成 |
-| v0.4 | B3 评分 + B4 编辑 + 精细打磨 | 已完成 |
-| v1.0 | 功能完整正式版 | 已完成 |
-| v1.1 | 代码质量加固 | 已完成 |
-| v1.2 | 进度追踪 + 突发情况处理 | 已完成 |
-| **v2.0** | **全面审查修复** | **已完成** |
-| v3.0 | 七轮审查全量修复 | 已完成 |
-| **v3.1** | **workbuddy 审查复核选择性修复** | **已完成** |
+| **v0.1** | **初始骨架** | **已完成** |
+| **v0.2** | **核心算法实现** | **已完成** |
+| **v0.3** | **Web 重做 + Memory + 答辩模拟** | **已完成** |
+| **v0.4** | **技能评分 + 动态编辑 + 精细打磨** | **已完成** |
+| **v1.0** | **功能完整正式版** | **已完成** |
+| **v1.1** | **代码质量加固** | **已完成** |
+| **v1.2** | **进度追踪 + 突发情况处理** | **已完成** |
+| **v2.0** | **深度审查修复（30 项问题）** | **已完成** |
+| **v3.0** | **七轮审查全量修复** | **已完成** |
+| **v3.1** | **审查复核选择性修复（13 项）** | **已完成** |
+| **v3.2** | **用户验收六连击修复** | **已完成** |
+| **v3.3** | **完成不重排 + 负向技能标签识别** | **已完成** |
+| **v3.4** | **报告自动重生 + 表格渲染修复 + 空鉴权快速兜底** | **已完成** |
+| **v4.0** | **任务拆解与分工双确认工作流** | **已完成** |
+| **v4.1** | **恢复工作台视觉与共享业务服务** | **已完成** |
 | **v4.2** | **文件驱动的具体任务拆解与自由编辑** | **已完成** |
+| **v4.3** | **修复首次提交不走快速模式、默认调 AI** | **已完成** |
+| **v4.4** | **AI 调整建议按钮可拖拽 + 生成按钮反馈修复** | **已完成** |
 | **v4.5** | **长课程手册的成果识别与递归拆解** | **已完成** |
 | **v4.6** | **任务与附属限制分离、AI JSON 本地容错** | **已完成** |
 | **v4.7.1** | **合入 v3.5-v3.8 算法修复** | **已完成** |
 | **v4.7.2** | **知识库估时、反馈学习与2h均衡分工** | **已完成** |
 | **v4.8** | **统一合并：算法修复 + 工时知识库** | **已完成** |
+| **v4.8.1** | **代码质量加固 + CI + API 测试覆盖** | **已完成** |
 | **v4.9** | **比赛 Demo 加固 + 清小搭标准协议接入** | **已完成** |
+| **v5.0** | **八项核心功能修复** | **已完成** |
+| **v5.1** | **六项用户报告问题修复** | **已完成** |
+| **v5.2** | **AI 调整建议按钮交互重写** | **已完成** |
 | **v5.3** | **抽屉遮挡修复 + 首次拆解兜底优化** | **已完成** |
 | **v5.4** | **DeepSeek 超时根因修复 + 推理模型容错加固** | **已完成** |
 | **v5.5** | **新增成员零工时修复 + 任务分工术语清理** | **已完成** |
 | **v5.6** | **成员变动后分工失衡 + 导出与报告问题修复** | **已完成** |
-| v2.x | 比赛阶段扩展 | 规划中 |
-### 36. half-day ?????????????????**???** timeline.py:174 ? `start_base + timedelta(days=es[tid] / 2)` ???????Python ? `date + timedelta(days=0.5)` ????????0.5 ????? 0 ??????? half-day ??????????? 2h ?????? 4h/?????????????????**????timeline.py??**```pythons_date = start_base + timedelta(days=es[tid] / 2)  # 0.5 ?????```**????**```pythons_date = (datetime.combine(start_base, datetime.min.time()) + timedelta(days=es[tid] / 2)).date()```?? datetime ????????????? date?????? available_days ???? total_seconds ?? .days ????### 37. ??????????????**???** ??????????????????????????**????** ??????????????`bg-[repeating-linear-gradient(45deg,...)]`???????????????????????????????????### 38. ???????????????????????? <= 1h?**???** ???????????0.25 * ????????????? 2 ? 20h ????????? 2 ? 2h ???????????????????? 25.8h / 32.5h / 75.1h?**????scoring.py assign_with_balance ??????**- ?????????????????????????- ??????????????????????????- ??/??????????- ???????????????????**???** ????? ~31h???? 1.1h?### 39. ???? ceil ????**???** timeline.py:196 ? `(deadline_date - today).days` ???????.days ??????1.5 ?? 1 ?????? `Math.ceil`?1.5 ?? 2 ???????????????**????** ?? `total_seconds() / 86400` ? `ceil`?????????
-## v4.0 —— 任务拆解与分工双确认（2026-07-18）
-
-**定位：** 将一次性生成计划改为“先确认拆解、再确认分工”的可编辑工作流。
-
----
-
-### 关键缺陷（P0）
-
-#### 1. 拆解后立即分工
-
-1. **问题：** 用户无法在人员分配前修正任务粒度、工时和日期。
-2. **修改前：**
-   ```python
-   plan = self._step_planner(inp)
-   qa_matrix = self._step_matcher(plan, inp.members)
-   ```
-3. **修改后：**
-   ```python
-   plan = Coordinator().draft(inp)
-   # 用户确认后
-   full_plan = Coordinator().confirm(inp, plan)
-   ```
-4. **为什么这样改：** 根因是协调器只暴露一次性主链路；拆成两个明确接口后，草案成为可持久化、可校验的中间状态。
-5. **收益：** 用户可先改任务；确认前无负责人；旧 `/api/run` 仍兼容。
-
-#### 2. 任务模型缺少阶段和日期
-
-1. **问题：** 只有工时无法表达实践前、中、后的执行窗口。
-2. **修改前：**
-   ```python
-   estimated_hours: float
-   required_skills: list[str]
-   ```
-3. **修改后：**
-   ```python
-   execution_stage: str = "实践中"
-   start_date: Optional[date] = None
-   end_date: Optional[date] = None
-   ```
-4. **为什么这样改：** 时间语义必须保存在任务本身，才能被编辑、分配和重新载入共同复用。
-5. **收益：** 支持阶段与具体日期并存；后端拒绝结束早于开始；旧数据由默认值兼容。
-
-### 健壮性提升（P1）
-
-#### 3. 文件要求分析
-
-1. **问题：** 项目要求只能手工复制，长文件无法安全提炼。
-2. **修改前：**
-   ```python
-   additional_requirements: str = ""
-   ```
-3. **修改后：**
-   ```python
-   text = extract_text(upload.filename, raw)
-   result = LLMClient().chat_structured(..., RequirementAnalysis, 0.1)
-   ```
-4. **为什么这样改：** 先在后端按格式提取、清理和截断，再做结构化分析，可避免直接把二进制或完整敏感原文写入日志。
-5. **收益：** 支持六类常用格式；15MB 校验；解析失败返回明确原因。
-
-#### 4. 自动分工只看任务数量
-
-1. **问题：** 强制拉平任务会牺牲摄影、文案、排版等专业匹配。
-2. **修改前：**
-   ```python
-   scored.sort(key=lambda x: (-x[1], work[x[0]]))
-   ```
-3. **修改后：**
-   ```python
-   score = 0.55 * skill - 0.20 * total_load - 0.15 * stage_load + 0.10 * capacity
-   ```
-4. **为什么这样改：** 把技能、总工时、同阶段负载和剩余产能集中为可解释评分，避免纯计数或事后强行搬运。
-5. **收益：** 专业任务更匹配；同阶段拥堵降低；分配理由可展示。
-
-### 体验优化（P2）
-
-前端改为六步向导，新增任务拆分/合并/排序、成员看板拖拽、实时负载提示和项目对话框。README、依赖和验收测试同步更新。
-
-#### 5. 文件分析按钮无响应
-
-1. **问题：** 浏览器全局 `name` 与项目名称输入框冲突，提交表单时可能无法正确读取项目名称。
-2. **修改前：**
-   ```javascript
-   course: {name: name.value}
-   addMember.onclick = function(){ addMember() }
-   ```
-3. **修改后：**
-   ```javascript
-   course: {name: projectNameEl.value}
-   document.getElementById('addMemberBtn').onclick = function(){ addMember() }
-   ```
-4. **为什么这样改：** `window.name` 和同名函数属于浏览器已有全局对象，依赖元素 ID 自动成为全局变量会产生名称遮蔽；改为显式获取元素可消除运行环境差异。
-5. **收益：** 文件分析步骤可正常进入；添加成员按钮恢复；失败时页面显示明确提示。
-
-#### 6. 文件解析期间缺少反馈
-
-1. **问题：** 上传后需等待文本提取和模型分析，页面停留在原处会被误认为按钮失效。
-2. **修改前：**
-   ```javascript
-   if (state.files.length) await analyzeFiles()
-   ```
-3. **修改后：**
-   ```javascript
-   show('analysis', 1)
-   analysis.value = '正在上传并解析文件，请稍候…'
-   await analyzeFiles()
-   ```
-4. **为什么这样改：** 文件解析是异步操作，必须先呈现明确的阶段切换和加载状态，并在异常时保留可编辑的错误信息。
-5. **收益：** 点击立即有响应；重复提交被禁用；分析失败后用户仍可手动填写要求继续操作。
-
-#### 7. 手动调整、对话和等待时间优化
-
-1. **问题：** 步骤条只是静态展示；聊天无等待状态；确认分工会再次串行调用多个模型。
-2. **修改前：**
-   ```javascript
-   steps.innerHTML = '<div>手动调整</div>'
-   ```
-3. **修改后：**
-   ```javascript
-   steps.innerHTML = '<button data-step="3">手动调整</button>'
-   ```
-4. **为什么这样改：** 导航必须绑定到已有草案/方案状态；技能匹配与负载均衡已有确定性算法，无需在确认阶段重复等待模型。
-5. **收益：** 手动调整可点击返回；文件分析在后台完成；聊天最长等待 20 秒；模型默认超时由 120 秒降至可配置的 35 秒；确认分工由分钟级降至秒级。
-
-#### 8. 本地首页被外部样式 CDN 阻塞
-
-1. **问题：** Tailwind CDN 在网络较慢或不可达时同步阻塞 HTML 解析，本地页面也会长时间白屏。
-2. **修改前：**
-   ```html
-   <script src="https://cdn.tailwindcss.com"></script>
-   ```
-3. **修改后：**
-   ```html
-   <script async src="https://cdn.tailwindcss.com"></script>
-   ```
-4. **为什么这样改：** 外部装饰性资源不应阻塞本地应用首屏；关键布局样式改由本地 `style.css` 提供。
-5. **收益：** 断网也能立即打开；CDN 失败不影响操作；页面保留本地响应式布局。
-## v4.1 —— 恢复工作台视觉与共享业务服务（2026-07-18）
-
-**定位：** 恢复成熟的左右工作台布局，并让网页与未来清小搭适配层共享同一套项目业务逻辑。
-
----
-
-### 关键缺陷（P0）
-
-#### 1. 核心任务修改只存在于页面脚本
-
-1. **问题：** 拆分、合并、排序和负责人调整由页面直接改 JSON，未来自然语言入口无法复用。
-2. **修改前：**
-   ```javascript
-   state.draft.tasks.splice(index, 1)
-   task.assignee_id = owner
-   ```
-3. **修改后：**
-   ```python
-   mutate_draft(plan, operations)
-   apply_manual_assignment(request)
-   ```
-4. **为什么这样改：** 界面行为不是业务规则的可靠载体；将规则下沉到无 FastAPI 依赖的服务层后，Web、CLI 和未来 OpenAI 兼容适配层均可调用。
-5. **收益：** 任务操作统一校验；自然语言入口可复用；前后端规则不再漂移。
-
-### 健壮性提升（P1）
-
-#### 2. 工作量统计由页面重复实现
-
-1. **问题：** 页面自行统计工时和失衡提示，后续其他入口容易产生不同结果。
-2. **修改前：**
-   ```javascript
-   work[owner] += task.estimated_hours
-   ```
-3. **修改后：**
-   ```python
-   snapshot = workload_snapshot(full_plan)
-   ```
-4. **为什么这样改：** 工时占比、阶段负载和提示属于领域逻辑，应由服务端统一计算。
-5. **收益：** 拖拽后统计可信；网页和未来清小搭回复一致；规则可独立测试。
-
-### 体验优化（P2）
-
-#### 3. 多个全屏步骤破坏原工作台结构
-
-1. **问题：** 新页面丢失原版左侧配置、右侧结果区的成熟操作习惯，视觉也过于简陋。
-2. **修改前：**
-   ```html
-   <section id="page-info" class="page">...</section>
-   <section id="page-draft" class="page hidden">...</section>
-   ```
-3. **修改后：**
-   ```html
-   <main class="workbench">
-     <aside class="config-panel">...</aside>
-     <section class="workspace-panel">...</section>
-   </main>
-   ```
-4. **为什么这样改：** 项目配置需要持续可见，任务拆解、分工和结果应在同一工作区渐进呈现。
-5. **收益：** 恢复原版视觉语言；功能位置稳定；桌面和移动端均可使用。
-
-#### 4. 外部 CDN 影响打开速度
-
-1. **问题：** 运行时 Tailwind CDN 在网络不可达时造成页面白屏或样式延迟。
-2. **修改前：**
-   ```html
-   <script src="https://cdn.tailwindcss.com"></script>
-   ```
-3. **修改后：**
-   ```html
-   <link rel="stylesheet" href="/static/style.css">
-   ```
-4. **为什么这样改：** 核心工作台不应依赖外部网络资源。
-5. **收益：** 页面离线可用；本地首屏稳定；实际首页返回 200。
-
-#### 5. 新 HTML 与旧 CSS 缓存导致历史弹窗自动显示
-
-1. **问题：** 浏览器保留旧样式时，新页面的 `hidden` 类失效，历史方案遮罩会在首页自动出现。
-2. **修改前：**
-   ```html
-   <link rel="stylesheet" href="/static/style.css">
-   ```
-3. **修改后：**
-   ```html
-   <style>.hidden{display:none!important}</style>
-   <link rel="stylesheet" href="/static/style.css?v=4.1.1">
-   ```
-4. **为什么这样改：** HTML 与 CSS 的缓存版本不同步；关键隐藏规则必须随 HTML 一起生效，并通过资源版本号淘汰旧缓存。
-5. **收益：** 首页不再误显示历史弹窗；样式升级立即生效；后续缓存切换更稳定。
-
-### 性能优化（P1）
-
-#### 6. 文件分析和任务拆解串行调用两次大模型
-
-1. **问题：** 上传文件后先等待要求分析模型，再等待 Planner，超时和重试可能累计超过一分钟。
-2. **修改前：**
-   ```python
-   analysis = LLMClient().chat_structured(...)
-   plan = generate_draft(input)
-   ```
-3. **修改后：**
-   ```python
-   analysis = analyze_locally(extracted_text)
-   plan = generate_draft(input)  # 全流程唯一一次 LLM
-   ```
-4. **为什么这样改：** 文件阶段主要是事实提取和文本压缩，可用确定性规则快速完成；创造性的专业拆解才需要模型。
-5. **收益：** 普通文件分析通常在数秒内完成；模型默认最长等待 25 秒；超时后立即进入确定性兜底。
-
-## v4.2 —— 领域化兜底与最终协作视图恢复（2026-07-18）
-
-**定位：** 模型超时时仍生成可用的专业草案，并恢复项目执行阶段所需的状态、甘特图和工作量视图。
-
----
-
-### 关键缺陷（P0）
-
-#### 1. Planner 超时只返回通用五阶段
-
-1. **问题：** 调研、活动、摄影、报告、答辩和开发项目都退化成相同模板，工时也缺少领域依据。
-2. **修改前：**
-   ```python
-   需求分析 -> 方案设计 -> 核心开发 -> 测试 -> 文档
-   ```
-3. **修改后：**
-   ```python
-   specs = _domain_fallback_specs(project_text, requirement_analysis)
-   ```
-4. **为什么这样改：** 网络服务不稳定不应让任务质量完全失效；本地兜底可依据关键词、交付物和执行阶段选择专业流程。
-5. **收益：** 常见社会实践、调研、推送、报告、答辩和开发项目均有针对性拆解；工时和建议人数可编辑。
-
-#### 2. 文件分析结果未完整进入 Planner
-
-1. **问题：** 后台已提取要求，但 Coordinator 只传递 `additional_requirements`，模型看不到文件摘要。
-2. **修改前：**
-   ```python
-   extra=inp.additional_requirements
-   ```
-3. **修改后：**
-   ```python
-   extra=additional + confirmed_requirements + extracted_summary
-   ```
-4. **为什么这样改：** 文件分析只有真正进入 Planner 上下文才会影响任务拆解。
-5. **收益：** 上传文件中的交付物、时间和格式要求会参与拆解；兜底与模型使用同一份需求。
-
-### 体验优化（P2）
-
-- 任务编辑器隐藏内部类别字段，新增“建议人数”。
-- AI 调整建议同步读取当前草案、项目输入或最终方案。
-- 最终方案恢复任务状态、总体进度、时间线、甘特图、分工矩阵、工作量和报告。
-- 标记完成、进行中或阻塞后，本地重算排期，不再次调用模型。
-
-### 性能修复（P1）
-
-#### 3. SDK 隐式重试与复杂 JSON 生成阻塞首屏
-
-1. **问题：** SDK 默认重试会把 12 秒超时放大到 30 秒以上；当前模型对复杂 JSON 生成仍可能超时。
-2. **修改前：**
-   ```python
-   OpenAI(api_key=key, base_url=url)
-   generate_draft(input)  # 首次必须等待模型
-   ```
-3. **修改后：**
-   ```python
-   OpenAI(api_key=key, base_url=url, max_retries=0)
-   generate_draft(input, use_ai=False)
-   ```
-4. **为什么这样改：** 首次工作流必须稳定可用；领域化规则可立即生成可编辑草案，模型增强改为用户主动触发。
-5. **收益：** 首次拆解不再等待模型；“AI 重新拆解”仍保留；模型失败不会阻断后续分工。
-
----
-
-## v4.3 —— 修复：首次提交不走"快速模式"，默认调 AI（2026-07-19）
-
-**定位：** 覆盖 v4.2 的"快速模式优先"策略，让首次表单提交直接走 LLM。
-
-**审查/修改背景：** v4.2 设计目标是首屏秒出——前端的 `generateDraft(false)` 配合后端的 `_fallback_plan`，确保第一次点击"生成草案"立即出结果，AI 增强留给"重新拆解"按钮。但实际体验上，首次生成"快速草案"后用户还要手动点"重新拆解"才能看到 LLM 效果，流程多了一步；且"快速模式"产物是模板化的瀑布兜底，无法体现 LLM 的理解能力。
-
----
-
-### 关键缺陷（P0）
-
-#### 1. 前端硬编码 `false` 导致首次生成不走 AI
-
-1. **问题：** `index.html` 表单提交事件绑定了 `generateDraft(false)`，传参匹配了后端 v4.2 的 `use_ai=False` 调用，但用户首次生成时期望直接看到 AI 拆解结果，而不是先看模板再看 AI。
-2. **修改前：**
-   ```js
-   // app/web/templates/index.html:159
-   el('projectForm').onsubmit=function(event){event.preventDefault();generateDraft(false)};
-   ```
-3. **修改后：**
-   ```js
-   // app/web/templates/index.html:159
-   el('projectForm').onsubmit=function(event){event.preventDefault();generateDraft(true)};
-   ```
-4. **为什么这样改：** v4.2 的"快速模式优先"策略在用户体验上多了一步冗余操作——用户每次都要点两次（生成 + 重新拆解）才能看到 AI 效果。更合理的策略是默认走 AI，若 AI 超时后端自动兜底（`Coordinator` 内已内置超时降级），不需要前端手动挡掉 LLM。
-5. **收益：** 首次生成即看到 LLM 拆解效果；AI 超时时后端自带兜底，前端的 `use_ai=true` 不会导致白屏；"重新拆解"仍保留供用户迭代。
-
----
-
-## v4.4 —— AI 调整建议按钮可拖拽 + 生成按钮反馈修复（2026-07-19）
-
-**定位：** 修复两个实际体验问题：AI 调整建议按钮无法拖动且拖拽后误触抽屉弹出；AI 生成时 spinner 跑到了不可见的按钮上。
-
-**审查/修改背景：** v4.4 初版（19日13:38）实现了基础拖拽逻辑，但有两个隐藏问题：`onclick` 绑定方式导致拖拽松手后 click 仍触发弹出抽屉；`generateDraft(true)` 调用按钮参数指向 draft view 中的 `redraftBtn`（不可见），用户看不到加载反馈。本版是 v4.4 的完整修复版。
-
----
-
-### 关键缺陷（P0）
-
-#### 1. 拖拽后 click 事件仍触发抽屉弹出
-
-1. **问题：** `onclick=openAssistant` 绑定 + `mousedown` 拖拽是两条独立事件路径。拖拽松手后浏览器仍会触发 click 事件，抽屉弹出，用户无法靠拖拽移开按钮。
-2. **修改前：**
-   ```js
-   el('assistantBtn').onclick=openAssistant;
-   // onEnd 中试图 btn.click=function(){} 覆盖 .click() 方法（无效）
-   ```
-3. **修改后：**
-   ```js
-   // 移除 onclick，在 IIFE 中用 addEventListener 统一管理点击
-   btn.addEventListener('click',function(e){
-       if(dragging){e.stopPropagation();e.preventDefault();dragging=false}
-       else{openAssistant()}
-   });
-   ```
-4. **为什么这样改：** `onclick` 属性无法被其他事件处理器条件拦截；`addEventListener('click')` 配合 `dragging` 状态标志可精确控制：拖拽时 `preventDefault`，非拖拽时正常调用 `openAssistant`。
-5. **收益：** 拖拽松手不再弹出抽屉；点击行为不受影响。
-
-#### 2. 表单提交时加载 spinner 跑到了不可见的 `redraftBtn` 上
-
-1. **问题：** `generateDraft(true)` 内 `var button=useAi===true?el('redraftBtn'):el('generateBtn')`，表单提交走 `true` 分支找 `redraftBtn`，该按钮在 draft view 中（不可见），用户看到的 `generateBtn` 无任何反馈。
-2. **修改前：**
-   ```js
-   el('projectForm').onsubmit=function(event){event.preventDefault();generateDraft(true)};
-   async function generateDraft(useAi){
-       var button=useAi===true?el('redraftBtn'):el('generateBtn');
-       // 在不可见的 redraftBtn 上显示 spinner...
-   }
-   ```
-3. **修改后：**
-   ```js
-   el('projectForm').onsubmit=function(event){event.preventDefault();generateDraft(true,el('generateBtn'))};
-   async function generateDraft(useAi,btn){
-       var button=btn||(useAi===true?el('redraftBtn'):el('generateBtn'));
-       // 在用户可见的 generateBtn 上显示 spinner
-   }
-   ```
-4. **为什么这样改：** 表单提交是用户视角的"首次生成"，反馈必须出现在用户点击的那个按钮上；`redraftBtn` 调用不传 btn，函数自动退回到 `redraftBtn` 自身——单一接口兼容两处调用。
-5. **收益：** 首次生成时 `generateBtn` 正确显示 "AI 正在生成…" spinner；"重新拆解"按钮 spinner 行为不变。
+| v6.x | 正式发布与功能扩展 | 规划中 |

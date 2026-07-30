@@ -12,6 +12,35 @@
 
 将 v4.7.1（v3.5-v3.8 算法修复）与 v4.7.2（知识库增强工时估算）两条独立发展线合并到同一代码基础，保留双方全部功能。
 
+## v5.6 成员变动后分工失衡根因修复 + 导出与报告优化
+
+- 成员退出/新增后，已完成任务的分工保留（负责人仍在职），不因全量重排而清零匹配度和推理。
+- 新增成员无技能标签时，看板和工时面板显示协作者折算工时（如 2.7h、3 项协助），不再显示误导性的 0。
+- Markdown / Word / PDF 导出修复了空报告、责任分工表格渲染、PDF 中文字体等问题。
+- 终端日志不再泄漏原始 LLM JSON，清除残留的旧术语。
+
+## v5.5 新增成员零工时修复 + 任务分工术语清理
+
+- 新增成员被分配为协作者后，看板和工作量视图正确显示协作者折算工时和协助卡片。
+- 系统术语从旧角色概念统一回归为「任务分工」，清理界面残留。
+
+## v5.4 DeepSeek 超时根因修复 + 推理模型容错加固
+
+- 推理模型响应慢导致首次请求超时：新增带超时重试的调用方法（默认 2 次）。
+- 响应被 max_tokens 截断：截断时翻倍 token 预算重试（上限 32000），救回不完整 JSON。
+- 推理模型正文为空时从 reasoning_content 抽取 JSON，新增 LLM_MAX_TOKENS 配置项。
+
+## v5.3 抽屉遮挡修复 + 首次拆解兜底优化
+
+- 修复建议/聊天抽屉遮挡页面底部按钮的 CSS 层级问题。
+- 首次任务拆解在无文件输入时使用领域化兜底方案，不再卡在空状态。
+
+## v5.0-v5.2 八项核心功能修复 + 交互优化
+
+- **v5.0**：修复成员管理默认假成员、技能同义词覆盖不足、工作量不随状态变化、风险提示泄露内部文本、答辩模拟报错、AI 对话截断 JSON 等 8 项。
+- **v5.1**：手动分工后基于真实负载计算风险提示；LLM 客户端改用全局单例消除首次请求冷启动超时；新增 Markdown 渲染。
+- **v5.2**：AI 调整建议按钮改为点击切换、抽屉跟随按钮位置不遮挡、面板自动避让屏幕边缘。
+
 ## v4.7.1 合入 v3.5-v3.8 算法修复
 
 - 负载均衡全局联合枚举：贪心卡住时触发 _rebalance_presenters，负责人+主要协助联合搜索，gap 从 6h+ 收敛到 1h 内。
@@ -149,7 +178,7 @@ Demo 的可视化工作台。
 
 > 别人给你一张**静态分工表**；我们给你一张**可编辑的活协作图**——每个任务带角色化的 QA 归属，计划随现实变化而**实时重算**。
 
-输入「课程信息 + 团队成员 + 截止日」，系统自动：**拆解任务 → CPM 排期 → 技能匹配分配答辩角色 → 生成报告**，并支持随时增删改任务、即时重算。
+输入「课程信息 + 团队成员 + 截止日」，系统自动：**拆解任务 → CPM 排期 → 技能匹配分工 → 生成报告**，并支持随时增删改任务、拖拽调整分工、即时重算。
 
 ## 系统架构
 
@@ -168,16 +197,16 @@ AssignmentInput (课程 / 成员 / 截止日 / 每日工时)
                     +-----------------------------------------+
                     |
                     v
-               B4 动态编辑
-               add / remove / update -> 重算 Timeline + Matcher
+               动态编辑（增删改 / 拖拽调整 / 状态切换）
+               -> 重算 Timeline + Matcher + 报告
 ```
 
 | Agent | 职责 | 实现 | LLM 失败兜底 |
 |-------|------|------|-------------|
-| Planner | 课程信息 -> 1-8 子任务（按规模弹性） | LLM | 确定性 5 阶段兜底 |
-| Matcher | 任务 -> 主讲/主答/辅答 | LLM + B3 评分增强 | B3 确定性贪心分配 |
+| Planner | 课程信息 -> 1-8 子任务（按规模弹性） | LLM + 知识库工时校准 | 确定性 5 阶段兜底 |
+| Matcher | 任务 -> 负责人/协作者分工 + 技能匹配度 | LLM + 评分增强 | 确定性贪心分配 |
 | Timeline | 任务依赖 -> 倒排日期 | 纯 CPM 算法 | 无需兜底（纯数学） |
-| Reporter | 全部结果 -> 答辩报告 | LLM | 纯文本拼接兜底 |
+| Reporter | 全部结果 -> 项目报告 | LLM | 纯文本拼接兜底 |
 
 **设计原则**：LLM 负责创造性拆解，确定性算法负责正确性保证（关键路径、技能评分、负载均衡、依赖校验）。每个 Agent 失败都有兜底，主链路永不中断。
 
@@ -185,6 +214,10 @@ AssignmentInput (课程 / 成员 / 截止日 / 每日工时)
 
 | 版本 | 日期 | 定位 |
 |------|------|------|
+| v5.6 | 2026-07-30 | 成员变动后分工失衡根因修复 + 导出与报告优化 |
+| v5.5 | 2026-07-29 | 新增成员零工时修复 + 任务分工术语清理 |
+| v5.4 | 2026-07-29 | DeepSeek 超时根因修复 + 推理模型容错加固 |
+| v5.3 | 2026-07-25 | 抽屉遮挡修复 + 首次拆解兜底优化 |
 | v5.2 | 2026-07-25 | AI 调整建议按钮交互重写：点击开关分离/抽屉跟随按钮/自动避让屏幕边缘 |
 | v5.1 | 2026-07-25 | 六项用户报告问题修复：风险提示/报告一致性/Markdown 渲染/答辩要求框/历史方案 |
 | v5.0 | 2026-07-24 | 八项核心功能修复：成员/匹配度/工作量/报告/答辩/甘特图/AI 对话/UI |
@@ -226,27 +259,27 @@ competition/
 │   ├── main.py               # FastAPI 入口
 │   ├── config.py             # 全局配置
 │   ├── coordinator.py        # 总调度：主链路编排
-│   ├── editor.py             # B4：动态编辑 + 重算
+│   ├── editor.py             # 动态编辑 + 重算
 │   ├── cli.py                # 单 Agent 调试入口
-│   ├── models/schemas.py     # JSON 接口契约（含 B3/B4 模型）
+│   ├── models/schemas.py     # JSON 接口契约（数据模型）
 │   ├── agents/
 │   │   ├── base.py           # Agent 基类
-│   │   ├── planner.py        # Planner（A 负责 Prompt）
+│   │   ├── planner.py        # Planner：任务拆解
 │   │   ├── matcher.py        # Matcher：QA 矩阵 + 校验
-│   │   ├── scoring.py        # B3：技能评分 + 负载均衡
+│   │   ├── scoring.py        # 技能评分 + 负载均衡
 │   │   ├── timeline.py       # Timeline：CPM 关键路径 + 成员产能
 │   │   ├── reporter.py       # 报告格式化
-│   │   ├── interview_sim.py  # B1：答辩模拟
+│   │   ├── interview_sim.py  # 答辩模拟
 │   │   └── validation.py     # 计划校验（去重/去环/清依赖）
 │   ├── llm/
 │   │   ├── client.py         # LLM 调用封装
-│   │   └── prompts.py        # Prompt 模板（v0.3 结构化重构）
+│   │   └── prompts.py        # Prompt 模板集中管理
 │   └── web/
 │       ├── routes.py         # FastAPI 路由（run/edit/save/load/interview）
 │       ├── templates/index.html  # TailwindCSS + Lucide + Tab 布局
 │       └── static/style.css  # 补充样式
 ├── tests/                    # 单元与集成测试
-├── memory/                   # B2 计划持久化
+├── memory/                   # 计划持久化
 ├── docs/                     # 项目文档
 └── requirements.txt
 ```
@@ -265,17 +298,17 @@ competition/
 | POST | `/api/draft/mutate` | 结构化修改任务草案（网页与 Agent 共用） |
 | POST | `/api/workload` | 统一计算成员负载、占比和分工建议 |
 | POST | `/api/chat` | 基于当前方案实时问答 |
-| POST | `/api/edit` | B4：应用编辑并重算 |
-| POST | `/api/interview` | B1：AI 答辩模拟（v0.3 新增） |
-| POST | `/api/save` | B2：保存计划到 memory |
+| POST | `/api/edit` | 应用编辑并重算 |
+| POST | `/api/interview` | AI 答辩模拟（v0.3 新增） |
+| POST | `/api/save` | 保存计划到 memory |
 | POST | `/api/export/markdown` | 导出当前计划为 Markdown |
 | POST | `/api/export/docx` | 导出当前计划为 Word 文档 |
 | POST | `/api/edit-members` | 成员变动处理（退出/工时变更/新增成员）并重算 |
 | POST | `/api/recompute` | 状态变更后实时重算排期与分工 |
 | POST | `/api/export/pdf` | 导出当前计划为 PDF 文档 |
-| GET | `/api/plans` | B2：列出已保存计划 |
-| GET | `/api/load/{filename}` | B2：载入计划 |
-| DELETE | `/api/plans/{filename}` | B2：删除计划 |
+| GET | `/api/plans` | 列出已保存计划 |
+| GET | `/api/load/{filename}` | 载入计划 |
+| DELETE | `/api/plans/{filename}` | 删除计划 |
 | GET | `/api/health` | 健康检查 |
 
 ## 快速启动

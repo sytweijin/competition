@@ -1,7 +1,6 @@
 """
 Matcher Agent
 负责：QA 责任矩阵生成 + 答辩细分/角色匹配
-负责人：队友 C（端到端）；B 负责兜底校验与 B3 技能评分增强
 """
 
 from __future__ import annotations
