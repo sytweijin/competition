@@ -21,24 +21,23 @@
 ### 主链路
 
 ```text
-项目信息（名称 / 成员 / 截止日 / 每日工时）
-     |  可选：上传课程手册 PDF / DOCX / TXT，本地提取任务要求
-     v
-+-----------+   确认草案  +-----------+      +------------+      +-----------+      +------------+
-|  Planner  |------------>|  Matcher  |----->|  Timeline  |----->|  Reporter  |----->| Reflection |
-+-----------+          +->+-----------+      +------------+      +-----------+      +------------+
- 知识库校准工时       |   技能匹配+分工       CPM 关键路径          项目报告         批判性审查
- 1-8 弹性子任务       |   负责人/协作者       倒排日期+浮动         Markdown          风险识别
- 去重/去环/清依赖     |   负载均衡            日工时折算            Word / PDF        改进建议
-                      |   匹配度评分
-                      |
-                      +<---------- 用户随时编辑 <----------+
-                      |    增删改任务 / 拖拽分工 / 切换状态
-                      +-----> 重算 Timeline + Matcher + Reporter
 
-                      Project Service 统一编排
-                      generate_draft / mutate_draft / confirm_draft /
-                      apply_manual_assignment / workload_snapshot
++------------+    +------------+    +------------+    +------------+    +------------+
+|  Planner   |    |  Matcher   |    |  Timeline  |    |  Reporter  |    | Reflection |
++------------+    +------------+    +------------+    +------------+    +------------+
+   任务拆解         技能匹配分工       CPM 关键路径       项目报告           批判性审查
+   知识库校准       负责人/协作者      倒排日期+浮动      Markdown          风险识别
+   弹性子任务       负载均衡           日工时折算         Word / PDF        改进建议
+                   匹配度评分
+
+     ^                        v
+     |  用户随时编辑：增删改任务 / 拖拽调整分工 / 切换任务状态
+     |  -> 重算 Timeline + Matcher + Reporter
+     |
+     Project Service 统一编排
+     generate_draft / mutate_draft / confirm_draft
+     apply_manual_assignment / workload_snapshot
+
 ```
 
 ### 分层边界
@@ -142,46 +141,46 @@ Demo 的可视化工作台。
 
 ## 项目结构
 
-`
+```
 competition/
-├── app/
-│   ├── main.py               # FastAPI 入口
-│   ├── config.py             # 全局配置
-│   ├── coordinator.py        # 总调度：Planner -> Matcher -> Timeline -> Reporter -> Reflection
-│   ├── editor.py             # 动态编辑 + 重算
-│   ├── cli.py                # 单 Agent 调试入口
-│   ├── file_analysis.py      # 课程手册 PDF/DOCX/TXT 本地文本提取与规则归类
-│   ├── models/schemas.py     # JSON 接口契约（数据模型）
-│   ├── agents/
-│   │   ├── base.py           # Agent 基类
-│   │   ├── planner.py        # Planner：任务拆解
-│   │   ├── matcher.py        # Matcher：QA 矩阵 + 校验
-│   │   ├── scoring.py        # 技能评分 + 负载均衡
-│   │   ├── timeline.py       # Timeline：CPM 关键路径 + 成员产能
-│   │   ├── reporter.py       # 报告格式化
-│   │   ├── reflection.py     # Reflection：批判性审查 + 改进建议
-│   │   ├── interview_sim.py  # 答辩模拟
-│   │   └── validation.py     # 计划校验（去重/去环/清依赖）
-│   ├── services/
-│   │   ├── project_service.py  # 核心业务：草案/确认/分工/工作量
-│   │   └── duration_estimator.py # 知识库工时估算 + 反馈学习
-│   ├── llm/
-│   │   ├── client.py         # LLM 调用封装（超时重试 + 截断恢复）
-│   │   └── prompts.py        # Prompt 模板集中管理
-│   ├── compat/
-│   │   └── qingxiaoda.py     # 清小搭 OpenAI 兼容适配层
-│   ├── knowledge/
-│   │   └── duration_examples.json  # 结构化工时案例库
-│   └── web/
-│       ├── routes.py         # FastAPI 路由
-│       ├── exporters.py      # Markdown / Word / PDF 导出
-│       ├── templates/index.html  # TailwindCSS + Lucide + Tab 布局
-│       └── static/style.css  # 补充样式
-├── tests/                    # 单元与集成测试（118 项）
-├── memory/                   # 计划持久化
-├── docs/                     # 项目文档
-└── requirements.txt
-`
++-- app/
+|   +-- main.py                # FastAPI 入口
+|   +-- config.py              # 全局配置
+|   +-- coordinator.py         # 主链路编排
+|   +-- editor.py              # 动态编辑 + 重算
+|   +-- cli.py                 # 单 Agent 调试入口
+|   +-- file_analysis.py       # 课程手册文本提取与规则归类
+|   +-- models/schemas.py      # JSON 接口契约
+|   +-- agents/
+|   |   +-- base.py            # Agent 基类
+|   |   +-- planner.py         # 任务拆解
+|   |   +-- matcher.py         # 分工矩阵 + 校验
+|   |   +-- scoring.py         # 技能评分 + 负载均衡
+|   |   +-- timeline.py        # CPM 关键路径 + 成员产能
+|   |   +-- reporter.py        # 报告格式化
+|   |   +-- reflection.py      # 批判性审查 + 改进建议
+|   |   +-- interview_sim.py   # 答辩模拟
+|   |   +-- validation.py      # 计划校验（去重/去环）
+|   +-- services/
+|   |   +-- project_service.py    # 核心业务：草案/确认/分工/工作量
+|   |   +-- duration_estimator.py  # 知识库工时估算 + 反馈学习
+|   +-- llm/
+|   |   +-- client.py          # LLM 调用封装（超时重试 + 截断恢复）
+|   |   +-- prompts.py         # Prompt 模板集中管理
+|   +-- compat/
+|   |   +-- qingxiaoda.py      # 清小搭 OpenAI 兼容适配层
+|   +-- knowledge/
+|   |   +-- duration_examples.json  # 结构化工时案例库
+|   +-- web/
+|       +-- routes.py          # FastAPI 路由
+|       +-- exporters.py       # Markdown / Word / PDF 导出
+|       +-- templates/index.html  # TailwindCSS + Lucide + Tab 布局
+|       +-- static/style.css   # 补充样式
++-- tests/                     # 单元与集成测试（118 项）
++-- memory/                    # 计划持久化
++-- docs/                      # 项目文档
++-- requirements.txt
+```
 
 ## API 参考
 
