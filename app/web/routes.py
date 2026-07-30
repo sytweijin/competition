@@ -6,6 +6,7 @@ import json
 import logging
 import re
 from datetime import date, datetime
+from app import config
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
@@ -53,14 +54,14 @@ async def analyze_files(files: list[UploadFile] = File(...), background: str = F
 
 
 @router.post("/draft", response_model=DraftResponse)
-async def create_draft(req: DraftRequest):
+def create_draft(req: DraftRequest):
     """只生成可编辑任务草案，不分工。"""
     plan = generate_draft(req.input, use_ai=req.use_ai)
     return DraftResponse(input=req.input, plan=plan)
 
 
 @router.post("/confirm-draft", response_model=FullPlan)
-async def confirm_draft(req: ConfirmDraftRequest):
+def confirm_draft(req: ConfirmDraftRequest):
     """确认拆解后才自动分工。"""
     try:
         return confirm_draft_service(req.input, req.plan)
@@ -69,7 +70,7 @@ async def confirm_draft(req: ConfirmDraftRequest):
 
 
 @router.post("/draft/mutate", response_model=PlanOutput)
-async def mutate_draft_endpoint(req: DraftMutationRequest):
+def mutate_draft_endpoint(req: DraftMutationRequest):
     """结构化修改草案，供网页与未来自然语言 Agent 共用。"""
     try:
         return mutate_draft(req.plan, req.operations)
@@ -78,7 +79,7 @@ async def mutate_draft_endpoint(req: DraftMutationRequest):
 
 
 @router.post("/manual-assignment", response_model=FullPlan)
-async def manual_assignment(req: ManualAssignmentRequest):
+def manual_assignment(req: ManualAssignmentRequest):
     """保存用户拖拽后的负责人/协作者并重算排期与报告。"""
     try:
         return apply_manual_assignment(req)
@@ -87,7 +88,7 @@ async def manual_assignment(req: ManualAssignmentRequest):
 
 
 @router.post("/workload")
-async def workload(req: FullPlan):
+def workload(req: FullPlan):
     """返回统一工作量统计与建议，不让页面自行复制业务规则。"""
     return workload_snapshot(req)
 
@@ -154,12 +155,24 @@ async def project_chat(req: ChatRequest):
         result = await asyncio.wait_for(
             asyncio.to_thread(
                 LLMClient.get_shared().chat_text,
-                "你是项目协作助手。基于当前方案简洁回答，可指出冲突并给出调整建议。",
+                "你是项目协作助手，像一个懂项目管理的同事，陪用户一起看当前的任务分工，自然、口语地聊天。\n\n"
+            "【仅供你判断，绝不写进回答】\n"
+            "- 当前分工综合考虑了多个因素，不只是技能标签是否对口：相关能力、各阶段负载是否均匀、成员可用工时、任务之间的串行依赖都参与了权衡。所以某项任务看起来技能标签不完全匹配，不代表分配有问题——可能那个阶段他工时充裕，或整体能力足以覆盖。\n"
+            "- 你看不到完整的负载与产能数据，所以你的定位是帮用户看清现状、指出值得留意的地方，而不是替用户拍板‘谁该做什么’。\n"
+            "- 判断成员是否适合某项任务，要看他完整的能力描述，别只逐个比对技能标签——比如‘文学素养’‘沟通协调’‘擅长规划’这类综合能力，对应到文字撰写、沟通、组织类任务都是合理的。\n\n"
+            "【你该聊什么】\n"
+            "- 整体观察最有用：工时分布是否均衡、关键路径上哪些任务串在一起、哪里有跨人交接、截止日期留没留余地。\n"
+            "- 用户问某项安排，可以客观说说特点（成员能力和任务的契合点、可能的压力，比如他连续承接多个任务），把判断权留给用户。\n"
+            "- 用户想自己调整就支持他：看板可以拖拽任务卡换负责人，也能一键‘恢复自动分工’。这是介绍功能，不是提醒或劝阻。\n\n"
+            "【绝对不要出现在回答里】\n"
+            "- ‘不建议你手动重新分工’‘请不要自己重新分工’‘否则会打破负载均衡’这类劝阻或警告的话——用户当然可以自己手动调整。\n"
+            "- ‘多因子算法’‘负载均衡’‘阶段负载’‘剩余产能’这些内部术语——它们只是你判断的依据，不要向用户解释。\n"
+            "- ‘谁应该接哪个任务’的重新分配清单——你手头没有完整的产能与依赖数据，自己另排反而容易失衡，所以只做分析、不做拍板。",
                 f"当前方案：{context}\n用户：{req.message}", 0.2),
-            timeout=20,
+            timeout=40,
         )
     except TimeoutError:
-        return {"reply": "AI 响应超过 20 秒。建议先在任务拆解或分工看板中直接调整；我已停止本次等待。"}
+        return {"reply": "AI 响应超过 40 秒。建议先在任务拆解或分工看板中直接调整；我已停止本次等待。"}
     if hasattr(result, "error_type"):
         tasks = req.plan.plan.tasks if req.plan else (req.draft.tasks if req.draft else [])
         total = sum(task.estimated_hours for task in tasks)
@@ -202,7 +215,7 @@ class RunRequest(BaseModel):
 
 
 @router.post("/run", response_model=FullPlan)
-async def run_plan(req: RunRequest):
+def run_plan(req: RunRequest):
     """执行完整的 Agent 链路并返回结果。"""
     try:
         # 校验：至少 1 个有姓名的成员（P1-16）
@@ -230,7 +243,7 @@ async def run_plan(req: RunRequest):
 # ──────────── B4：动态编辑 ────────────
 
 @router.post("/edit", response_model=FullPlan)
-async def edit_plan_endpoint(req: EditPlanRequest):
+def edit_plan_endpoint(req: EditPlanRequest):
     """对已有计划应用编辑（add/remove/update）并重算。"""
     try:
         return edit_plan(req)
@@ -306,7 +319,7 @@ class InterviewRequest(BaseModel):
 
 
 @router.post("/interview")
-async def interview_sim(req: InterviewRequest):
+def interview_sim(req: InterviewRequest):
     """B1: 答辩模拟 - 根据计划和QA矩阵生成模拟答辩问题。"""
     agent = InterviewSimAgent()
     questions = agent.run(plan=req.plan, qa_matrix=req.qa_matrix, user_requirements=req.user_requirements)
@@ -314,7 +327,7 @@ async def interview_sim(req: InterviewRequest):
 
 
 @router.post("/recompute", response_model=FullPlan)
-async def recompute_plan(req: FullPlan):
+def recompute_plan(req: FullPlan):
     """基于任务状态/成员变动重新计算时间线和匹配（不重跑 LLM）。
 
     前端状态切换（completed/blocked 等）或成员变动后调用此端点，
@@ -349,12 +362,14 @@ async def recompute_plan(req: FullPlan):
     )
 
     # 状态切换是高频操作，只用本地结果更新报告，避免每次标记完成/阻塞都等待 LLM。
+    risk_note = Coordinator._build_risk_note(
+        plan, timeline, qa_matrix, members, req.input.deadline)
     report = req.report.model_copy(update={
         "timeline_section": timeline.note,
         "qa_matrix_section": "\n".join(
             f"{item.task_name}：{item.presenter or '未分配'}"
             for item in qa_matrix.assignments),
-        "risk_note": req.report.risk_note,
+        "risk_note": risk_note,
     })
 
     return FullPlan(
@@ -366,7 +381,7 @@ async def recompute_plan(req: FullPlan):
     )
 
 @router.post("/export/docx")
-async def export_docx(plan: FullPlan):
+def export_docx(plan: FullPlan):
     """导出当前计划为 Word 文档。"""
     from app.web.exporters import plan_to_docx
     data = plan_to_docx(plan)
@@ -378,7 +393,7 @@ async def export_docx(plan: FullPlan):
 
 
 @router.post("/export/pdf")
-async def export_pdf(plan: FullPlan):
+def export_pdf(plan: FullPlan):
     """导出当前计划为 PDF 文档。"""
     from app.web.exporters import plan_to_pdf
     data = plan_to_pdf(plan)
@@ -389,7 +404,7 @@ async def export_pdf(plan: FullPlan):
 
 
 @router.post("/export/markdown")
-async def export_current_plan(plan: FullPlan):
+def export_current_plan(plan: FullPlan):
     """导出当前计划为 Markdown（前端「导出」按钮调用，无需先保存）。"""
     md = _plan_to_markdown(plan.model_dump())
     return Response(
@@ -488,7 +503,7 @@ class MemberEditRequest(BaseModel):
 
 
 @router.post("/edit-members", response_model=FullPlan)
-async def edit_members_endpoint(req: MemberEditRequest):
+def edit_members_endpoint(req: MemberEditRequest):
     """处理成员变动：删除成员、修改每日工时，然后重算 Matcher + Timeline。"""
     try:
         from app.agents.scoring import assign_with_balance
@@ -498,7 +513,7 @@ async def edit_members_endpoint(req: MemberEditRequest):
         # Update members
         new_members = []
         import math
-        remaining = max(1, (fp.input.deadline - date.today()).days)
+        remaining = max(1, (fp.input.deadline - config.today()).days)
         for m in fp.input.members:
             if m.name in req.removed_members:
                 continue
@@ -574,7 +589,7 @@ async def edit_members_endpoint(req: MemberEditRequest):
         
         # ????????????? risk_note??????
         from app.coordinator import Coordinator
-        detailed_risk = Coordinator._build_risk_note(fp.plan, timeline, qa_matrix, new_members)
+        detailed_risk = Coordinator._build_risk_note(fp.plan, timeline, qa_matrix, new_members, fp.input.deadline)
         return FullPlan(
             input=new_input,
             plan=fp.plan,

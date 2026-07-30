@@ -218,7 +218,7 @@ class ReflectionAgent(BaseAgent[ReflectionOutput]):
 
         # 改进优先级
         priority: list[str] = []
-        for issue in sorted(issues, key=lambda x: {"error": 0, "warning": 1, "suggestion": 2}[x.level]):
+        for issue in sorted(issues, key=lambda x: {"error": 0, "warning": 1, "suggestion": 2}.get(x.level, 3)):
             tip = f"【{issue.dimension}】{issue.suggestion or issue.description[:30]}"
             if tip not in priority:
                 priority.append(tip)

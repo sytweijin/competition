@@ -1,4 +1,4 @@
-from datetime import datetime
+﻿from datetime import datetime
 """Timeline Agent (CPM 关键路径) 单元测试。"""
 from datetime import date, timedelta
 
@@ -29,8 +29,9 @@ def test_empty_plan():
     assert out.tasks == []
 
 
+@patch('app.config.today', return_value=_FakeDate.today())
 @patch('app.agents.timeline.date', new=_FakeDate)
-def test_single_task():
+def test_single_task(mock_today):
     out = TimelineAgent().run(
         _plan([SubTask(id="T1", name="A", estimated_hours=8)]),
         "2026-07-20",
@@ -40,8 +41,9 @@ def test_single_task():
     assert out.tasks[0].end_date == datetime(2026, 7, 20)  # 截止日倒推
 
 
+@patch('app.config.today', return_value=_FakeDate.today())
 @patch('app.agents.timeline.date', new=_FakeDate)
-def test_linear_chain_critical_path():
+def test_linear_chain_critical_path(mock_today):
     """T1 -> T2 -> T3 链式依赖，三者都在关键路径上。"""
     plan = _plan([
         SubTask(id="T1", name="A", estimated_hours=4),

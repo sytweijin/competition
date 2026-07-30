@@ -5,6 +5,490 @@
 > 按时间倒序排列（最新在最上面），随项目同步更新。
 
 ---
+## v5.7 —— 第二轮深度审查全量修复 + AI 协作助手体验重写（2026-07-30）
+
+**定位：** 对 workbuddy 第二轮审查结论逐条核实并修复，统一两条主链路风险质量，修复时区边界导致的排期偏移，并重写 AI 协作助手让对话自然、不再向用户输出系统级元话术。
+
+**审查/修改背景：** 用户在 v5.6 之后发起第二轮全面审查，并实测反馈两个具体 bug（自定义阶段校验失效、成员变动后回看板需正确恢复自动分工），同时发现 AI 协作助手会把"不建议手动重新分工"这类写给大模型自己的约束直接转述给用户。
+
+---
+
+### 关键缺陷（P0）
+
+#### 1. B1：自定义阶段任务无校验即可提交，custom_stage 永远丢失
+
+1. **问题：** 用户在前端把任务执行阶段选为「自定义」却不填自定义阶段名称，syncDraft 不拦截直接提交，后端 custom_stage 为 None，导致时间线/分工都拿不到阶段信息。
+2. **修改前：**
+   ```js
+   // syncDraft 直接把所有 task 作为 update 提交，无任何校验
+   async function syncDraft(){var tasks=collectDraftTasks(),operations=tasks.map(function(task){return {op:'update',task_id:task.id,task:task}});...}
+   ```
+3. **修改后：**
+   ```js
+   async function syncDraft(){var tasks=collectDraftTasks();
+   for(var i=0;i<tasks.length;i++){
+     if(tasks[i].execution_stage==='自定义'&&!tasks[i].custom_stage)
+       {throw new Error('任务 '+tasks[i].id+' 选了「自定义」阶段，请填写自定义阶段名称')}
+   }
+   var operations=tasks.map(function(task){return {op:'update',task_id:task.id,task:task}});...}
+   ```
+4. **为什么这样改：** "自定义"阶段如果没有 custom_stage 就是无效数据，应该在提交前拦截而不是让后端静默吞掉。校验放在 syncDraft，因为确认拆解、添加任务、合并任务、发起 AI 对话都经过它，一处拦截覆盖所有入口。
+5. **收益：**
+   - 杜绝无效的"自定义"阶段任务进入后端。
+   - 报错信息直接指明任务 ID 和缺什么，用户能立刻补全。
+
+#### 2. B2：estimated_hours 默认值 0.0 与 >0 校验自相矛盾
+
+1. **问题：** `SubTask.estimated_hours` 默认 0.0，但校验器要求 >0。LLM 未返回工时时，默认值直接触发校验失败，任务被丢弃或整次拆解失败。
+2. **修改前：**
+   ```python
+   estimated_hours: float = Field(default=0.0, description="预估工时（人时）")
+   ```
+3. **修改后：**
+   ```python
+   estimated_hours: float = Field(default=2.0, description="预估工时（人时）")
+   ```
+4. **为什么这样改：** 默认值必须能通过自身校验器。2.0h 是单任务最常见的中位工时，作为兜底既不触发校验错误，也不会让某任务凭空变成 0 工时拖垮工期计算。
+5. **收益：**
+   - 默认值与校验器一致，LLM 缺字段时不再丢任务。
+   - 工期/负载计算不再出现 0 工时的畸形任务。
+
+#### 3. B3：部署在 Render(UTC) 时 date.today() 与东八区相差一天，排期整体偏移
+
+1. **问题：** 时间线和成员变动都用 `date.today()` 判断"今天"。Render 默认 UTC，凌晨会比北京时间晚一天，导致倒推起始日偏移、可用工作日数算错。
+2. **修改前：**
+   ```python
+   # app/agents/timeline.py
+   today = date.today()
+   # app/web/routes.py edit-members
+   remaining = max(1, (fp.input.deadline - date.today()).days)
+   ```
+3. **修改后：**
+   ```python
+   # app/config.py 新增统一时区入口
+   APP_TZ_OFFSET = int(os.getenv("APP_TZ_OFFSET", "8"))
+   APP_TZ = timezone(timedelta(hours=APP_TZ_OFFSET))
+   def today() -> date:
+       return datetime.now(APP_TZ).date()
+   # app/agents/timeline.py
+   from app import config
+   today = config.today()
+   # app/web/routes.py
+   from app import config
+   remaining = max(1, (fp.input.deadline - config.today()).days)
+   ```
+4. **为什么这样改：** 排期是按"天"粒度做工作日计算的，"今天"错一天意味着起始日、浮动天数、延期判定全错。集中到 config.today() 后，本地与云端行为一致；main.py 启动时调用 configure_timezone() 在 Linux 上 tzset 进一步对齐。
+5. **收益：**
+   - 本地开发（东八区）与 Render（UTC）排期结果一致。
+   - 跨日临界时段不再误判截止日期剩余天数。
+
+---
+
+### 健壮性提升（P1）
+
+#### 4. B4：reflection 排序用 dict 直接索引，LLM 返回未知 level 时 KeyError
+
+1. **问题：** 改进优先级排序用 `{"error":0,"warning":1,"suggestion":2}[x.level]` 直接索引，level 取值由 LLM 产出，若返回了列表外的值（如 "info"）会抛 KeyError 中断 reflection。
+2. **修改前：**
+   ```python
+   for issue in sorted(issues, key=lambda x: {"error": 0, "warning": 1, "suggestion": 2}[x.level]):
+   ```
+3. **修改后：**
+   ```python
+   for issue in sorted(issues, key=lambda x: {"error": 0, "warning": 1, "suggestion": 2}.get(x.level, 3)):
+   ```
+4. **为什么这样改：** LLM 自由文本字段绝不能当作有限枚举做硬索引。.get(...,3) 把未知 level 统一排到最后，既不崩也不打乱已知优先级。
+5. **收益：**
+   - reflection 对 LLM 的非常规 level 输出容错。
+   - 未知级别自动降级到最低优先级，不影响 error/warning 排序。
+
+#### 5. B5：_normalize_task_objs 把 custom_stage 写死 None，丢失 LLM 输出的自定义阶段
+
+1. **问题：** 即使 LLM 正确返回了 custom_stage，归一化时仍写死 `None`，自定义阶段名称永远进不到 plan。
+2. **修改前：**
+   ```python
+   stage_mapping = {"前期":"准备", "准备":"准备", ...}  # 无"自定义"
+   ...
+   "custom_stage": None,
+   ```
+3. **修改后：**
+   ```python
+   stage_mapping = {..., "自定义":"自定义"}  # 补映射
+   ...
+   "custom_stage": str(item.get("custom_stage", "")) or None if stage == "自定义" else None,
+   ```
+4. **为什么这样改：** 阶段映射表缺"自定义"导致 stage 直接被兜底成"执行"；custom_stage 又被写死 None，双重丢失。补映射 + 按需透传后，前端填的自定义阶段才能贯穿到后端。
+5. **收益：**
+   - 自定义阶段任务在前后端一致传递。
+   - 阶段标签归一化覆盖了"自定义"这一合法取值。
+
+#### 6. /run 链路未回填负责人，风险分析/导出拿不到负责人
+
+1. **问题：** confirm（手动分工）链路会回填 assignee_id/collaborator_ids 到 plan.tasks，但 /run（自动）链路没有，导致自动生成的报告和导出文档里负责人缺失。
+2. **修改前：**
+   ```python
+   qa_matrix = self._step_matcher(plan, inp.members)
+   # 直接进入 Timeline，未回填负责人到 plan.tasks
+   timeline = self._step_timeline(plan, ...)
+   ```
+3. **修改后：**
+   ```python
+   qa_matrix = self._step_matcher(plan, inp.members)
+   by_task = {a.task_id: a for a in qa_matrix.assignments}
+   plan = plan.model_copy(update={"tasks": [
+       t.model_copy(update={
+           "assignee_id": by_task[t.id].presenter if t.id in by_task else None,
+           "collaborator_ids": (
+               ([by_task[t.id].qa_primary] if by_task[t.id].qa_primary else [])
+               + list(by_task[t.id].qa_support or [])) if t.id in by_task else []
+       }) for t in plan.tasks]})
+   timeline = self._step_timeline(plan, ...)
+   ```
+4. **为什么这样改：** 两条主链路（自动 /run、手动 confirm）应保证 plan.tasks 的负责人字段一致，否则依赖该字段的下游（风险、导出、前端列表）在自动链路下会静默缺数据。
+5. **收益：**
+   - 自动生成方案时导出文档与报告正确显示负责人。
+   - 两条链路的 plan 数据结构对齐。
+
+#### 7. /run 链路风险提示不一致：reporter 失败时只剩裸 message，且不调 _build_risk_note
+
+1. **问题：** confirm 链路用确定性 _build_risk_note 生成风险，但 /run 链路 reporter 成功时不覆盖风险、失败时只塞 message，两条链路风险质量不对齐。
+2. **修改前：**
+   ```python
+   if isinstance(report, AgentError):
+       report = ReportOutput(summary="Report generation failed.", risk_note=report.message)
+   ```
+3. **修改后：**
+   ```python
+   risk_note = self._build_risk_note(plan, timeline, qa_matrix, inp.members, inp.deadline)
+   if isinstance(report, AgentError):
+       report = ReportOutput(summary=plan.summary, timeline_section=...,
+                             qa_matrix_section=..., risk_note=risk_note)
+   else:
+       report = report.model_copy(update={"risk_note": risk_note})
+   ```
+4. **为什么这样改：** 风险提示是用户最关心的报告字段之一，必须两条链路都用同一份确定性分析，而不是一条依赖 LLM 一条兜底。同时 _build_risk_note 增加 deadline 参数，让它用真实截止日而非 plan.input.deadline 推断。
+5. **收益：**
+   - 自动与手动链路风险提示同源、同质。
+   - reporter 失败时仍给出基于真实数据的可读报告而非 "failed" 占位。
+
+#### 8. _build_risk_note 延期判定用 datetime.now() 且默认 deadline 为 None，跨时区/缺字段时误判
+
+1. **问题：** 延期判定依赖 plan.input.deadline（自动链路此时可能没回填）且用 datetime.now()（UTC 偏移），逻辑脆弱。
+2. **修改前：**
+   ```python
+   deadline = plan.input.deadline if hasattr(plan, 'input') else None
+   ...
+   deadline_date = datetime.fromisoformat(str(deadline)[:10])
+   if timeline.total_days > (deadline_date - datetime.now()).days: ...
+   ```
+3. **修改后：**
+   ```python
+   def _build_risk_note(plan, timeline, qa_matrix, members, deadline=None) -> str:
+       ...
+       if deadline and timeline.total_days > 0:
+           from app.config import today as _today
+           remaining_days = max(0, (deadline - _today()).days)
+           if timeline.total_days > remaining_days: ...
+   ```
+4. **为什么这样改：** deadline 改为由调用方显式传入（两条链路都传 req.input.deadline），避免依赖 plan.input 这种不可靠来源；日期比较统一用 config.today()，消除时区偏移。
+5. **收益：**
+   - 延期判定不再因时区或字段缺失误报。
+   - remaining_days 有 max(0,…) 下限，过期项目不会再算出负天数。
+
+#### 9. recompute 状态切换时风险提示不更新，沿用旧值
+
+1. **问题：** 标记任务完成/阻塞后调 /recompute，报告的 risk_note 直接复用 req.report.risk_note，状态变了风险却没重算。
+2. **修改前：**
+   ```python
+   report = req.report.model_copy(update={..., "risk_note": req.report.risk_note})
+   ```
+3. **修改后：**
+   ```python
+   risk_note = Coordinator._build_risk_note(plan, timeline, qa_matrix, members, req.input.deadline)
+   report = req.report.model_copy(update={..., "risk_note": risk_note})
+   ```
+4. **为什么这样改：** 状态切换会改变剩余工时和负载，风险提示必须随之刷新，否则用户看到的预警与实际状态脱节。
+5. **收益：**
+   - 每次状态切换后风险提示反映最新进度。
+   - 与其它链路共用同一个 _build_risk_note，口径统一。
+
+#### 10. 13 个 async def 端点内无 await，async/IO 线程占用浪费
+
+1. **问题：** routes.py 中 13 个端点声明为 async def 但函数体没有 await，FastAPI 会把它们放进主事件循环，阻塞型调用会卡住整个 API。
+2. **修改前：**
+   ```python
+   @router.post("/draft", response_model=DraftResponse)
+   async def create_draft(req: DraftRequest): ...
+   ```
+3. **修改后：**
+   ```python
+   @router.post("/draft", response_model=DraftResponse)
+   def create_draft(req: DraftRequest): ...
+   ```
+4. **为什么这样改：** 没有 await 的端点应声明为普通 def，FastAPI 会自动放到线程池，避免阻塞事件循环。/chat 是唯一真正 await(asyncio.wait_for) 的，保留 async。
+5. **收益：**
+   - 消除事件循环阻塞风险，并发吞吐更稳。
+   - async 只留给真正异步的 /chat，语义更准确。
+
+#### 11. planner 把 status 设成字符串 "pending"，与枚举不一致
+
+1. **问题：** 新任务强制归零时用字符串 "pending"，而 schema 定义了 TaskStatus 枚举，类型不一致可能在序列化/比较时出问题。
+2. **修改前：**
+   ```python
+   result = result.model_copy(update={
+       "tasks": [t.model_copy(update={"status": "pending"}) for t in result.tasks]})
+   ```
+3. **修改后：**
+   ```python
+   from app.models.schemas import ..., TaskStatus
+   result = result.model_copy(update={
+       "tasks": [t.model_copy(update={"status": TaskStatus.pending}) for t in result.tasks]})
+   ```
+4. **为什么这样改：** status 字段类型是枚举，赋值就该用枚举成员，保证类型一致性。
+5. **收益：**
+   - 与 schema 类型契约一致，避免隐式转换隐患。
+
+---
+
+### 体验优化（P2）
+
+#### 12. R3：看板协助工时统计只按 0.15 系数，与后端评分的主协助/辅助协助系数不符
+
+1. **问题：** 后端评分里主要协助(qa_primary)按 0.3、辅助协助(qa_support)按 0.15 计入负载，但前端 assistGroups 把所有协助任务都按 0.15 统计，看板显示的工时与实际负载对不上。
+2. **修改前：**
+   ```js
+   // 协助任务统一 push(task)，统计用 *0.15
+   assistGroups[cn].push(task)
+   var assistH=assistGroups[owner].reduce(function(sum,task){return sum+task.estimated_hours*0.15},0);
+   ```
+3. **修改后：**
+   ```js
+   // 区分主要协助/辅助协助，统计分别用 0.3/0.15
+   assistGroups[qa.qa_primary].push({task:task,type:'primary'});
+   assistGroups[s].push({task:task,type:'support'});
+   var assistH=assistGroups[owner].reduce(function(sum,item){return sum+item.task.estimated_hours*(item.type==='primary'?0.3:0.15)},0);
+   ```
+4. **为什么这样改：** 看板工时应反映后端真实的负载口径，否则用户看到的"某人 N h"与系统判定超载/均衡的标准不一致，误导手动调整。
+5. **收益：**
+   - 看板协助工时与后端负载算法口径一致。
+   - 主要协助与辅助协助在卡片上有区分（"主要协助"/"协助"）。
+
+#### 13. bindBoard 选择器把协助卡也绑了拖拽，拖拽异常
+
+1. **问题：** R3 之前 .assignment-card 同时匹配主任务卡和协助卡，给协助卡也绑了拖拽和 onchange，协助卡没有 owner-select/collaborator-btn 会报错或行为错乱。
+2. **修改前：**
+   ```js
+   document.querySelectorAll('.assignment-card').forEach(function(card){...})
+   ```
+3. **修改后：**
+   ```js
+   document.querySelectorAll('.assignment-card:not(.assist-card)').forEach(function(card){...})
+   // 并对 owner-select/collaborator-btn 做 null 判断
+   ```
+4. **为什么这样改：** 协助卡只是展示，不应可拖拽、无负责人下拉。用 :not(.assist-card) 精确匹配主任务卡，并对可选元素 null 判断防崩。
+5. **收益：**
+   - 拖拽只作用于主任务卡，协助卡不再误绑。
+   - 拖拽时设置 effectAllowed/dropEffect，拖拽手感和可见性更正常。
+
+#### 14. 成员变动后回看板，"恢复自动分工"恢复的是变更前的旧分工
+
+1. **问题：** edit-members 重算后的方案没有更新 state.automatic，用户再点"恢复自动分工"会回到成员变动前的分工，与新成员集不匹配。
+2. **修改前：**
+   ```js
+   state.plan=await jsonRequest('/api/edit-members',{...});
+   showNotice('成员已更新...');renderBoard();setView('board',3)
+   ```
+3. **修改后：**
+   ```js
+   state.plan=await jsonRequest('/api/edit-members',{...});
+   state.automatic=JSON.parse(JSON.stringify(state.plan));  // 新基线
+   showNotice('成员已更新...');renderBoard();setView('board',3)
+   ```
+4. **为什么这样改：** state.automatic 是"恢复自动分工"的基准，成员变动后基准必须是新成员集重算的结果，否则恢复出一个针对旧成员的方案。
+5. **收益：**
+   - 成员变动后恢复自动分工得到的是针对当前成员的正确分工。
+   - 与 confirmDraft 的基线更新逻辑对齐。
+
+#### 15. 合并任务不校验勾选数量，0/1 项也发请求
+
+1. **问题：** 点"合并任务"时不校验勾选数，勾选不足 2 项也发 merge 请求，后端报错体验差。
+2. **修改前：**
+   ```js
+   el('mergeTaskBtn').onclick=function(){var ids=...;syncDraft().then(function(){return mutateDraft([{op:'merge',task_ids:ids}])})...}
+   ```
+3. **修改后：**
+   ```js
+   el('mergeTaskBtn').onclick=function(){var ids=...;if(ids.length<2){showNotice('请至少勾选两项任务再合并','info');return}syncDraft().then(...)...}
+   ```
+4. **为什么这样改：** 合并至少需要 2 个任务，前端预拦截比后端报错更友好。
+5. **收益：**
+   - 避免无效请求，提示明确。
+
+#### 16. "返回拆解"按钮回错视图，从结果页回看板跳到了草案页
+
+1. **问题：** backBoardBtn 应该回到看板视图，但实现是 setView('draft',2)，从手动调整页返回时跑到了草案编辑页。
+2. **修改前：**
+   ```js
+   el('backBoardBtn').onclick=function(){setView('draft',2)}
+   ```
+3. **修改后：**
+   ```js
+   el('backBoardBtn').onclick=function(){renderBoard();setView('board',3)}
+   ```
+4. **为什么这样改：** 按钮语义是回到分工看板，必须先 renderBoard 刷新数据再切到 board 视图。
+5. **收益：**
+   - 返回按钮行为与名称一致。
+
+#### 17. REPORTER 提示词自相矛盾：先全禁星号又要求表格用 Markdown
+
+1. **问题：** 提示词要求"禁止 Markdown 星号""不要用 **"，但风险字段前端用 renderMd 渲染需要粗体，自相矛盾导致 risk_note 风险类型无法加粗。
+2. **修改前：**
+   ```
+   ## 重要：输出纯文本，禁止 Markdown 星号
+   所有字段输出纯文本。不要使用 ** 加粗...
+   ```
+3. **修改后：**
+   ```
+   ## 重要：格式要求
+   - risk_note 字段可以用 **粗体** 标注风险类型（前端会渲染）
+   - 其他字段尽量用纯文本，避免星号
+   ```
+4. **为什么这样改：** risk_note 经 renderMd 渲染，粗体能让风险类型醒目；其它字段确实不需要星号。按字段区分而非一刀切。
+5. **收益：**
+   - 风险提示的加粗在前端正常生效。
+   - 提示词不再自相矛盾。
+
+#### 18. AI 协作助手把写给大模型的内部约束转述给用户
+
+1. **问题：** 系统提示词里"你没有负载均衡完整数据，不要自己重新推荐分工方案——只会导致不均衡"这种否定式元指令，被模型外化成对用户的警告"不建议你手动重新分工，否则打破负载均衡"，且助手只死抠技能标签（如称李四不能写报告，无视其"文学素养"综合能力）。
+2. **修改前：**
+   ```python
+   "你是项目协作助手...你没有负载均衡的完整数据，所以不要自己重新推荐分工方案——那只会导致不均衡。\n"
+   "1. 像和用户聊天一样自然，不要说'不建议你手动重新分工'这类元话术。..."
+   ```
+3. **修改后：**
+   ```python
+   "你是项目协作助手，像一个懂项目管理的同事...\n"
+   "【仅供你判断，绝不写进回答】\n"
+   "- 当前分工综合考虑了多个因素...判断成员是否适合，要看他完整的能力描述，别只逐个比对技能标签——比如'文学素养''沟通协调''擅长规划'对应文字/沟通/组织类任务都合理。\n"
+   "【你该聊什么】整体观察、关键路径、交接压力...\n"
+   "【绝对不要出现在回答里】'不建议手动重新分工'...内部术语...'谁该做什么'的重新分配清单..."
+   ```
+4. **为什么这样改：** 否定式内部约束（"不要重新规划"）极易被模型转述给用户。改用正面定位（"你的角色是帮用户看清现状"）+ 独立的"绝对不要出现"清单封死所有劝阻/术语/重新分配变体，并强调综合能力而非逐标签比对，从写法上根除外化。
+5. **收益：**
+   - 助手不再对用户说教"不要手动分工"。
+   - 不再死板逐标签匹配，承认综合能力的合理承接。
+   - 不向用户暴露"多因子算法/负载均衡"等内部术语。
+
+#### 19. AI 协作助手超时 20s 太短，正常推理常被截断
+
+1. **问题：** project_chat 超时 20 秒，复杂方案分析常超时，用户被迫中断。
+2. **修改前：**
+   ```python
+   timeout=20
+   ...
+   return {"reply": "AI 响应超过 20 秒。..."}
+   ```
+3. **修改后：**
+   ```python
+   timeout=40
+   ...
+   return {"reply": "AI 响应超过 40 秒。..."}
+   ```
+4. **为什么这样改：** 复杂方案的上下文+推理普遍需要 20-35s，提到 40s 兼顾响应性与完整度，前端等待提示同步改为 40s 保持一致。
+5. **收益：**
+   - 减少正常分析被误截断。
+   - 前后端超时口径一致，不再"后端40s前端提示20s"。
+
+---
+
+### 打磨（P3）
+
+#### 20. client.py 截断重试分支有 continue 后的死代码
+
+1. **问题：** 截断重试的 `continue` 之后还有 `logger.info(...)` 和 `raise`，永远不会执行。
+2. **修改前：**
+   ```python
+   continue
+   logger.info("=== LLM Plain Response End ===")
+   raise
+   ```
+3. **修改后：** 删除 continue 之后的不可达行。
+4. **为什么这样改：** continue 之后的语句不可达，是误导性死代码。
+5. **收益：** 消除死代码，控制流清晰。
+
+#### 21. qingxiaoda.py 残留调试代码：max_tokens==1 时返回 "好"
+
+1. **问题：** _render_plan 里有调试用的 `if max_tokens == 1: return "好"`，会污染正常调用。
+2. **修改前：**
+   ```python
+   def _render_plan(text, max_tokens):
+       if max_tokens == 1:
+           return "好"
+   ```
+3. **修改后：** 删除该调试分支。
+4. **为什么这样改：** 调试代码不应留在生产路径。
+5. **收益：** 清理调试残留，test_qingxiaoda 预期同步更新为完整欢迎语。
+
+#### 22. interview_sim 用 re.sub(r'QA',...) 会误伤 Q&A
+
+1. **问题：** 裸 `QA` 替换会命中 "Q&A" 等含 QA 子串的词。
+2. **修改前：**
+   ```python
+   result = re.sub(r'QA', '协作', result)
+   ```
+3. **修改后：**
+   ```python
+   result = re.sub(r'\bQA\b', '协作', result)
+   ```
+4. **为什么这样改：** 只应整词替换 QA，\b 词边界避免误伤。
+5. **收益：** 不再误改含 QA 的其它词。
+
+#### 23. timeline work_offset 整除丢半工作日精度
+
+1. **问题：** `es[tid] // 2` 对奇数会丢 0.5 工作日，影响起排日精度。
+2. **修改前：**
+   ```python
+   work_offset = es[tid] // 2
+   ```
+3. **修改后：**
+   ```python
+   work_offset = round(es[tid] / 2)
+   ```
+4. **为什么这样改：** round 四舍五入保留半工作日粒度，比整除更接近真实排期。
+5. **收益：** 起排日更贴合半日工期。
+
+#### 24. exporters.py PDF 中文渲染在 Linux 无中文字体时报错
+
+1. **问题：** Render(Linux) 上若无系统中文字体，_register_cjk_font 返回 None，PDF 中文方块。
+2. **修改前：**
+   ```python
+   return None
+   ```
+3. **修改后：**
+   ```python
+   try:
+       from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+       pdfmetrics.registerFont(UnicodeCIDFont('STSong-Light'))
+       return 'STSong-Light'
+   except Exception:
+       return None
+   ```
+4. **为什么这样改：** reportlab 自带 STSong-Light CID 字体作为兜底，在系统字体缺失时仍能渲染中文。
+5. **收益：** Render 等 Linux 环境导出 PDF 不再出现中文方块。
+
+#### 25. 版本号、CI、文档同步
+
+1. **问题：** 多处版本号/测试基线停留在旧值。
+2. **修改前/后：** main.py 版本 4.9→5.6、schemas.py FullPlan.version 4.9→5.6、index.html 静态资源版本号→5.6.0、AGENTS.md 测试基线 "45 passed"→"118 passed"、test.yml 移除 --ignore=test_reflection.py 跑全量、test_timeline 用 config.today mock、test_qingxiaoda 更新预期。
+3. **为什么这样改：** 文档/版本号/CI 与代码实际状态对齐。
+4. **收益：** CI 跑全量 118 测试，基线一致。
+
+### 队友改动说明
+
+本版本基于 workbuddy 第二轮审查清单逐条核实修复；其中"恢复自动分工基线"与"看板协助工时系数"两个 bug 为用户实测发现，本轮一并修复。CHANGELOG 文件本身此前被以 UTF-16 误重写，本轮已恢复为 UTF-8(与 HEAD 一致)并补全 v5.7 章节。
+
+
 ## v5.6 —— 成员变动后分工失衡 + 导出与报告问题修复（2026-07-30）
 
 **定位：** 修复成员变动后重算分工严重失衡的根因，同步修复 PDF 表格溢出和风险提示过于简略。
@@ -3761,4 +4245,5 @@ LLM 负责"创造性"：拆任务、分配角色、写报告
 | **v5.4** | **DeepSeek 超时根因修复 + 推理模型容错加固** | **已完成** |
 | **v5.5** | **新增成员零工时修复 + 任务分工术语清理** | **已完成** |
 | **v5.6** | **成员变动后分工失衡 + 导出与报告问题修复** | **已完成** |
+| **v5.7** | **第二轮深度审查全量修复 + AI 协作助手体验重写** | **已完成** |
 | v6.x | 正式发布与功能扩展 | 规划中 |

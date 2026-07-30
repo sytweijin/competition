@@ -1,4 +1,4 @@
-"""
+﻿"""
 ===== 第 0 步：JSON 接口契约 =====
 这是整个项目的核心——所有 Agent 的输入/输出格式在此定义。
 A / C 在并行开发前必须先看此文件。
@@ -90,7 +90,7 @@ class SubTask(BaseModel):
     id: str = Field(description="唯一标识，如 T1, T2")
     name: str
     description: str = ""
-    estimated_hours: float = Field(default=0.0, description="预估工时（人时）")
+    estimated_hours: float = Field(default=2.0, description="预估工时（人时）")
     estimate_min_hours: Optional[float] = Field(
         default=None, description="知识库建议工时下限")
     estimate_max_hours: Optional[float] = Field(
@@ -236,7 +236,7 @@ class FullPlan(BaseModel):
     qa_matrix: QAOutput
     report: ReportOutput
     reflection: Optional[ReflectionOutput] = Field(default=None, description="Reflection Agent 的自我审查结果")
-    version: str = "4.9"
+    version: str = "5.6"
 
 
 class DraftRequest(BaseModel):

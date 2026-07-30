@@ -1,4 +1,4 @@
-"""清小搭广场 OpenAI 兼容协议适配层。
+﻿"""清小搭广场 OpenAI 兼容协议适配层。
 
 只负责协议、鉴权和自然语言入口；任务拆解、分工与排期继续复用
 Project Service，避免网页与清小搭出现两套业务规则。
@@ -174,8 +174,6 @@ def _looks_like_project_request(text: str) -> bool:
 
 
 def _render_plan(text: str, max_tokens: int | None) -> str:
-    if max_tokens == 1:
-        return "好"
     if not _looks_like_project_request(text):
         return (
             "你好，我是协作分工智能体。请告诉我项目名称、目标、团队成员及技能、"

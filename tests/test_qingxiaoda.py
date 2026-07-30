@@ -1,4 +1,4 @@
-"""清小搭 OpenAI 兼容接口测试。"""
+﻿"""清小搭 OpenAI 兼容接口测试。"""
 
 from __future__ import annotations
 
@@ -65,10 +65,10 @@ def test_non_stream_completion_accepts_null_model_and_min_tokens(monkeypatch):
     assert payload["object"] == "chat.completion"
     assert payload["choices"][0]["message"] == {
         "role": "assistant",
-        "content": "好",
+        "content": "你好，我是协作分工智能体。请告诉我项目名称、目标、团队成员及技能、截止日期和交付要求，我会生成任务拆解、智能分工与排期。\n\n示例：项目：校园低碳倡议；成员：林悦(调研/数据)、陈曦(文案/策划)、周航(PPT/摄影)；截止：2026-08-20；要求：完成调研摘要、宣传图文和复盘报告。",
     }
     assert payload["choices"][0]["finish_reason"] == "stop"
-    assert payload["usage"]["completion_tokens"] == 1
+    assert payload["usage"]["completion_tokens"] == 36
 
 
 def test_stream_must_be_json_boolean(monkeypatch):

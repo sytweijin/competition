@@ -53,6 +53,19 @@ class Coordinator:
         # Step 2: Matcher（B3：LLM + 确定性评分兜底）
         qa_matrix = self._step_matcher(plan, inp.members)
 
+        # 回填负责人到 plan tasks（与 confirm 路径一致），让风险分析、
+        # 前端任务列表和导出文档都能正确显示负责人
+        by_task = {a.task_id: a for a in qa_matrix.assignments}
+        plan = plan.model_copy(update={"tasks": [
+            t.model_copy(update={
+                "assignee_id": by_task[t.id].presenter if t.id in by_task else None,
+                "collaborator_ids": (
+                    ([by_task[t.id].qa_primary] if by_task[t.id].qa_primary else [])
+                    + list(by_task[t.id].qa_support or [])
+                ) if t.id in by_task else []
+            }) for t in plan.tasks
+        ]})
+
         # Step 3: Timeline（回填 QA 矩阵的负责人，传入成员信息）
         timeline = self._step_timeline(plan, inp.deadline.isoformat(), qa_matrix, inp.members)
         if isinstance(timeline, AgentError):
@@ -62,13 +75,21 @@ class Coordinator:
                                       total_days=0,
                                       note="Timeline failed: " + timeline.message)
 
-        # Step 4: Reporter
+        # Step 4: Reporter — LLM 生成报告正文，风险提示统一用确定性分析
+        # （与 confirm 路径一致，保证两条主链路的风险质量对齐）
         report = self._step_reporter(plan, timeline, qa_matrix)
+        risk_note = self._build_risk_note(
+            plan, timeline, qa_matrix, inp.members, inp.deadline)
         if isinstance(report, AgentError):
             report = ReportOutput(
-                summary="Report generation failed.",
-                risk_note=report.message,
+                summary=plan.summary,
+                timeline_section=f"共 {len(timeline.tasks)} 项排期，总工期 {timeline.total_days} 天。",
+                qa_matrix_section="\n".join(
+                    f"{a.task_name}：{a.presenter}" for a in qa_matrix.assignments),
+                risk_note=risk_note,
             )
+        else:
+            report = report.model_copy(update={"risk_note": risk_note})
 
         # Step 5: Reflection（C4）
         total_capacity = sum(m.available_hours for m in inp.members)
@@ -118,7 +139,7 @@ class Coordinator:
             qa_matrix_section="\n".join(
                 f"{a.task_name}：{a.presenter}（{a.reasoning}）"
                 for a in qa_matrix.assignments),
-            risk_note=self._build_risk_note(plan, timeline, qa_matrix, inp.members),
+            risk_note=self._build_risk_note(plan, timeline, qa_matrix, inp.members, inp.deadline),
         )
         by_task = {a.task_id: a for a in qa_matrix.assignments}
         assigned_tasks = [
@@ -142,7 +163,7 @@ class Coordinator:
 
 
     @staticmethod
-    def _build_risk_note(plan, timeline, qa_matrix, members) -> str:
+    def _build_risk_note(plan, timeline, qa_matrix, members, deadline=None) -> str:
         """生成详细的风险提示"""
         risks = []
         
@@ -193,15 +214,13 @@ class Coordinator:
         if timeline.total_days == 0 and timeline.tasks:
             risks.append('- **时间线计算异常**：总工期为 0 天，请检查任务依赖关系')
         
-        deadline = plan.input.deadline if hasattr(plan, 'input') else None
         if deadline and timeline.total_days > 0:
-            from datetime import datetime
-            try:
-                deadline_date = datetime.fromisoformat(str(deadline)[:10])
-                if timeline.total_days > (deadline_date - datetime.now()).days:
-                    risks.append(f'- **可能延期**：预估工期 {timeline.total_days} 天，超过截止日期剩余天数')
-            except:
-                pass
+            from app.config import today as _today
+            remaining_days = max(0, (deadline - _today()).days)
+            if timeline.total_days > remaining_days:
+                risks.append(
+                    f'- **可能延期**：预估工期 {timeline.total_days} 工作日，'
+                    f'超过截止日期剩余 {remaining_days} 天')
         
         if not risks:
             return '当前方案整体风险较低，建议关注任务执行过程中的突发情况。'

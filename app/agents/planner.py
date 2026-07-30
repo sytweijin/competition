@@ -8,7 +8,7 @@ from __future__ import annotations
 from app.agents.base import BaseAgent
 from app.agents.validation import PlanValidationError, validate_plan
 from app.llm.prompts import PLANNER_SYSTEM, PLANNER_USER_TEMPLATE
-from app.models.schemas import AgentError, PlanOutput
+from app.models.schemas import AgentError, PlanOutput, TaskStatus
 
 
 class PlannerAgent(BaseAgent[PlanOutput]):
@@ -32,7 +32,7 @@ class PlannerAgent(BaseAgent[PlanOutput]):
         # 新生成的任务一律从「待开始」起步：LLM 偶发把 status 写成 completed/in_progress，
         # 会导致任务一出生就被标成已完成，这里强制归零。
         result = result.model_copy(update={
-            "tasks": [t.model_copy(update={"status": "pending"}) for t in result.tasks]
+            "tasks": [t.model_copy(update={"status": TaskStatus.pending}) for t in result.tasks]
         })
         # 兜底校验：去重 id、剔除悬空依赖、检测环
         try:

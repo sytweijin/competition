@@ -1,4 +1,4 @@
-"""
+﻿"""
 Timeline Agent
 负责人：B
 负责：倒排时间线 + 关键路径(CPM)计算。
@@ -18,6 +18,7 @@ from __future__ import annotations
 import math
 from collections import deque
 from datetime import date, datetime, timedelta
+from app import config
 
 from app.agents.base import BaseAgent
 from app.models.schemas import (
@@ -208,7 +209,7 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
 
         # 从截止日倒推起始日；若早于今天则改为从今天正排（避免排到过去）
         # P3-1: 使用工作日计算，跳过周末
-        today = date.today()
+        today = config.today()
         ideal_start = _sub_work_days(deadline_date, project_days - 1)
         forced_forward = ideal_start < today
         if forced_forward:
@@ -220,7 +221,7 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
         for tid in topo_order:
             t = task_map[tid]
             # P3-1: half-day 偏移转工作日偏移，跳过周末
-            work_offset = es[tid] // 2
+            work_offset = round(es[tid] / 2)
             s_date = datetime.combine(_add_work_days(start_base, work_offset), datetime.min.time())
             # 结束日 = 开始日 + 工期 - 1 个工作日
             dur_days = math.ceil(durations[tid] / 2)

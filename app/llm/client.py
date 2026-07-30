@@ -235,8 +235,6 @@ class LLMClient:
                     budget = min(32000, budget * 2)
                     logger.warning("Response truncated (length); retrying with budget=%d", budget)
                     continue
-                    logger.info("=== LLM Plain Response End ===")
-                    raise
         # 两次都失败（含一次截断重试）；抛出以走上层兜底。
         raise ValueError("LLM 返回的 JSON 经校验与本地修复均不可用（可能仍未完整）")
 
@@ -468,6 +466,7 @@ class LLMClient:
                 "前期": "准备", "准备": "准备", "实践前": "准备",
                 "中期": "执行", "执行": "执行", "实践中": "执行",
                 "后期": "收尾", "收尾": "收尾", "实践后": "收尾",
+                "自定义": "自定义",
             }
             stage = stage_mapping.get(stage_raw, "执行")
             people_raw = item.get(
@@ -487,7 +486,7 @@ class LLMClient:
                 "required_skills": skills,
                 "dependencies": [],
                 "execution_stage": stage,
-                "custom_stage": None,
+                "custom_stage": str(item.get("custom_stage", "")) or None if stage == "自定义" else None,
                 "start_date": None,
                 "end_date": None,
                 "suggested_people": max(1, min(10, people)),

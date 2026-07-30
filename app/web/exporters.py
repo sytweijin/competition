@@ -1,4 +1,4 @@
-"""
+﻿"""
 计划导出工具：将 FullPlan 转换为 Word(.docx) 和 PDF 格式。
 供 /api/export 端点调用，提供普通用户友好的可打印文档。
 """
@@ -206,7 +206,13 @@ def _register_cjk_font():
             return name
         except Exception:
             continue
-    return None
+    # ????? reportlab ??? CID ????????????
+    try:
+        from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+        pdfmetrics.registerFont(UnicodeCIDFont('STSong-Light'))
+        return 'STSong-Light'
+    except Exception:
+        return None
 
 
 def plan_to_docx(plan: FullPlan) -> bytes:

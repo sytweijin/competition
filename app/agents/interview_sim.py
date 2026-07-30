@@ -1,4 +1,4 @@
-"""
+﻿"""
 B1: 团队协作模拟 Agent（轻量）
 负责人：B（提交人）
 
@@ -61,7 +61,7 @@ class InterviewSimAgent(BaseAgent):
             for term in bans_zh:
                 result = result.replace(term, '')
             # 裸 "QA" 等遗留术语，整词替换为"协作"
-            result = re.sub(r'QA', '协作', result)
+            result = re.sub(r'\bQA\b', '协作', result)
             for term in bans_ascii:
                 result = re.sub(r'\b' + re.escape(term) + r'\b', '', result, flags=re.IGNORECASE)
             # Collapse multiple newlines

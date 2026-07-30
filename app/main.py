@@ -10,7 +10,9 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.config import APP_HOST, APP_PORT, BASE_DIR
+from app.config import APP_HOST, APP_PORT, BASE_DIR, configure_timezone
+
+configure_timezone()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -19,7 +21,7 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="协作分工智能体", version="4.9")
+app = FastAPI(title="协作分工智能体", version="5.6")
 
 # 全局异常处理器：意外错误不暴露代码堆栈，返回 JSON 错误信息
 _DEBUG = os.getenv("DEBUG", "").lower() in ("1", "true", "yes")
