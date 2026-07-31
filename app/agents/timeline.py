@@ -40,34 +40,37 @@ def _next_workday(d: date) -> date:
     return d
 
 
-def _add_work_days(start: date, days: int) -> date:
-    """从 start 前进 days 个工作日（跳过周末）。days >= 0。"""
+def _add_work_days(start: date, days: int, skip_dates: set[date] | None = None) -> date:
+    """从 start 前进 days 个工作日（跳过周末和 skip_dates 中的日期）。days >= 0。"""
+    skip_dates = skip_dates or set()
     d = start
     for _ in range(max(0, days)):
         d += timedelta(days=1)
-        while _is_weekend(d):
+        while _is_weekend(d) or d in skip_dates:
             d += timedelta(days=1)
     return d
 
 
-def _sub_work_days(end: date, days: int) -> date:
-    """从 end 后退 days 个工作日（跳过周末）。days >= 0。"""
+def _sub_work_days(end: date, days: int, skip_dates: set[date] | None = None) -> date:
+    """从 end 后退 days 个工作日（跳过周末和 skip_dates 中的日期）。days >= 0。"""
+    skip_dates = skip_dates or set()
     d = end
     for _ in range(max(0, days)):
         d -= timedelta(days=1)
-        while _is_weekend(d):
+        while _is_weekend(d) or d in skip_dates:
             d -= timedelta(days=1)
     return d
 
 
-def _count_work_days(start: date, end: date) -> int:
-    """计算 [start, end] 闭区间内的工作日数。"""
+def _count_work_days(start: date, end: date, skip_dates: set[date] | None = None) -> int:
+    """计算 [start, end] 闭区间内的工作日数（跳过周末和 skip_dates）。"""
+    skip_dates = skip_dates or set()
     if start > end:
         return 0
     count = 0
     d = start
     while d <= end:
-        if not _is_weekend(d):
+        if not _is_weekend(d) and d not in skip_dates:
             count += 1
         d += timedelta(days=1)
     return count
@@ -99,9 +102,12 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
 
         # 构建成员名→每日可用工时的映射
         member_daily: dict[str, float] = {}
+        # 构建成员名→不可用日期集合的映射
+        member_unavailable: dict[str, set[date]] = {}
         if members:
             for m in members:
                 member_daily[m.name] = max(0.5, m.daily_available_hours)
+                member_unavailable[m.name] = set(m.unavailable_dates or [])
 
         if member_daily:
             global_daily = sum(member_daily.values()) / len(member_daily)
@@ -220,12 +226,17 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
         timeline_tasks: list[TimelineTask] = []
         for tid in topo_order:
             t = task_map[tid]
-            # P3-1: half-day 偏移转工作日偏移，跳过周末
+            # 获取该任务负责人的不可用日期，排期时跳过
+            assigned_people = assignments.get(tid, [])
+            task_skip_dates: set[date] = set()
+            for person in assigned_people:
+                task_skip_dates |= member_unavailable.get(person, set())
+            # P3-1: half-day 偏移转工作日偏移，跳过周末和负责人不可用日
             work_offset = round(es[tid] / 2)
-            s_date = datetime.combine(_add_work_days(start_base, work_offset), datetime.min.time())
-            # 结束日 = 开始日 + 工期 - 1 个工作日
+            s_date = datetime.combine(_add_work_days(start_base, work_offset, task_skip_dates), datetime.min.time())
+            # 结束日 = 开始日 + 工期 - 1 个工作日（同样跳过负责人不可用日）
             dur_days = math.ceil(durations[tid] / 2)
-            e_date = datetime.combine(_add_work_days(s_date.date(), max(0, dur_days - 1)), datetime.min.time())
+            e_date = datetime.combine(_add_work_days(s_date.date(), max(0, dur_days - 1), task_skip_dates), datetime.min.time())
             timeline_tasks.append(TimelineTask(
                 task_id=tid,
                 name=t.name,
@@ -233,7 +244,7 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
                 end_date=e_date,
                 is_critical=(tid in critical),
                 float_days=math.ceil(max(0, float_time[tid]) / 2),
-                assigned_to=assignments.get(tid, []),
+                assigned_to=assigned_people,
                 status=t.status,
             ))
 

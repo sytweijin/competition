@@ -48,6 +48,18 @@ class TeamMember(BaseModel):
         description="每人每天可用工时（小时），用于时间线折算。现实中不同成员可用时间不同。",
     )
     available_stages: list[str] = Field(default_factory=list)
+    unavailable_dates: list[date] = Field(
+        default_factory=list,
+        description="成员不可用的具体日期（如考试、请假、其他安排）。排期时跳过这些日期。",
+    )
+    profile_mode: str = Field(
+        default="tags",
+        description="能力输入模式：'tags'（技能标签）或 'bio'（自然语言简介）。",
+    )
+    bio: str = Field(
+        default="",
+        description="成员能力简介（profile_mode='bio' 时使用）。自然语言描述成员擅长什么、经验、软技能等。",
+    )
     @field_validator('available_hours', 'daily_available_hours')
     @classmethod
     def _clamp_hours(cls, v: float) -> float:

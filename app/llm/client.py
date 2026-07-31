@@ -547,3 +547,35 @@ class LLMClient:
                 message=str(e),
                 recoverable=(err_type not in ("auth_error",)),
             )
+
+    def chat_messages(
+        self,
+        system_prompt: str,
+        messages: list[dict],
+        temperature: float = 0.7,
+    ) -> str | AgentError:
+        """多轮对话调用（用于 AI 调整建议等需要记忆的场景）。
+
+        messages 为 [{role:'user'|'assistant', content:'...'}] 列表，
+        方法内部自动在头部插入 system prompt。
+        """
+        if not self._enabled:
+            return AgentError(agent="LLMClient", error_type="auth_error", message="LLM_API_KEY 未配置，跳过调用", recoverable=False)
+        try:
+            full_messages = [{"role": "system", "content": system_prompt}] + messages
+            resp = self._client.chat.completions.create(
+                model=self.model,
+                messages=full_messages,
+                temperature=temperature,
+                timeout=LLM_TIMEOUT,
+            )
+            return resp.choices[0].message.content or ""
+        except Exception as e:
+            err_type = _classify_error(e)
+            logger.error("LLM messages call failed (%s): %s", err_type, e)
+            return AgentError(
+                agent="LLMClient",
+                error_type=err_type,
+                message=str(e),
+                recoverable=(err_type not in ("auth_error",)),
+            )

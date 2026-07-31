@@ -106,7 +106,12 @@ class Coordinator:
         )
 
     def draft(self, inp: AssignmentInput) -> PlanOutput:
-        """仅生成任务拆解，严格不触发 Matcher/Timeline/Reporter。"""
+        """仅生成任务拆解，严格不触发 Matcher/Timeline/Reporter。
+
+        顺序 B：Planner 已直接给出 assignee_id（基于成员能力拆任务），
+        草案阶段保留这些分配，让用户在确认前就能看到"谁负责什么"。
+        用户可在草案编辑界面调整 assignee_id，确认后由 Matcher 做负载均衡微调。
+        """
         plan = self._step_planner(inp)
         if isinstance(plan, AgentError):
             plan = self._fallback_plan(inp, plan.message)
@@ -116,19 +121,22 @@ class Coordinator:
         tasks = []
         for index, task in enumerate(plan.tasks, 1):
             stage = task.execution_stage or "执行"
+            # 保留 Planner 给的 assignee_id（顺序 B）；LLM 未给则为 None
             tasks.append(task.model_copy(update={
                 "order": task.order or index,
                 "start_date": task.start_date or start,
                 "end_date": task.end_date or end,
                 "execution_stage": stage,
-                "assignee_id": None,
-                "collaborator_ids": [],
             }))
         return plan.model_copy(update={"tasks": tasks})
 
     def confirm(self, inp: AssignmentInput, plan: PlanOutput) -> FullPlan:
-        """用户确认任务草案后，才执行自动分工、排期与报告。"""
-        # 确认阶段使用可解释的确定性评分，避免 Matcher + Reporter 两次串行 LLM 等待。
+        """用户确认任务草案后，执行自动分工、排期与报告。
+
+        顺序 B：Planner 已在拆任务时给出 assignee_id（基于成员能力），
+        confirm 阶段用 assign_with_balance 做负载均衡微调——
+        保留 Planner 的初始分配，只在负载严重不均时搬运负责人。
+        """
         qa_matrix = assign_with_balance(plan, inp.members)
         timeline = self._step_timeline(plan, inp.deadline.isoformat(), qa_matrix, inp.members)
         if isinstance(timeline, AgentError):
@@ -229,12 +237,20 @@ class Coordinator:
 
     def _step_planner(self, inp: AssignmentInput) -> PlanOutput | AgentError:
         # 为 Planner 提供丰富的成员信息（含技能和可用工时）
-        members = [
-            f"{m.name}(技能: {format_skills_for_prompt(m.skill_tags)}; "
-            f"总可用: {m.available_hours}h; "
-            f"每日可用: {m.daily_available_hours}h)"
-            for m in inp.members
-        ]
+        # 顺序 B：让 Planner 看着成员能力拆任务，并直接给出 assignee_id
+        # 双输入模式：tags 模式用技能标签，bio 模式用自然语言简介
+        members = []
+        for m in inp.members:
+            if m.profile_mode == "bio" and m.bio:
+                members.append(
+                    f"{m.name}(简介: {m.bio}; "
+                    f"总可用: {m.available_hours}h; "
+                    f"每日可用: {m.daily_available_hours}h)")
+            else:
+                members.append(
+                    f"{m.name}(技能: {format_skills_for_prompt(m.skill_tags)}; "
+                    f"总可用: {m.available_hours}h; "
+                    f"每日可用: {m.daily_available_hours}h)")
         extracted = _format_requirement_analysis(
             inp.requirement_analysis, inp.uploaded_files)
         extra = "\n".join(

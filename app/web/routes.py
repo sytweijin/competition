@@ -93,11 +93,21 @@ def workload(req: FullPlan):
     return workload_snapshot(req)
 
 
+class ChatMessage(BaseModel):
+    """单条对话消息（多轮记忆用）。"""
+    role: str = Field(..., description="user 或 assistant")
+    content: str = Field(..., description="消息内容")
+
+
 class ChatRequest(BaseModel):
     message: str
     plan: FullPlan | None = None
     draft: PlanOutput | None = None
     input: AssignmentInput | None = None
+    # 多轮记忆：前端维护的对话历史（最近 N 轮），每条 {role, content}
+    history: list[ChatMessage] | None = None
+    # 方案增量变更描述（自然语言），自上次 baseline 后累积的调整
+    delta: str | None = None
 
 
 def _build_chat_context(req: "ChatRequest") -> str:
@@ -147,28 +157,59 @@ def _build_chat_context(req: "ChatRequest") -> str:
 
 @router.post("/chat")
 async def project_chat(req: ChatRequest):
-    """基于当前方案回答用户的自然语言提问。"""
+    """基于当前方案回答用户的自然语言提问，支持多轮记忆。
+
+    记忆策略（前端配合）：
+    - 打开抽屉时前端做一次完整方案快照 baseline，作为首轮 user 消息喂给 LLM。
+    - 后续对话只传 history（最近 N 轮）+ delta（方案增量变更描述）+ message。
+    - 重新生成方案时前端清空 history 并重建 baseline。
+    """
     import asyncio
     from app.llm.client import LLMClient
     context = _build_chat_context(req)
+    system_prompt = (
+        "你是项目协作助手，像一个懂项目管理的同事，陪用户一起看当前的任务分工，自然、口语地聊天。\n\n"
+        "【仅供你判断，绝不写进回答】\n"
+        "- 当前分工综合考虑了多个因素，不只是技能标签是否对口：相关能力、各阶段负载是否均匀、成员可用工时、任务之间的串行依赖都参与了权衡。所以某项任务看起来技能标签不完全匹配，不代表分配有问题——可能那个阶段他工时充裕，或整体能力足以覆盖。\n"
+        "- 你看不到完整的负载与产能数据，所以你的定位是帮用户看清现状、指出值得留意的地方，而不是替用户拍板‘谁该做什么’。\n"
+        "- 判断成员是否适合某项任务，要看他完整的能力描述，别只逐个比对技能标签——比如‘文学素养’‘沟通协调’‘擅长规划’这类综合能力，对应到文字撰写、沟通、组织类任务都是合理的。\n\n"
+        "【你该聊什么】\n"
+        "- 整体观察最有用：工时分布是否均衡、关键路径上哪些任务串在一起、哪里有跨人交接、截止日期留没留余地。\n"
+        "- 用户问某项安排，可以客观说说特点（成员能力和任务的契合点、可能的压力，比如他连续承接多个任务），把判断权留给用户。\n"
+        "- 用户想自己调整就支持他：看板可以拖拽任务卡换负责人，也能一键‘恢复自动分工’。这是介绍功能，不是提醒或劝阻。\n\n"
+        "【绝对不要出现在回答里】\n"
+        "- ‘不建议你手动重新分工’‘请不要自己重新分工’‘否则会打破负载均衡’这类劝阻或警告的话——用户当然可以自己手动调整。\n"
+        "- ‘多因子算法’‘负载均衡’‘阶段负载’‘剩余产能’这些内部术语——它们只是你判断的依据，不要向用户解释。\n"
+        "- ‘谁应该接哪个任务’的重新分配清单——你手头没有完整的产能与依赖数据，自己另排反而容易失衡，所以只做分析、不做拍板。\n\n"
+        "【关于方案变更】\n"
+        "- 对话期间用户可能拖拽调整了任务负责人或工时，这些变更会以‘方案变更’的形式告诉你。你回答时应基于最新方案，若用户问的与变更相关，要体现出你知道变更内容。\n"
+        "- 若用户重新生成了方案，对话会重新开始，你不需要记得之前的方案。"
+    )
+
+    # 构造多轮 messages：baseline 作为首轮 user，后续 history，最后是本轮 message
+    messages: list[dict] = []
+    # 首轮：把完整方案快照作为 baseline 注入
+    baseline_text = f"【当前方案快照】\n{context}"
+    if req.delta:
+        baseline_text += f"\n\n【方案变更】\n{req.delta}"
+    messages.append({"role": "user", "content": baseline_text})
+    # 确认收到 baseline，让 LLM 进入对话状态
+    messages.append({"role": "assistant", "content": "好的，我已了解当前方案。你想让我重点看哪方面？工时分布、关键路径、还是某个成员的任务安排？"})
+    # 追加历史对话（跳过 baseline 那轮，因为它已注入）
+    if req.history:
+        for msg in req.history:
+            messages.append({"role": msg.role, "content": msg.content})
+    # 本轮用户消息
+    messages.append({"role": "user", "content": req.message})
+
     try:
         result = await asyncio.wait_for(
             asyncio.to_thread(
-                LLMClient.get_shared().chat_text,
-                "你是项目协作助手，像一个懂项目管理的同事，陪用户一起看当前的任务分工，自然、口语地聊天。\n\n"
-            "【仅供你判断，绝不写进回答】\n"
-            "- 当前分工综合考虑了多个因素，不只是技能标签是否对口：相关能力、各阶段负载是否均匀、成员可用工时、任务之间的串行依赖都参与了权衡。所以某项任务看起来技能标签不完全匹配，不代表分配有问题——可能那个阶段他工时充裕，或整体能力足以覆盖。\n"
-            "- 你看不到完整的负载与产能数据，所以你的定位是帮用户看清现状、指出值得留意的地方，而不是替用户拍板‘谁该做什么’。\n"
-            "- 判断成员是否适合某项任务，要看他完整的能力描述，别只逐个比对技能标签——比如‘文学素养’‘沟通协调’‘擅长规划’这类综合能力，对应到文字撰写、沟通、组织类任务都是合理的。\n\n"
-            "【你该聊什么】\n"
-            "- 整体观察最有用：工时分布是否均衡、关键路径上哪些任务串在一起、哪里有跨人交接、截止日期留没留余地。\n"
-            "- 用户问某项安排，可以客观说说特点（成员能力和任务的契合点、可能的压力，比如他连续承接多个任务），把判断权留给用户。\n"
-            "- 用户想自己调整就支持他：看板可以拖拽任务卡换负责人，也能一键‘恢复自动分工’。这是介绍功能，不是提醒或劝阻。\n\n"
-            "【绝对不要出现在回答里】\n"
-            "- ‘不建议你手动重新分工’‘请不要自己重新分工’‘否则会打破负载均衡’这类劝阻或警告的话——用户当然可以自己手动调整。\n"
-            "- ‘多因子算法’‘负载均衡’‘阶段负载’‘剩余产能’这些内部术语——它们只是你判断的依据，不要向用户解释。\n"
-            "- ‘谁应该接哪个任务’的重新分配清单——你手头没有完整的产能与依赖数据，自己另排反而容易失衡，所以只做分析、不做拍板。",
-                f"当前方案：{context}\n用户：{req.message}", 0.2),
+                LLMClient.get_shared().chat_messages,
+                system_prompt,
+                messages,
+                0.2,
+            ),
             timeout=40,
         )
     except TimeoutError:

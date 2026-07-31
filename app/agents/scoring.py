@@ -191,7 +191,15 @@ def skill_score(member: TeamMember, required_skills: list[str]) -> float:
     取每个所需技能的最佳匹配相似度后求均值；无所需技能则返回中性 0.5。
     负向标签（如「不太想做PPT」「避免前端」）命中的技能记 0 分——
     明确回避的技能不参与正向匹配，防止「不想做」被当成「擅长」。
+
+    双输入模式：tags 模式用字符相似度 + 同义词表；
+    bio 模式返回中性 0.5（实际匹配由 LLM 在 Planner 阶段完成，
+    这里只做负载均衡时的兜底打分，避免阻塞确定性算法）。
     """
+    if member.profile_mode == "bio" and member.bio:
+        # bio 模式：Planner 已基于简介做了语义匹配并给出 assignee_id，
+        # 确定性均衡阶段无法做 LLM 语义判断，返回中性分让均衡算法不误伤。
+        return 0.5
     if not required_skills:
         return 0.5
     pos_tags, neg_tags = _split_tags(member.skill_tags)
@@ -542,13 +550,16 @@ def assign_with_balance(plan: PlanOutput,
                         members: list[TeamMember]) -> QAOutput:
     """确定性任务分配 + 负载均衡 v2.3
 
-    默认尽量把成员负载差控制在 1h 内，同时保护专业匹配和负向偏好。
+    顺序 B：Planner 已在拆任务时给出 assignee_id（基于成员能力）。
+    本函数尊重 Planner 的初始分配，只在负载严重不均时搬运负责人。
+    若任务无 assignee_id（Planner 未给或能力缺口），走原有匹配逻辑。
     """
     if not members or not plan.tasks:
         return QAOutput(assignments=[], note="B3确定性兜底+超载校正")
 
     active_tasks = [t for t in plan.tasks if t.status != "completed"]
     member_map = {m.name: m for m in members}
+    member_names = {m.name for m in members}
     task_hours = {t.id: t.estimated_hours for t in active_tasks}
 
     work = {m.name: 0.0 for m in members}
@@ -563,23 +574,31 @@ def assign_with_balance(plan: PlanOutput,
                 score=0.0, reasoning="任务已完成",
             ))
             continue
-        # 多因子打分：技能匹配 + 总负载 + 阶段负载 + 剩余产能；回避者（对该任务明确不想做）垫底
-        scored = []
-        for m in members:
-            skill = skill_score(m, t.required_skills)
-            avoiding = _is_avoiding(m, t.required_skills)
-            total_ratio = work[m.name] / max(m.available_hours, 0.5)
-            stage_ratio = stage_work[m.name].get(t.execution_stage, 0.0) / max(m.available_hours, 0.5)
-            capacity = max(0.0, 1.0 - (work[m.name] + t.estimated_hours) / max(m.available_hours, 0.5))
-            score = (ASSIGNMENT_WEIGHTS["skill"] * skill
-                     - ASSIGNMENT_WEIGHTS["total_load"] * total_ratio
-                     - ASSIGNMENT_WEIGHTS["stage_load"] * stage_ratio
-                     + ASSIGNMENT_WEIGHTS["capacity"] * capacity)
-            if m.available_stages and t.execution_stage not in m.available_stages:
-                score -= 0.35
-            scored.append((m.name, skill, avoiding, score))
-        scored.sort(key=lambda x: (x[2], -x[3], work[x[0]]))  # 回避者排末位，然后多因子降序
-        presenter = scored[0][0]
+        # 顺序 B：优先用 Planner 给的 assignee_id
+        planner_assignee = t.assignee_id if t.assignee_id in member_names else None
+        if planner_assignee and not _is_avoiding(member_map[planner_assignee], t.required_skills):
+            # Planner 已分配且非回避，尊重该分配
+            presenter = planner_assignee
+            skill = skill_score(member_map[presenter], t.required_skills)
+        else:
+            # Planner 未分配或该人回避，走多因子匹配
+            scored = []
+            for m in members:
+                skill = skill_score(m, t.required_skills)
+                avoiding = _is_avoiding(m, t.required_skills)
+                total_ratio = work[m.name] / max(m.available_hours, 0.5)
+                stage_ratio = stage_work[m.name].get(t.execution_stage, 0.0) / max(m.available_hours, 0.5)
+                capacity = max(0.0, 1.0 - (work[m.name] + t.estimated_hours) / max(m.available_hours, 0.5))
+                score = (ASSIGNMENT_WEIGHTS["skill"] * skill
+                         - ASSIGNMENT_WEIGHTS["total_load"] * total_ratio
+                         - ASSIGNMENT_WEIGHTS["stage_load"] * stage_ratio
+                         + ASSIGNMENT_WEIGHTS["capacity"] * capacity)
+                if m.available_stages and t.execution_stage not in m.available_stages:
+                    score -= 0.35
+                scored.append((m.name, skill, avoiding, score))
+            scored.sort(key=lambda x: (x[2], -x[3], work[x[0]]))
+            presenter = scored[0][0]
+            skill = scored[0][1]
         work[presenter] += t.estimated_hours
         stage_work[presenter][t.execution_stage] = (
             stage_work[presenter].get(t.execution_stage, 0.0) + t.estimated_hours)
@@ -590,7 +609,8 @@ def assign_with_balance(plan: PlanOutput,
         support = []
         if max_collaborators > 0:
             # 主要协助：剩余成员中负载最轻者为先（匹配度作同负载时的次席）
-            rest = [(n, sc) for n, sc, av, _ in scored if n != presenter and not av]
+            rest = [(m.name, skill_score(m, t.required_skills)) for m in members
+                    if m.name != presenter and not _is_avoiding(m, t.required_skills)]
             rest.sort(key=lambda x: (work[x[0]], -x[1]))
             primary = rest[0][0] if rest else ''
             if primary and primary != presenter:
@@ -604,16 +624,17 @@ def assign_with_balance(plan: PlanOutput,
                 for s in support:
                     work[s] += t.estimated_hours * QA_SUPPORT_RATIO
 
-        best_skill = scored[0][1]
         reasoning = (
-            f"{presenter}：{_fmt(t.required_skills)} 技能匹配度 {best_skill:.2f}，"
+            f"{presenter}：{_fmt(t.required_skills)} 技能"
+            f"匹配度 {skill:.2f}，"
             f"当前负载 {work[presenter]-t.estimated_hours:.1f}h，"
             f"执行阶段 {t.execution_stage}"
+            + ("（Planner 初始分配）" if planner_assignee == presenter else "")
         )
         assignments.append(QAAssignment(
             task_id=t.id, task_name=t.name, chapter="",
             presenter=presenter, qa_primary=primary, qa_support=support,
-            score=round(best_skill, 3), reasoning=reasoning,
+            score=round(skill, 3), reasoning=reasoning,
         ))
 
     # 零负载兜底——0 工时成员先从负载最重的任务拿一个辅助协助角色
