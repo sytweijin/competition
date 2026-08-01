@@ -5,6 +5,79 @@
 > 按时间倒序排列（最新在最上面），随项目同步更新。
 
 ---
+## v5.8 —— 大型项目模式后端+前端修复（2026-08-01）
+
+**定位：** 修复 `feature/large-project-mode` 分支引入的大型项目模式问题，包括服务器500错误、成员类型设计矛盾、分工兜底缺失、前端未适配 large_project 模式等。
+
+**修改背景：** 用户反馈"项目分工分支粗糙、成员选骨干/志愿者不合理、招募技能者剩任务无法进入下一步直接报错、前端没优化、界面难看"。
+
+---
+
+### 后端修复
+
+#### 1. 路由层500错误
+
+- **问题：** `/api/confirm-draft` 和 `/api/manual-assignment` 只捕获 `ProjectServiceError`，其他异常（ValidationError/KeyError/TypeError）冒泡到全局 handler 返回500"服务器内部错误"
+- **修复：** 补全 `(ValidationError, KeyError, TypeError, ValueError)` 捕获，转成400 + 可读 detail
+
+#### 2. Planner提示词允许 assignee 为 null
+
+- **问题：** `LARGE_PROJECT_PLANNER_SYSTEM` 允许能力缺口任务的 assignee_id 设为 null，导致后续 timeline/member_map 查找 KeyError
+- **修复：** 提示词禁止 null，无人擅长也必须指定骨干作为协调管理者；修复 `{骨干姓名}` 占位符冲突
+
+#### 3. 大型项目兜底走小组作业逻辑
+
+- **问题：** `_step_planner_large_project` LLM 失败时走 `_fallback_plan`（小组作业兜底），不产 `extra_helpers_needed`，assignee 全是 null
+- **修复：** 新增 `_fallback_large_project_plan`，5阶段拆任务、轮转分配骨干、标注 extra_helpers_needed
+
+#### 4. apply_manual_assignment 不感知 project_mode
+
+- **问题：** 手动调整后确认时，大型项目模式也走小组作业的协作者折算逻辑，用含志愿者的 members 列表
+- **修复：** 添加 `is_large_project` 分支，只用 core_members、保留 extra_helpers_needed、空值兜底
+
+---
+
+### 前端修复
+
+#### 5. 成员行 member_type 下拉与设计矛盾
+
+- **问题：** `addMember()` 加了"骨干/志愿者"下拉，但设计是"志愿者不登记在系统里、只标注需求量"
+- **修复：** 去掉 member_type 下拉，collectInput 固定回传 `member_type:'core'`
+
+#### 6. extra_helpers_needed 输入框全模式显示
+
+- **问题：** `renderDraft` 的志愿者需求输入框无论 small_group/large_project 都显示
+- **修复：** 只在 large_project 模式渲染
+
+#### 7. renderBoard 未适配 large_project
+
+- **问题：** 看板无骨干列、无志愿者需求展示
+- **修复：** 任务卡片显示"需 N 人"徽章，未分配列显示"待认领"
+
+#### 8. 前端500错误提示不可读
+
+- **问题：** `jsonRequest` 直接显示后端返回的"服务器内部错误"
+- **修复：** 500错误改为"服务器处理失败，请检查输入或稍后重试"
+
+#### 9. 成员行排版不美观
+
+- **问题：** "标签/简介"下拉暴露设计逻辑，textarea 简介框有大滚轴，grid 布局挤在一行
+- **修复：** 去掉下拉和 textarea，改成两行布局（姓名+工时+删除 / 技能标签 / 不可用日期）
+
+#### 10. 项目模式 select 样式不一致
+
+- **问题：** CSS `.config-form input,.config-form textarea` 漏了 select，下拉框是黑框边
+- **修复：** 加入 `.config-form select`，样式统一
+
+---
+
+### 测试
+
+- `tests/test_large_project.py`：3个测试全部通过
+- 修复 MagicMock 穿透导致 FullPlan 校验失败
+
+---
+
 ## v5.7 —— 第二轮深度审查全量修复 + AI 协作助手体验重写（2026-07-30）
 
 **定位：** 对 workbuddy 第二轮审查结论逐条核实并修复，统一两条主链路风险质量，修复时区边界导致的排期偏移，并重写 AI 协作助手让对话自然、不再向用户输出系统级元话术。
