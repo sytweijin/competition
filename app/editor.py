@@ -13,7 +13,9 @@ import logging
 from app.agents.reporter import ReporterAgent
 from app.agents.scoring import assign_with_balance
 from app.agents.timeline import TimelineAgent
-from app.agents.validation import PlanValidationError, validate_plan
+from app.agents.validation import (
+    PlanValidationError, ensure_large_project_structure, validate_plan,
+)
 from app.models.schemas import (
     EditPlanRequest, FullPlan, PlanOutput, ReportOutput, SubTask, TaskEdit,
 )
@@ -28,6 +30,7 @@ class EditError(ValueError):
 def apply_edits(plan: PlanOutput, edits: list[TaskEdit]) -> PlanOutput:
     """对计划应用一系列编辑，返回新计划（未校验）。"""
     task_map: dict[str, SubTask] = {t.id: t for t in plan.tasks}
+    modules = [m.model_copy(deep=True) for m in plan.modules]
 
     for i, e in enumerate(edits):
         op = e.op.strip().lower()
@@ -36,7 +39,10 @@ def apply_edits(plan: PlanOutput, edits: list[TaskEdit]) -> PlanOutput:
                 raise EditError(f"edit#{i} add 缺少 task")
             if e.task.id in task_map:
                 raise EditError(f"edit#{i} add: 任务 {e.task.id} 已存在")
-            task_map[e.task.id] = e.task
+            task = e.task
+            if modules and not task.module_id:
+                task = task.model_copy(update={"module_id": modules[0].id})
+            task_map[task.id] = task
         elif op == "remove":
             if not e.task_id or e.task_id not in task_map:
                 raise EditError(f"edit#{i} remove: 任务 {e.task_id} 不存在")
@@ -62,6 +68,7 @@ def apply_edits(plan: PlanOutput, edits: list[TaskEdit]) -> PlanOutput:
 
     return PlanOutput(
         tasks=list(task_map.values()),
+        modules=modules,
         summary=plan.summary,
         reasoning=plan.reasoning + "（已应用编辑）",
     )
@@ -76,6 +83,8 @@ def edit_plan(req: EditPlanRequest) -> FullPlan:
         new_plan = validate_plan(new_plan, tolerate_cycle=False)
     except PlanValidationError as e:
         raise EditError(f"编辑后计划非法：{e}") from e
+    if original.input.project_mode == "large_project":
+        new_plan = ensure_large_project_structure(new_plan)
 
     # 先重算 matcher（B3 确定性），再用新分配回填负责人算 timeline，保证二者一致
     qa_matrix = original.qa_matrix
@@ -115,10 +124,19 @@ def edit_plan(req: EditPlanRequest) -> FullPlan:
         report = original.report.model_copy(update={
             "risk_note": (original.report.risk_note + f"\n(报告重生成失败: {exc})").strip()})
 
+    # 删除任务后同步清理指向已删除任务的志愿者认领记录，避免孤儿数据。
+    kept_task_ids = {t.id for t in new_plan.tasks}
+    volunteer_pool = [
+        volunteer for volunteer in original.volunteer_pool
+        if volunteer.task_id in kept_task_ids
+    ]
+
     return FullPlan(
         input=original.input,
         plan=new_plan,
         timeline=timeline,
         qa_matrix=qa_matrix,
         report=report,
+        volunteer_pool=volunteer_pool,
+        version=original.version,
     )

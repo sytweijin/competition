@@ -1,4 +1,4 @@
-﻿"""
+"""
 ===== 第 0 步：JSON 接口契约 =====
 这是整个项目的核心——所有 Agent 的输入/输出格式在此定义。
 A / C 在并行开发前必须先看此文件。
@@ -79,27 +79,50 @@ class AssignmentInput(BaseModel):
     default_end_date: Optional[date] = None
     uploaded_files: list[dict] = Field(default_factory=list)
     requirement_analysis: dict = Field(default_factory=dict)
+    project_mode: str = Field(
+        default="small_group",
+        description="项目模式：small_group（小组作业，人固定，先看人再拆任务）"
+        "或 large_project（大型项目，先拆任务再认领招募）。",
+    )
 
     @field_validator("members")
     @classmethod
-    def _at_least_one_member(cls, v):
-        """至少 1 名有姓名的成员，CLI 与 Web 共用此校验。"""
+    def _filter_members(cls, v):
+        """剔除无姓名成员并检查重名；大型项目允许先不填骨干。"""
         named = [m for m in v if m.name.strip()]
-        if not named:
-            raise ValueError("至少需要 1 名有姓名的团队成员")
-        # check for duplicate member names
         names = [m.name for m in named]
         dups = set(n for n in names if names.count(n) > 1)
         if dups:
             raise ValueError(f"duplicate member names: {chr(44).join(dups)}")
         return named
 
+    @model_validator(mode="after")
+    def _require_members_for_small_group(self):
+        """小型项目人固定，必须至少 1 名成员；大型项目先拆任务后可再补骨干。"""
+        if self.project_mode != "large_project" and not self.members:
+            raise ValueError("至少需要 1 名有姓名的团队成员")
+        return self
+
 
 # ──────────── Planner 输出 ────────────
+
+class ProjectModule(BaseModel):
+    """大型项目模式：可认领的大任务/模块（先拆大任务，再拆子任务）。"""
+    id: str = Field(description="唯一标识，如 M1, M2")
+    name: str
+    description: str = Field(default="", description="模块目标与交付边界")
+    order: int = Field(default=0, description="模块显示顺序")
+    status: TaskStatus = Field(default=TaskStatus.pending,
+                               description="模块执行状态")
+    assignee_id: Optional[str] = Field(
+        default=None, description="认领该模块的骨干成员姓名")
+
 
 class SubTask(BaseModel):
     """Planner 输出的一个子任务"""
     id: str = Field(description="唯一标识，如 T1, T2")
+    module_id: Optional[str] = Field(
+        default=None, description="大型项目模式：所属模块（大任务）ID")
     name: str
     description: str = ""
     estimated_hours: float = Field(default=2.0, description="预估工时（人时）")
@@ -123,6 +146,10 @@ class SubTask(BaseModel):
     collaborator_ids: list[str] = Field(default_factory=list)
     suggested_people: int = Field(default=1, ge=1, le=10,
                                   description="建议参与人数，至少 1 人")
+    extra_helpers_needed: int = Field(
+        default=0, ge=0, le=20,
+        description="大型项目模式：该任务需额外招募的志愿者/参与者人数（0=骨干可覆盖）。",
+    )
     order: int = 0
     status: TaskStatus = Field(default=TaskStatus.pending,
                                description="Task execution status")
@@ -146,9 +173,17 @@ class SubTask(BaseModel):
 class PlanOutput(BaseModel):
     """Planner Agent 的完整输出"""
     tasks: list[SubTask]
+    modules: list[ProjectModule] = Field(
+        default_factory=list,
+        description="大型项目模式：模块（大任务）列表；子任务通过 module_id 归属。",
+    )
     summary: str = Field(description="总体任务拆解说明")
     reasoning: str = Field(default="",
                            description="可解释性：为什么这样拆")
+    member_assessment: dict[str, str] = Field(
+        default_factory=dict,
+        description="先看人：每个成员的能力评估 {姓名: 评估}，驱动任务按个人能力生成。",
+    )
 
 
 # ──────────── Matcher 输出 ────────────
@@ -240,6 +275,18 @@ class ReflectionOutput(BaseModel):
 
 # ──────────── Coordinator 最终输出 ────────────
 
+class Volunteer(BaseModel):
+    """大型项目模式下的外部志愿者/参与者认领记录。"""
+    name: str = Field(description="志愿者姓名/昵称")
+    task_id: str = Field(description="认领的任务 ID")
+    status: str = Field(
+        default="待确认",
+        description="认领状态：待确认 / 已确认 / 已婉拒",
+    )
+    contact: str = Field(default="", description="联系方式（可选）")
+    note: str = Field(default="", description="备注（可选）")
+
+
 class FullPlan(BaseModel):
     """整个系统的最终输出"""
     input: AssignmentInput
@@ -248,7 +295,11 @@ class FullPlan(BaseModel):
     qa_matrix: QAOutput
     report: ReportOutput
     reflection: Optional[ReflectionOutput] = Field(default=None, description="Reflection Agent 的自我审查结果")
-    version: str = "5.6"
+    volunteer_pool: list[Volunteer] = Field(
+        default_factory=list,
+        description="大型项目模式：志愿者/参与者招募池，按任务认领。",
+    )
+    version: str = "5.15"
 
 
 class DraftRequest(BaseModel):
@@ -269,12 +320,17 @@ class ConfirmDraftRequest(BaseModel):
 
 class DraftOperation(BaseModel):
     """界面与未来自然语言 Agent 共用的任务修改指令。"""
-    op: str = Field(description="add/update/remove/split/merge/reorder")
+    op: str = Field(description="任务与模块的增删改排序指令")
     task_id: str = ""
     task_ids: list[str] = Field(default_factory=list)
     task: Optional[SubTask] = None
     tasks: list[SubTask] = Field(default_factory=list)
     ordered_ids: list[str] = Field(default_factory=list)
+    module: Optional[ProjectModule] = None
+    module_id: str = Field(default="", description="模块操作目标 ID")
+    module_ids: list[str] = Field(default_factory=list, description="合并模块时传入的多个模块 ID")
+    modules: list[ProjectModule] = Field(default_factory=list)
+    ordered_module_ids: list[str] = Field(default_factory=list)
 
 
 class DraftMutationRequest(BaseModel):
@@ -286,6 +342,10 @@ class ManualAssignmentRequest(BaseModel):
     plan: FullPlan
     assignees: dict[str, str] = Field(default_factory=dict)
     collaborators: dict[str, list[str]] = Field(default_factory=dict)
+    module_assignees: dict[str, str] = Field(
+        default_factory=dict,
+        description="大型项目：模块认领 {模块ID: 骨干姓名}",
+    )
 
 
 class RequirementAnalysis(BaseModel):

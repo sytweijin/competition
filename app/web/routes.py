@@ -5,6 +5,7 @@ FastAPI 路由（A5：简易只读 Web + B2 Memory + B4 动态编辑）
 import json
 import logging
 import re
+from collections import defaultdict
 from datetime import date, datetime
 from app import config
 from pathlib import Path
@@ -20,11 +21,11 @@ from app.agents.interview_sim import InterviewSimAgent
 from app.models.schemas import (
     AssignmentInput, CourseInfo, EditPlanRequest, FullPlan, PlanOutput, QAOutput, TeamMember,
     DraftRequest, DraftResponse, ConfirmDraftRequest, ManualAssignmentRequest,
-    RequirementAnalysis, DraftMutationRequest,
+    RequirementAnalysis, DraftMutationRequest, Volunteer,
 )
 from app.services.project_service import (
     ProjectServiceError, apply_manual_assignment, confirm_draft as confirm_draft_service,
-    generate_draft, mutate_draft, workload_snapshot,
+    generate_draft, mutate_draft, update_volunteer_pool, workload_snapshot,
 )
 
 logger = logging.getLogger(__name__)
@@ -93,6 +94,20 @@ def workload(req: FullPlan):
     return workload_snapshot(req)
 
 
+class VolunteerPoolRequest(BaseModel):
+    plan: FullPlan
+    volunteers: list[Volunteer] = Field(default_factory=list)
+
+
+@router.post("/volunteers", response_model=FullPlan)
+def update_volunteers(req: VolunteerPoolRequest):
+    """保存大型项目模式的志愿者招募池（整池替换式 upsert）。"""
+    try:
+        return update_volunteer_pool(req.plan, req.volunteers)
+    except ProjectServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 class ChatMessage(BaseModel):
     """单条对话消息（多轮记忆用）。"""
     role: str = Field(..., description="user 或 assistant")
@@ -123,13 +138,24 @@ def _build_chat_context(req: "ChatRequest") -> str:
         lines.append("团队成员：" + "、".join(
             f"{m.name}(技能:{','.join(m.skill_tags) or '无'}，{m.daily_available_hours:g}h/天)"
             for m in members))
+        if fp.input.project_mode == "large_project" and fp.plan.modules:
+            lines.append(f"模块共 {len(fp.plan.modules)} 个：")
+            for module in fp.plan.modules:
+                module_tasks = [t for t in fp.plan.tasks
+                                if t.module_id == module.id]
+                owner = module.assignee_id or "未认领"
+                lines.append(
+                    f"  {module.id} {module.name}（负责人：{owner}，"
+                    f"子任务 {len(module_tasks)} 项）")
         lines.append(f"任务共 {len(fp.plan.tasks)} 项，总工时 "
                      f"{sum(t.estimated_hours for t in fp.plan.tasks):g}h")
         for t in fp.plan.tasks:
             status = f"[{t.status}]" if t.status != "pending" else ""
             assignee = t.assignee_id or "未分配"
             lines.append(
-                f"  {t.id} {t.name}({t.estimated_hours:g}h，{assignee}，"
+                f"  {t.id} {t.name}"
+                f"({'模块' + t.module_id + ' ' if t.module_id else ''}"
+                f"{t.estimated_hours:g}h，{assignee}，"
                 f"需:{','.join(t.required_skills) or '通用'}){status}")
         if fp.timeline.tasks:
             cp = " -> ".join(fp.timeline.critical_path) if fp.timeline.critical_path else "无"
@@ -145,9 +171,21 @@ def _build_chat_context(req: "ChatRequest") -> str:
         return "\n".join(lines)
     if req.draft:
         tasks = req.draft.tasks
+        if req.input and req.input.project_mode == "large_project" \
+                and req.draft.modules:
+            lines.append(f"模块共 {len(req.draft.modules)} 个：")
+            for module in req.draft.modules:
+                module_tasks = [t for t in tasks if t.module_id == module.id]
+                owner = module.assignee_id or "未认领"
+                lines.append(
+                    f"  {module.id} {module.name}（负责人：{owner}，"
+                    f"子任务 {len(module_tasks)} 项）")
         lines.append(f"任务草案共 {len(tasks)} 项：")
         for t in tasks:
-            lines.append(f"  {t.id} {t.name}({t.estimated_hours:g}h)")
+            lines.append(
+                f"  {t.id} {t.name}"
+                f"({'模块' + t.module_id + ' ' if t.module_id else ''}"
+                f"{t.estimated_hours:g}h)")
         if req.input:
             lines.append(f"项目：{req.input.course.name}")
             lines.append("成员：" + "、".join(m.name for m in req.input.members))
@@ -253,6 +291,7 @@ class RunRequest(BaseModel):
     requirement_analysis: dict = Field(default_factory=dict)
     default_start_date: str | None = None
     default_end_date: str | None = None
+    project_mode: str = "small_group"
 
 
 @router.post("/run", response_model=FullPlan)
@@ -261,7 +300,7 @@ def run_plan(req: RunRequest):
     try:
         # 校验：至少 1 个有姓名的成员（P1-16）
         valid_members = [m for m in req.members if m.name.strip()]
-        if not valid_members:
+        if not valid_members and req.project_mode != "large_project":
             raise HTTPException(status_code=400, detail="至少需要 1 名有姓名的团队成员")
         inp = AssignmentInput(
             course=req.course,
@@ -274,6 +313,7 @@ def run_plan(req: RunRequest):
             requirement_analysis=req.requirement_analysis,
             default_start_date=date.fromisoformat(req.default_start_date) if req.default_start_date else None,
             default_end_date=date.fromisoformat(req.default_end_date) if req.default_end_date else None,
+            project_mode=req.project_mode,
         )
         coordinator = Coordinator()
         return coordinator.run(inp)
@@ -367,6 +407,28 @@ def interview_sim(req: InterviewRequest):
     return {"questions": questions}
 
 
+class InterviewChatRequest(BaseModel):
+    plan: PlanOutput
+    qa_matrix: QAOutput
+    user_answer: str = ""
+    history: list[dict] = Field(default_factory=list)
+    user_requirements: str = ""
+
+
+@router.post("/interview/chat")
+def interview_chat(req: InterviewChatRequest):
+    """多轮互动答辩模拟：点评用户回答并提出下一个问题。"""
+    agent = InterviewSimAgent()
+    reply = agent.chat_turn(
+        plan=req.plan,
+        qa_matrix=req.qa_matrix,
+        user_answer=req.user_answer,
+        history=req.history,
+        user_requirements=req.user_requirements,
+    )
+    return {"reply": reply}
+
+
 @router.post("/recompute", response_model=FullPlan)
 def recompute_plan(req: FullPlan):
     """基于任务状态/成员变动重新计算时间线和匹配（不重跑 LLM）。
@@ -419,6 +481,7 @@ def recompute_plan(req: FullPlan):
         timeline=timeline,
         qa_matrix=qa_matrix,
         report=report,
+        volunteer_pool=req.volunteer_pool,
     )
 
 @router.post("/export/docx")
@@ -491,13 +554,36 @@ def _plan_to_markdown(data: dict) -> str:
         lines.append("")
     tasks = plan.get("tasks", [])
     if tasks:
-        lines.append("## 任务列表")
-        lines.append("| 编号 | 任务 | 工时 | 依赖 | 技能 |")
-        lines.append("|---|---|---|---|---|")
-        for t in tasks:
-            deps = ", ".join(t.get("dependencies", []))
-            skills = ", ".join(t.get("required_skills", []))
-            lines.append(f"| {t['id']} | {t['name']} | {t.get('estimated_hours',0)}h | {deps} | {skills} |")
+        modules = plan.get("modules", [])
+        if inp.get("project_mode") == "large_project" and modules:
+            lines.append("## 模块拆解")
+            for module in sorted(modules, key=lambda m: m.get("order", 0)):
+                module_tasks = [
+                    t for t in tasks if t.get("module_id") == module.get("id")
+                ]
+                owner = module.get("assignee_id") or "待认领"
+                lines.append(f"### {module.get('id', '')} {module.get('name', '')}（负责人：{owner}）")
+                if module.get("description"):
+                    lines.append(module["description"])
+                lines.append("")
+                lines.append("| 编号 | 任务 | 工时 | 依赖 | 技能 | 需招募 |")
+                lines.append("|---|---|---|---|---|---|")
+                for t in module_tasks:
+                    deps = ", ".join(t.get("dependencies", []))
+                    skills = ", ".join(t.get("required_skills", []))
+                    need = t.get("extra_helpers_needed", 0) or 0
+                    lines.append(
+                        f"| {t['id']} | {t['name']} | {t.get('estimated_hours',0)}h | "
+                        f"{deps or '-'} | {skills or '-'} | {need} |")
+                lines.append("")
+        else:
+            lines.append("## 任务列表")
+            lines.append("| 编号 | 任务 | 工时 | 依赖 | 技能 |")
+            lines.append("|---|---|---|---|---|")
+            for t in tasks:
+                deps = ", ".join(t.get("dependencies", []))
+                skills = ", ".join(t.get("required_skills", []))
+                lines.append(f"| {t['id']} | {t['name']} | {t.get('estimated_hours',0)}h | {deps} | {skills} |")
         lines.append("")
 
     tl = data.get("timeline", {})
@@ -525,6 +611,43 @@ def _plan_to_markdown(data: dict) -> str:
             score = f"{a.get('score',0)*100:.0f}%" if a.get("score") else "-"
             lines.append(f"| {a['task_name']} | {a['presenter']} | {a['qa_primary']} | {support} | {score} |")
         lines.append("")
+
+    if inp.get("project_mode") == "large_project":
+        volunteer_tasks = [
+            t for t in tasks if (t.get("extra_helpers_needed") or 0) > 0
+        ]
+        if volunteer_tasks:
+            pool = data.get("volunteer_pool", [])
+            by_task = defaultdict(list)
+            for volunteer in pool:
+                by_task[volunteer.get("task_id", "")].append(volunteer)
+            lines.append("## 志愿者招募计划")
+            lines.append("| 任务 | 需招募 | 已确认 | 待确认 | 已婉拒 | 进度 |")
+            lines.append("|---|---|---|---|---|---|")
+            for t in volunteer_tasks:
+                rows = by_task.get(t["id"], [])
+                confirmed = sum(1 for v in rows if v.get("status") == "已确认")
+                pending = sum(1 for v in rows if v.get("status") == "待确认")
+                declined = sum(1 for v in rows if v.get("status") == "已婉拒")
+                need = int(t.get("extra_helpers_needed") or 0)
+                lines.append(
+                    f"| {t['id']} {t['name']} | {need} | {confirmed} | "
+                    f"{pending} | {declined} | {confirmed + pending}/{need} |")
+            if pool:
+                lines.append("")
+                lines.append("### 认领明细")
+                lines.append("| 志愿者 | 任务 | 状态 | 联系方式 | 备注 |")
+                lines.append("|---|---|---|---|---|")
+                for volunteer in pool:
+                    task_name = next(
+                        (t["name"] for t in tasks if t["id"] == volunteer.get("task_id")),
+                        volunteer.get("task_id", ""))
+                    lines.append(
+                        f"| {volunteer.get('name', '')} | {task_name} | "
+                        f"{volunteer.get('status', '待确认')} | "
+                        f"{volunteer.get('contact', '') or '-'} | "
+                        f"{volunteer.get('note', '') or '-'} |")
+            lines.append("")
 
     report = data.get("report", {})
     if report.get("risk_note"):
@@ -637,7 +760,7 @@ def edit_members_endpoint(req: MemberEditRequest):
             timeline=timeline,
             qa_matrix=qa_matrix,
             report=report.model_copy(update={"risk_note": detailed_risk}),
-
+            volunteer_pool=fp.volunteer_pool,
         )
     except HTTPException:
         raise

@@ -8,11 +8,13 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from app.agents.validation import PlanValidationError, validate_plan
+from app.agents.validation import (
+    PlanValidationError, ensure_large_project_structure, validate_plan,
+)
 from app.coordinator import Coordinator
 from app.models.schemas import (
     AssignmentInput, DraftOperation, FullPlan, ManualAssignmentRequest,
-    PlanOutput, QAAssignment, QAOutput, ReportOutput, SubTask,
+    PlanOutput, ProjectModule, QAAssignment, QAOutput, ReportOutput, SubTask, Volunteer,
 )
 from app.services.duration_estimator import (
     calibrate_plan_estimates, record_duration_feedback,
@@ -26,6 +28,9 @@ class ProjectServiceError(ValueError):
 def generate_draft(inp: AssignmentInput, use_ai: bool = True) -> PlanOutput:
     if use_ai:
         return Coordinator().draft(inp)
+    if inp.project_mode == "large_project":
+        return ensure_large_project_structure(calibrate_plan_estimates(
+            Coordinator._fallback_large_project_plan(inp, "快速模式")))
     return calibrate_plan_estimates(
         Coordinator._fallback_plan(inp, "快速模式"))
 
@@ -33,6 +38,8 @@ def generate_draft(inp: AssignmentInput, use_ai: bool = True) -> PlanOutput:
 def mutate_draft(plan: PlanOutput, operations: list[DraftOperation]) -> PlanOutput:
     """以结构化指令修改草案；未来自然语言只需先转换成 DraftOperation。"""
     tasks = [t.model_copy(deep=True) for t in plan.tasks]
+    modules = [m.model_copy(deep=True) for m in plan.modules]
+    has_module_structure = bool(modules) or any(t.module_id for t in tasks)
 
     for operation in operations:
         by_id = {t.id: t for t in tasks}
@@ -45,12 +52,20 @@ def mutate_draft(plan: PlanOutput, operations: list[DraftOperation]) -> PlanOutp
                     estimated_hours=2, order=next_no)
             if task.id in by_id:
                 raise ProjectServiceError(f"任务 ID 已存在：{task.id}")
+            if has_module_structure and not task.module_id:
+                module_id = operation.module_id or (modules[0].id if modules else None)
+                if module_id:
+                    task = task.model_copy(update={"module_id": module_id})
             tasks.append(task)
         elif operation.op == "update":
             if operation.task_id not in by_id or operation.task is None:
                 raise ProjectServiceError("修改任务时必须提供有效 task_id 和 task")
             original = by_id[operation.task_id]
             updated = operation.task
+            if not updated.module_id:
+                updated = updated.model_copy(update={
+                    "module_id": operation.module_id or original.module_id,
+                })
             if record_duration_feedback(original, updated):
                 updated = updated.model_copy(update={
                     "estimate_reason": (
@@ -71,6 +86,10 @@ def mutate_draft(plan: PlanOutput, operations: list[DraftOperation]) -> PlanOutp
             if original is None:
                 raise ProjectServiceError(f"任务不存在：{operation.task_id}")
             replacements = operation.tasks or _default_split(original, tasks)
+            replacements = [
+                t.model_copy(update={"module_id": operation.module_id or original.module_id})
+                for t in replacements
+            ]
             tasks = [t for t in tasks if t.id != original.id]
             insert_at = min(original.order, len(tasks))
             for offset, task in enumerate(replacements):
@@ -86,6 +105,8 @@ def mutate_draft(plan: PlanOutput, operations: list[DraftOperation]) -> PlanOutp
             if len(selected) < 2:
                 raise ProjectServiceError("合并任务至少需要两项")
             merged = operation.task or _default_merge(selected)
+            if not merged.module_id:
+                merged = merged.model_copy(update={"module_id": selected[0].module_id})
             tasks = [t for t in tasks if t.id not in ids]
             tasks.append(merged)
             tasks = [t.model_copy(update={
@@ -96,23 +117,132 @@ def mutate_draft(plan: PlanOutput, operations: list[DraftOperation]) -> PlanOutp
                 raise ProjectServiceError("排序列表必须包含全部任务且不能重复")
             order = {task_id: index + 1 for index, task_id in enumerate(operation.ordered_ids)}
             tasks = [t.model_copy(update={"order": order[t.id]}) for t in tasks]
+        elif operation.op == "add_module":
+            by_module = {m.id: m for m in modules}
+            if operation.module is None:
+                module = ProjectModule(
+                    id=_next_module_id(modules), name="新模块", description="",
+                    order=len(modules) + 1)
+            else:
+                module = operation.module
+                if not module.id:
+                    module = module.model_copy(update={"id": _next_module_id(modules)})
+                if module.id in by_module:
+                    raise ProjectServiceError(f"模块 ID 已存在：{module.id}")
+                module = module.model_copy(update={"order": len(modules) + 1})
+            modules.append(module)
+        elif operation.op == "update_module":
+            by_module = {m.id: m for m in modules}
+            if operation.module is None or operation.module_id not in by_module:
+                raise ProjectServiceError("修改模块时必须提供有效 module_id 和 module")
+            module = operation.module.model_copy(update={
+                "id": operation.module_id,
+                "order": by_module[operation.module_id].order,
+            })
+            modules = [module if m.id == operation.module_id else m for m in modules]
+        elif operation.op == "remove_module":
+            if operation.module_id not in {m.id for m in modules}:
+                raise ProjectServiceError(f"模块不存在：{operation.module_id}")
+            if any(t.module_id == operation.module_id for t in tasks):
+                raise ProjectServiceError("请先移动或删除该模块下的子任务，再删除模块")
+            modules = [m for m in modules if m.id != operation.module_id]
+        elif operation.op == "reorder_modules":
+            if set(operation.ordered_module_ids) != {m.id for m in modules}:
+                raise ProjectServiceError("模块排序列表必须包含全部模块且不能重复")
+            order = {mid: index + 1 for index, mid in enumerate(operation.ordered_module_ids)}
+            modules = [m.model_copy(update={"order": order[m.id]}) for m in modules]
+        elif operation.op == "merge_modules":
+            merge_ids = operation.module_ids
+            if len(merge_ids) < 2:
+                raise ProjectServiceError("合并模块至少需要两个模块")
+            merge_set = set(merge_ids)
+            if not merge_set.issubset({m.id for m in modules}):
+                raise ProjectServiceError("合并模块 ID 不存在")
+            target = next(m for m in modules if m.id == merge_ids[0])
+            others = [m for m in modules if m.id in merge_set and m.id != target.id]
+            for m in others:
+                merged_name = target.name if target.name else m.name
+                merged_desc = " / ".join(d for d in [target.description, m.description] if d)
+                target = target.model_copy(update={
+                    "name": merged_name,
+                    "description": merged_desc,
+                })
+            for t in tasks:
+                if t.module_id in merge_set and t.module_id != target.id:
+                    t = t.model_copy(update={"module_id": target.id})
+            tasks = [
+                t.model_copy(update={
+                    "module_id": target.id if t.module_id in merge_set else t.module_id
+                }) for t in tasks
+            ]
+            modules = [m for m in modules if m.id not in {oid for oid in merge_ids[1:]}]
+            modules = [target if m.id == target.id else m for m in modules]
         else:
             raise ProjectServiceError(f"未知任务操作：{operation.op}")
 
     tasks.sort(key=lambda task: (task.order or 10**9, task.id))
+    modules.sort(key=lambda module: (module.order or 10**9, module.id))
     tasks = [task.model_copy(update={"order": index + 1}) for index, task in enumerate(tasks)]
     try:
-        return validate_plan(plan.model_copy(update={"tasks": tasks}))
+        checked = validate_plan(
+            plan.model_copy(update={"tasks": tasks, "modules": modules}),
+            preserve_empty_modules=True)
+        if has_module_structure or modules:
+            return ensure_large_project_structure(
+                checked, preserve_empty_modules=True)
+        return checked
     except PlanValidationError as exc:
         raise ProjectServiceError(str(exc)) from exc
 
 
 def confirm_draft(inp: AssignmentInput, plan: PlanOutput) -> FullPlan:
+    if inp.project_mode == "large_project":
+        plan = ensure_large_project_structure(plan)
     try:
         checked = validate_plan(plan)
     except PlanValidationError as exc:
         raise ProjectServiceError(str(exc)) from exc
     return Coordinator().confirm(inp, checked)
+
+
+def update_volunteer_pool(plan: FullPlan, volunteers: list[Volunteer]) -> FullPlan:
+    """更新大型项目模式的志愿者招募池（整池替换式 upsert）。
+
+    校验规则：
+    - 仅 large_project 模式允许志愿者招募；
+    - 志愿者姓名不能为空、不能与团队成员重名、池内不能重复；
+    - task_id 必须存在且该任务确实需要外部志愿者；
+    - 每个任务"待确认 + 已确认"人数不能超过需求。
+    """
+    if plan.input.project_mode != "large_project":
+        raise ProjectServiceError("志愿者招募仅适用于大型项目模式")
+    member_names = {member.name for member in plan.input.members}
+    task_by_id = {task.id: task for task in plan.plan.tasks}
+    seen_names: set[str] = set()
+    active_counts: dict[str, int] = defaultdict(int)
+    for volunteer in volunteers:
+        name = (volunteer.name or "").strip()
+        if not name:
+            raise ProjectServiceError("志愿者姓名不能为空")
+        if name in member_names:
+            raise ProjectServiceError(f"志愿者姓名不能与团队成员重复：{name}")
+        if name in seen_names:
+            raise ProjectServiceError(f"志愿者姓名重复：{name}")
+        seen_names.add(name)
+        task = task_by_id.get(volunteer.task_id)
+        if task is None:
+            raise ProjectServiceError(f"任务不存在：{volunteer.task_id}")
+        if (task.extra_helpers_needed or 0) <= 0:
+            raise ProjectServiceError(f"任务 {task.id} 不需要招募志愿者")
+        if volunteer.status not in ("待确认", "已确认", "已婉拒"):
+            raise ProjectServiceError(f"志愿者状态不合法：{volunteer.status}")
+        if volunteer.status != "已婉拒":
+            active_counts[volunteer.task_id] += 1
+            if active_counts[volunteer.task_id] > task.extra_helpers_needed:
+                raise ProjectServiceError(
+                    f"任务 {task.id} 已招募 {active_counts[volunteer.task_id]} 人，"
+                    f"超过需求 {task.extra_helpers_needed} 人")
+    return plan.model_copy(update={"volunteer_pool": list(volunteers)})
 
 
 def apply_manual_assignment(req: ManualAssignmentRequest) -> FullPlan:
@@ -122,6 +252,20 @@ def apply_manual_assignment(req: ManualAssignmentRequest) -> FullPlan:
 
     fp = req.plan
     member_map = {member.name: member for member in fp.input.members}
+    module_map = {module.id: module for module in fp.plan.modules}
+    module_assignees = req.module_assignees or {}
+    for module_id, owner in module_assignees.items():
+        if module_id not in module_map:
+            raise ProjectServiceError(f"模块不存在：{module_id}")
+        if owner and owner not in member_map:
+            raise ProjectServiceError(f"模块负责人不在团队成员中：{owner}")
+    updated_modules = [
+        module.model_copy(update={
+            "assignee_id": module_assignees.get(module.id, module.assignee_id) or None,
+        })
+        for module in fp.plan.modules
+    ]
+    module_owner = {module.id: module.assignee_id for module in updated_modules}
     assignments: list[QAAssignment] = []
     updated_tasks: list[SubTask] = []
     for task in fp.plan.tasks:
@@ -140,13 +284,16 @@ def apply_manual_assignment(req: ManualAssignmentRequest) -> FullPlan:
             owner = req.assignees.get(task.id)
         if owner and owner not in member_map:
             owner = None
+        # 骨干认领模块后，模块下未单独指定负责人的子任务默认归模块负责人
+        if not owner and task.module_id:
+            owner = module_owner.get(task.module_id)
         collaborators = [
             name for name in req.collaborators.get(task.id, task.collaborator_ids)
             if name in member_map and name != owner
         ]
         score = skill_score(member_map[owner], task.required_skills) if owner else 0.0
         assignments.append(QAAssignment(
-            task_id=task.id, task_name=task.name, presenter=owner,
+            task_id=task.id, task_name=task.name, presenter=owner or "",
             qa_primary=collaborators[0] if collaborators else "",
             qa_support=collaborators[1:], score=score,
             reasoning="用户手动调整并确认" if owner else "尚未设置负责人"))
@@ -160,7 +307,8 @@ def apply_manual_assignment(req: ManualAssignmentRequest) -> FullPlan:
         item.task_id: [item.presenter] + ([item.qa_primary] if item.qa_primary else [])
         for item in assignments
     }
-    plan = fp.plan.model_copy(update={"tasks": updated_tasks})
+    plan = fp.plan.model_copy(
+        update={"tasks": updated_tasks, "modules": updated_modules})
     timeline = TimelineAgent().run(
         plan, fp.input.deadline.isoformat(), assignment_map, fp.input.members)
     # 基于实际负载和工期计算真实风险，而不是把 note 当作 risk_note
@@ -173,7 +321,7 @@ def apply_manual_assignment(req: ManualAssignmentRequest) -> FullPlan:
     })
     return FullPlan(
         input=fp.input, plan=plan, timeline=timeline, qa_matrix=qa,
-        report=report, version=fp.version)
+        report=report, volunteer_pool=fp.volunteer_pool, version=fp.version)
 
 
 def _build_manual_risk_note(plan: PlanOutput, timeline, workload: dict,
@@ -285,6 +433,14 @@ def _next_id(tasks: list[SubTask]) -> str:
     while f"T{number}" in used:
         number += 1
     return f"T{number}"
+
+
+def _next_module_id(modules: list[ProjectModule]) -> str:
+    used = {module.id for module in modules}
+    number = 1
+    while f"M{number}" in used:
+        number += 1
+    return f"M{number}"
 
 
 def _default_split(task: SubTask, existing: list[SubTask]) -> list[SubTask]:

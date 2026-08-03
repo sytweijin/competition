@@ -1,4 +1,4 @@
-﻿"""Agent 基类，所有 Agent 继承此基类。"""
+"""Agent 基类，所有 Agent 继承此基类。"""
 
 import logging
 from typing import Generic, TypeVar

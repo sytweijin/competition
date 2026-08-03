@@ -11,7 +11,8 @@ import re
 
 from app.models.schemas import (
     AgentError, AssignmentInput, FullPlan, PlanOutput,
-    QAOutput, TimelineOutput, ReportOutput, ReflectionOutput, SubTask,
+    QAOutput, TimelineOutput, ReportOutput, ReflectionOutput, SubTask, TaskStatus,
+    ProjectModule,
 )
 from app.agents.scoring import format_skills_for_prompt
 from app.agents.planner import PlannerAgent
@@ -20,6 +21,7 @@ from app.agents.scoring import assign_with_balance, enhance
 from app.agents.timeline import TimelineAgent
 from app.agents.reporter import ReporterAgent
 from app.agents.reflection import ReflectionAgent
+from app.agents.validation import ensure_large_project_structure
 from app.file_analysis import _classify_requirement_unit, _strip_dangling_brackets
 from app.services.duration_estimator import (
     build_duration_context, calibrate_plan_estimates,
@@ -47,8 +49,12 @@ class Coordinator:
         if isinstance(plan, AgentError):
             logger.warning("Planner LLM failed, use deterministic fallback: %s",
                            plan.message)
-            plan = self._fallback_plan(inp, plan.message)
+            plan = (self._fallback_large_project_plan(inp, plan.message)
+                    if inp.project_mode == "large_project"
+                    else self._fallback_plan(inp, plan.message))
         plan = calibrate_plan_estimates(plan)
+        if inp.project_mode == "large_project":
+            plan = ensure_large_project_structure(plan)
 
         # Step 2: Matcher（B3：LLM + 确定性评分兜底）
         qa_matrix = self._step_matcher(plan, inp.members)
@@ -65,6 +71,8 @@ class Coordinator:
                 ) if t.id in by_task else []
             }) for t in plan.tasks
         ]})
+        if inp.project_mode == "large_project":
+            plan = self._sync_module_owners(plan)
 
         # Step 3: Timeline（回填 QA 矩阵的负责人，传入成员信息）
         timeline = self._step_timeline(plan, inp.deadline.isoformat(), qa_matrix, inp.members)
@@ -114,8 +122,12 @@ class Coordinator:
         """
         plan = self._step_planner(inp)
         if isinstance(plan, AgentError):
-            plan = self._fallback_plan(inp, plan.message)
+            plan = (self._fallback_large_project_plan(inp, plan.message)
+                    if inp.project_mode == "large_project"
+                    else self._fallback_plan(inp, plan.message))
         plan = calibrate_plan_estimates(plan)
+        if inp.project_mode == "large_project":
+            plan = ensure_large_project_structure(plan)
         start = inp.default_start_date
         end = inp.default_end_date or inp.deadline
         tasks = []
@@ -137,7 +149,13 @@ class Coordinator:
         confirm 阶段用 assign_with_balance 做负载均衡微调——
         保留 Planner 的初始分配，只在负载严重不均时搬运负责人。
         """
-        qa_matrix = assign_with_balance(plan, inp.members)
+        if inp.project_mode == "large_project":
+            plan = ensure_large_project_structure(plan)
+        qa_matrix = (
+            QAOutput(assignments=[], note="B3确定性兜底：暂无骨干成员")
+            if not inp.members
+            else assign_with_balance(plan, inp.members)
+        )
         timeline = self._step_timeline(plan, inp.deadline.isoformat(), qa_matrix, inp.members)
         if isinstance(timeline, AgentError):
             timeline = TimelineOutput(tasks=[], critical_path=[], total_days=0, note=timeline.message)
@@ -160,6 +178,8 @@ class Coordinator:
             }) for t in plan.tasks
         ]
         final_plan = plan.model_copy(update={"tasks": assigned_tasks})
+        if inp.project_mode == "large_project":
+            final_plan = self._sync_module_owners(final_plan)
         # P1-3: confirm 路径也执行 Reflection 审查（确定性兜底，不阻塞主流程）
         total_capacity = sum(m.available_hours for m in inp.members)
         reflection = self._step_reflection(final_plan, timeline, qa_matrix, total_capacity)
@@ -236,8 +256,10 @@ class Coordinator:
         return chr(10).join(risks)
 
     def _step_planner(self, inp: AssignmentInput) -> PlanOutput | AgentError:
-        # 为 Planner 提供丰富的成员信息（含技能和可用工时）
-        # 顺序 B：让 Planner 看着成员能力拆任务，并直接给出 assignee_id
+        # 大型项目模式：走独立的 Planner 提示词
+        if inp.project_mode == "large_project":
+            return self._step_planner_large_project(inp)
+        # 小组作业：顺序 B，让 Planner 看着成员能力拆任务并直接给出 assignee_id
         # 双输入模式：tags 模式用技能标签，bio 模式用自然语言简介
         members = []
         for m in inp.members:
@@ -270,9 +292,74 @@ class Coordinator:
             extra=extra,
         )
 
+    def _step_planner_large_project(self, inp: AssignmentInput) -> PlanOutput | AgentError:
+        """大型项目模式：先拆任务再认领招募。
+
+        用 LARGE_PROJECT_PLANNER 提示词，让 Planner 按交付物和流程拆任务，
+        骨干认领负责，需要志愿者的任务标注 extra_helpers_needed。
+        """
+        members = [
+            f"{m.name}(技能: {format_skills_for_prompt(m.skill_tags)}; "
+            f"总可用: {m.available_hours}h)"
+            for m in inp.members]
+        member_text = (
+            "\n".join(members)
+            if members
+            else "（可先不填，由方案先拆大任务模块与子任务，后续再补骨干认领）"
+        )
+        extracted = _format_requirement_analysis(
+            inp.requirement_analysis, inp.uploaded_files)
+        extra = "\n".join(
+            item for item in (inp.additional_requirements, inp.requirements, extracted)
+            if item and item.strip())
+        from app.llm.prompts import (
+            LARGE_PROJECT_PLANNER_SYSTEM, LARGE_PROJECT_PLANNER_USER_TEMPLATE)
+        user = LARGE_PROJECT_PLANNER_USER_TEMPLATE.format(
+            course_name=inp.course.name,
+            course_description=inp.course.description,
+            members=member_text,
+            deadline=inp.deadline.isoformat(),
+            extra=extra or "无",
+        )
+        from app.llm.client import LLMClient
+        result = LLMClient.get_shared().chat_structured(
+            system_prompt=LARGE_PROJECT_PLANNER_SYSTEM,
+            user_prompt=user,
+            response_model=PlanOutput,
+            temperature=0.3,
+        )
+        if isinstance(result, AgentError):
+            return result
+        result = result.model_copy(update={
+            "tasks": [t.model_copy(update={"status": TaskStatus.pending}) for t in result.tasks]
+        })
+        try:
+            from app.agents.validation import validate_plan
+            return ensure_large_project_structure(validate_plan(result))
+        except Exception:
+            return ensure_large_project_structure(result)
+
+    @staticmethod
+    def _sync_module_owners(plan: PlanOutput) -> PlanOutput:
+        """模块负责人自动回填给骨干，使“骨干认领模块”与任务分工保持一致。"""
+        task_by_module: dict[str, list[str]] = {}
+        for task in plan.tasks:
+            if task.module_id:
+                task_by_module.setdefault(task.module_id, []).append(task.assignee_id or "")
+        updated_modules = []
+        for module in plan.modules:
+            owner = module.assignee_id
+            if not owner:
+                owners = [name for name in task_by_module.get(module.id, []) if name]
+                owner = max(set(owners), key=owners.count) if owners else None
+            updated_modules.append(module.model_copy(update={"assignee_id": owner}))
+        return plan.model_copy(update={"modules": updated_modules})
+
     def _step_matcher(self, plan: PlanOutput,
                       members) -> QAOutput:
         """LLM 匹配成功 -> enhance 补分；失败 -> 确定性兜底。"""
+        if not members:
+            return QAOutput(assignments=[], note="暂无骨干成员，先保留模块与子任务结构")
         result = self.matcher.run(plan=plan, members=members)
         if isinstance(result, AgentError):
             logger.warning("Matcher LLM failed, use deterministic B3: %s",
@@ -321,6 +408,62 @@ class Coordinator:
         except Exception as exc:  # noqa: BLE001
             logger.warning("ReflectionAgent unexpected error, use fallback: %s", exc)
             return self.reflector._deterministic_reflect(plan, timeline, qa_matrix, total_capacity)
+
+    @staticmethod
+    def _fallback_large_project_plan(inp: AssignmentInput,
+                                     error_msg: str = "") -> PlanOutput:
+        """大型项目 LLM 不可用时的确定性兜底：先拆模块，再拆子任务，骨干可后补。"""
+        modules = [
+            ProjectModule(id="M1", name="需求梳理与方案规划", order=1,
+                          description="围绕项目目标、调研与交付边界，先形成可执行方案。"),
+            ProjectModule(id="M2", name="核心内容制作与实施", order=2,
+                          description="按方案组织主要交付物制作，需要外部参与者时单独招募。"),
+            ProjectModule(id="M3", name="质量审核与成果整合", order=3,
+                          description="审核质量、汇总各模块成果并形成完整报告。"),
+            ProjectModule(id="M4", name="汇报演示与材料提交", order=4,
+                          description="准备演示与提交材料，完成最终汇报和复盘。"),
+        ]
+        task_specs = [
+            ("需求调研与目标确认", "调研", 3, ["调研", "沟通协调"], "准备", "M1", 0),
+            ("方案框架与分工计划", "策划", 4, ["策划"], "准备", "M1", 0),
+            ("核心内容制作", "执行", 8, ["组织执行"], "执行", "M2", 2),
+            ("素材采集与整理", "素材", 5, ["素材整理"], "执行", "M2", 1),
+            ("分模块实施推进", "执行", 6, ["执行"], "执行", "M2", 1),
+            ("质量审核与修改", "审核", 4, ["质量审核"], "收尾", "M3", 0),
+            ("成果整合与报告撰写", "文案", 6, ["文案撰写"], "收尾", "M3", 0),
+            ("汇报演示与材料提交", "汇报", 4, ["表达", "演示"], "收尾", "M4", 1),
+        ]
+        tasks: list[SubTask] = []
+        member_names = [m.name for m in inp.members]
+        module_owners: dict[str, str] = {}
+        for index, module in enumerate(modules):
+            if member_names:
+                module_owners[module.id] = member_names[index % len(member_names)]
+        for i, (name, cat, hours, skills, stage, module_id, volunteers) in enumerate(task_specs):
+            owner = module_owners.get(module_id)
+            tasks.append(SubTask(
+                id=f"T{i + 1}",
+                name=name,
+                module_id=module_id,
+                description=f"{name}：根据项目要求完成对应工作，产出可检查的{cat}成果",
+                estimated_hours=float(hours),
+                dependencies=[f"T{i}"] if i > 0 else [],
+                required_skills=skills,
+                execution_stage=stage,
+                assignee_id=owner,
+                extra_helpers_needed=volunteers,
+                suggested_people=1 + volunteers,
+                order=i + 1,
+            ))
+        return PlanOutput(
+            tasks=tasks,
+            modules=modules,
+            summary=("大型项目确定性兜底计划（4个模块、8项子任务，"
+                     "先拆模块再拆子任务，骨干可按模块认领）"),
+            reasoning=("LLM 规划失败，按需求梳理→内容制作→质量整合→汇报提交拆成模块，"
+                       "子任务标注志愿者需求量；已填骨干时会先建议模块负责人。" if error_msg
+                       else "确定性兜底计划"),
+        )
 
     @staticmethod
     def _fallback_plan(inp: AssignmentInput,

@@ -1,4 +1,4 @@
-﻿"""
+"""
 B1: 团队协作模拟 Agent（轻量）
 负责人：B（提交人）
 
@@ -68,4 +68,61 @@ class InterviewSimAgent(BaseAgent):
             result = re.sub(r'\n{3,}', '\n\n', result)
             return result
         # chat_text 失败时返回错误提示文本，不抛异常
+
+    def chat_turn(self, plan: PlanOutput, qa_matrix: QAOutput,
+                  user_answer: str, history: list[dict],
+                  user_requirements: str = "") -> str:
+        """多轮互动模式：根据用户回答给出点评并提出下一个问题。
+
+        Args:
+            plan: 任务计划。
+            qa_matrix: QA 责任矩阵。
+            user_answer: 用户对上一轮问题的回答（首轮为空，触发第一个问题）。
+            history: 之前的对话历史 [{role, content}]。
+            user_requirements: 用户自定义要求。
+        """
+        from app.llm.prompts import INTERVIEW_CHAT_SYSTEM
+        task_lines = "\n".join(f"- {t.id} {t.name}" for t in plan.tasks)
+        qa_lines = "\n".join(
+            f"- {a.task_name}: {a.presenter}" for a in qa_matrix.assignments) or "无"
+        context = (
+            f"以下是团队的项目计划和责任分工：\n\n"
+            f"## 任务计划\n{task_lines}\n\n"
+            f"## 责任分工\n{qa_lines}\n\n"
+        )
+        if user_requirements.strip():
+            context += f"## 用户特别要求\n{user_requirements.strip()}\n\n"
+
+        messages = [{"role": "user", "content": context + "请开始模拟评审，提第一个问题。"}]
+        messages.append({"role": "assistant", "content":
+            "好的，我已经了解了你们的项目。让我们开始吧。"})
+        for msg in history:
+            messages.append({"role": msg.get("role", "user"),
+                             "content": msg.get("content", "")})
+        if user_answer.strip():
+            messages.append({"role": "user", "content": user_answer})
+        else:
+            messages.append({"role": "user",
+                             "content": "请提第一个评审问题。"})
+
+        result = self.llm.chat_messages(
+            system_prompt=INTERVIEW_CHAT_SYSTEM,
+            messages=messages,
+            temperature=0.6,
+        )
+        if isinstance(result, str):
+            import re
+            bans_zh = ['QA角色', '答辩角色', '责任矩阵', '主讲分配', '主讲',
+                        '主答', '辅答', '匹配度', '系统推荐', '算法分配', 'AI分配',
+                        'QA矩阵', 'QA分配']
+            bans_ascii = ['B3', 'CPM', 'workload', 'load', 'score',
+                           'task_id', 'assign_with_balance']
+            for term in bans_zh:
+                result = result.replace(term, '')
+            result = re.sub(r'\bQA\b', '评审', result)
+            for term in bans_ascii:
+                result = re.sub(r'\b' + re.escape(term) + r'\b', '',
+                                result, flags=re.IGNORECASE)
+            result = re.sub(r'\n{3,}', '\n\n', result)
+            return result
         return result.message

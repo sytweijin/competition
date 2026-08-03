@@ -1,4 +1,4 @@
-﻿"""全局配置：API Key、模型选择、路径等。"""
+"""全局配置：API Key、模型选择、路径等。"""
 
 import os
 from datetime import date, datetime, timedelta, timezone

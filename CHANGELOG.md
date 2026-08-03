@@ -5,6 +5,1040 @@
 > 按时间倒序排列（最新在最上面），随项目同步更新。
 
 ---
+---
+---
+## v5.17 —— 品牌标识与视觉精细化重设计（2026-08-04）
+
+**定位：** 将单字 logo 替换为专业 SVG 图标，并对整体配色、卡片、按钮、背景做精细化打磨。
+
+**审查/修改背景：** 用户反馈品牌标识是一个汉字「协」放在方块里，视觉效果粗糙；同时希望整体配色更精致美观，在保持办公工具简洁感的前提下提升视觉品质。
+
+---
+
+### 体验优化（P2）
+
+#### 1. 品牌标识从汉字替换为 SVG 节点网络图标
+
+1. **问题：** 原品牌标识是一个 40x40 渐变方块内放一个汉字「协」，视觉效果粗糙。
+2. **修改前：**
+   ```html
+   <div class="brand-mark">协</div>
+   ```
+3. **修改后：** 替换为 SVG 节点网络图标——一个六边形外框内有四个圆形节点用线条相连，象征「任务拆解与人员协作」：
+   ```html
+   <div class="brand-mark"><svg viewBox="0 0 28 28" fill="none">
+     <path d="M14 5.5l8.5 4.9v9.8L14 25.1..." stroke="currentColor" opacity=".45"/>
+     <circle cx="14" cy="5" r="2.6" fill="currentColor"/>
+     <circle cx="5" cy="22.5" r="2.4" fill="currentColor" opacity=".85"/>
+     <circle cx="23" cy="22.5" r="2.4" fill="currentColor" opacity=".85"/>
+     <circle cx="14" cy="14.5" r="2.2" fill="currentColor" opacity=".7"/>
+     <path d="M14 7.4v5M12.2 12.6L6.4 20.7M15.8 12.6l5.8 8.1" .../>
+   </svg></div>
+   ```
+4. **为什么这样改：** 一个有意义的抽象图形比文字符号更专业、更有辨识度。节点网络隐喻「分工」——一个中心节点向多个执行节点分发任务，完美契合产品定位。
+5. **收益：** 品牌视觉专业感大幅提升；图标自带语义；白色 SVG 叠在渐变背景上层次分明。
+
+#### 2. 项目模式选择器增加图标
+
+1. **修改前：** 模式卡片只有纯文字标题和描述。
+2. **修改后：** 小型项目卡片增加四人圆点连接图标，大型项目卡片增加 2x2 方格图标，选中时图标变色高亮。
+3. **为什么这样改：** 图标让两种模式的区别一眼可辨，降低用户理解成本。
+4. **收益：** 模式选择更直观；选中状态视觉反馈更强。
+
+#### 3. 配色与质感精细化
+
+1. **修改前：** 背景 #f5f6f9 纯色平面；卡片阴影较浅；header 纯白不透明。
+2. **修改后：**
+   - 背景：在 #f4f5fa 基础上叠加极淡的径向渐变 mesh（靛蓝 + 天蓝双色），营造微妙层次
+   - Header / StepNav：改为半透明白色 + backdrop-filter:blur 毛玻璃效果
+   - 卡片阴影：加深为双层阴影，层次感更强
+   - 按钮：渐变加入 inset 顶部高光，质感更精致
+   - 品牌标识：渐变加入 inset 高光和更深的外发光
+   - 圆角：从 14px 微调到 16px，更柔和
+3. **为什么这样改：** 这些是现代 UI 设计的质感细节——毛玻璃、多层阴影、内高光——能在不改变布局的前提下大幅提升精致感。
+4. **收益：** 页面整体质感从「能用」提升到「好看」；保持了办公工具的克制和简洁。
+
+#### 4. Sticky action bar 与浮动按钮精细化
+
+1. **修改后：** sticky-action 增加向上投影；AI 助手按钮渐变和阴影统一升级。
+2. **为什么这样改：** sticky 元素需要与下方内容产生分离感，向上的柔和投影比硬边框更优雅。
+3. **收益：** 底部操作栏与内容区分更自然；视觉层次更清晰。
+
+---
+
+### 同步修改
+
+- `app/web/templates/index.html`：品牌标识 SVG、模式卡片图标、缓存版本号 v=5.17。
+- `app/web/static/style.css`：:root 色板、body 背景、header/stepNav 毛玻璃、brand-mark、mode-card、按钮、卡片、sticky-action 等全面精细化。
+- `app/main.py`：version 5.17。
+- 146 项测试全过，JS 语法检查通过。
+
+
+## v5.16 —— 静态资源缓存版本号递增修复浏览器旧缓存（2026-08-04）
+
+**定位：** 修复用户浏览器缓存旧版 app.js 导致骨干管理面板不显示的问题。
+
+**审查/修改背景：** v5.15.1 已在 app.js 中补齐了骨干管理面板（添加骨干按钮、成员行、认领下拉），但 index.html 中的静态资源引用仍是 ?v=5.15，与上一版完全相同。浏览器根据完整 URL 缓存静态文件，相同的 ?v=5.15 导致浏览器直接使用本地缓存的旧版 app.js（没有骨干面板的那版），用户看不到「添加骨干」入口。
+
+---
+
+### 关键缺陷（P0）
+
+#### 1. 静态资源缓存版本号未随代码更新而递增
+
+1. **问题：** app.js 内容已更新（新增骨干管理面板），但 HTML 引用的 ?v=5.15 与上一版相同，浏览器命中缓存直接加载旧文件，用户看到的页面缺少骨干添加入口。
+2. **修改前：**
+   ```html
+   <link rel="stylesheet" href="/static/style.css?v=5.15">
+   <script src="/static/app.js?v=5.15"></script>
+   ```
+3. **修改后：**
+   ```html
+   <link rel="stylesheet" href="/static/style.css?v=5.16">
+   <script src="/static/app.js?v=5.16"></script>
+   ```
+4. **为什么这样改：** 浏览器以完整 URL（含 query string）作为缓存键。app.js?v=5.15 和 app.js?v=5.16 是不同的 URL，浏览器不会命中旧缓存，必须重新向服务器请求最新文件。
+5. **收益：** 用户刷新页面后立即加载包含骨干面板的最新 app.js；style.css 同步递增确保样式也是最新版。
+
+### 打磨（P3）
+
+#### 2. FastAPI 版本号同步
+
+1. **问题：** app/main.py 中 FastAPI(version=5.15) 与前端版本号不同步。
+2. **修改前：** `app = FastAPI(title="协作分工智能体", version="5.15")`
+3. **修改后：** `app = FastAPI(title="协作分工智能体", version="5.16")`
+4. **为什么这样改：** 保持后端版本号与前端一致，方便调试时从 API 响应头确认当前运行版本。
+5. **收益：** 版本号统一，排查问题更清晰。
+
+---
+
+### 同步修改
+
+- `app/web/templates/index.html`：两处 ?v=5.15 替换为 ?v=5.16。
+- `app/main.py`：version 字符串 5.15 替换为 5.16。
+- 146 项测试全过，JS 语法检查通过。
+
+
+## v5.15.1 —— 骨干认领阶段补齐骨干管理面板（2026-08-04）
+
+**定位：** 修复大型项目骨干认领阶段缺少添加骨干入口的问题——大项目开头不填成员，到了骨干认领阶段下拉是空的，却没有地方添加骨干。
+
+**审查/修改背景：** 用户实测发现，大项目流程中第一步不填成员，第二步是骨干认领，但骨干下拉框没有任何选项，页面也没有"添加骨干"的入口，导致流程完全卡住。
+
+---
+
+### 关键缺陷（P0）
+
+#### 1. 骨干认领阶段缺少骨干管理面板
+
+1. **问题：** 大项目开头不填成员，到骨干认领阶段时 `state.input.members` 为空数组，模块认领下拉框无任何选项，但页面没有添加骨干的入口。
+2. **修改前：** `renderLargeBackbones()` 直接从 `state.input.members` 读取成员名生成 `<option>`，没有成员管理面板：
+   ```js
+   var memberOpts=(state.input.members||[]).map(function(m){return m.name});
+   // 下拉直接用 memberOpts，如果为空则只有"未认领"
+   ```
+3. **修改后：** 在认领卡片之前新增 `.draft-member-panel` 骨干管理面板，包含：
+   - "添加骨干"按钮：push 新成员到 `state.input.members` 并重新渲染
+   - 每行可填姓名、技能标签、每日可用工时
+   - "删除骨干"按钮：splice 成员并清除引用该骨干的认领
+   - 骨干姓名 blur 时实时更新所有模块认领下拉的 `<option>`
+   ```js
+   // 骨干管理面板
+   var panel='<div class="draft-member-panel">...<button id="addBackboneBtn">＋ 添加骨干</button>...</div>';
+   // 认领卡片
+   var cards=modules.map(function(m){...'<select data-module-owner="'+m.id+'">...'+memberNames+'...'...}).join('');
+   el('taskEditor').innerHTML=panel+cards;
+   ```
+4. **为什么这样改：** 大项目的核心流程是"先拆大模块 → 再补骨干 → 骨干认领模块"，骨干信息不应该在项目配置阶段强制填写，而是在骨干认领阶段才录入。原代码只从 `state.input.members` 读取，却没有在认领阶段提供写入入口。
+5. **收益：** 大项目流程不再卡住；骨干可在认领阶段随时添加、删除、编辑；添加后立即反映到认领下拉。
+
+#### 2. syncBackbones 未收集骨干信息
+
+1. **问题：** `syncBackbones()` 只同步模块的 `assignee_id`，不同步骨干成员信息。用户在认领阶段填写的骨干信息（姓名、技能）不会被保存到 `state.input.members`，后续阶段无法使用。
+2. **修改前：**
+   ```js
+   async function syncBackbones(){
+     var ops=[];
+     // 只处理模块认领下拉，不收集骨干信息
+     document.querySelectorAll('[data-module-owner]').forEach(...);
+   }
+   ```
+3. **修改后：** 先从 DOM 收集所有骨干信息到 `state.input.members`，然后同步认领状态：
+   ```js
+   async function syncBackbones(){
+     if(document.querySelector('#backboneList')){
+       var collected=[];
+       document.querySelectorAll('.draft-member-row').forEach(function(row){
+         var name=row.querySelector('.bb-name').value.trim();
+         if(!name)return;
+         collected.push({name:name,skill_tags:...,daily_available_hours:...});
+       });
+       state.input.members=collected;
+     }
+     // 然后同步认领状态...
+   }
+   ```
+4. **为什么这样改：** 骨干信息在 DOM 中编辑，必须在切换阶段时收集到 `state` 中，否则后续子任务拆解、分工等阶段拿不到成员列表。
+5. **收益：** 骨干信息完整传递到所有后续阶段；子任务编辑卡片的负责人下拉也能正确显示骨干选项。
+
+#### 3. 配置阶段大项目成员区域提示不明确
+
+1. **修改前：** 大项目模式下提示"此处成员将成为可认领模块的骨干"，容易让用户误以为必须在这里填。
+2. **修改后：** 改为"大型项目先拆大模块，再在「骨干认领」阶段添加骨干。此处可预填，也可跳过。"，标题也改为"骨干成员（可跳过）"。
+3. **收益：** 用户知道成员可以在骨干认领阶段添加，不会因为配置阶段不知道填什么而卡住。
+
+---
+
+### 同步修改
+
+- `app/web/static/app.js`：`renderLargeBackbones`、`syncBackbones`、`updateModeHint` 三个函数增强。
+- 无后端改动，146 项测试全过。
+
+
+## v5.15 —— CSS 全量重写修复类名不匹配 + 大模块编辑增强（2026-08-03）
+
+**定位：** 修复 v5.14 CSS 使用错误类名导致样式完全不生效的严重问题；同时增强大模块编辑阶段，补齐拖拽排序、添加任务到模块、子任务预览等编辑能力。
+
+**审查/修改背景：** v5.14 重写前端时，CSS 文件使用了 `.topbar`/`.stepbar`/`.workbench` 等类名，但 HTML 和 JS 实际使用的是 `.app-header`/`.step-nav`/`.app-main`，导致页面几乎无样式。同时 `app/main.py` 第24行有缩进错误导致服务器无法启动。用户反馈大模块拆解阶段仍缺少和小项目任务拆解一样的编辑能力。
+
+---
+
+### 关键缺陷（P0）
+
+#### 1. CSS 类名与 HTML 结构完全不匹配
+
+1. **问题：** v5.14 重写的 `style.css` 使用 `.topbar`、`.stepbar`、`.workbench`、`.config-panel`、`.workspace-panel` 等类名，但 `index.html` 和 `app.js` 实际使用的是 `.app-header`、`.step-nav`、`.app-main`、`.config-card`、`.task-editor` 等，两者完全不匹配，页面几乎无样式。
+2. **修改前：** CSS 中 `.topbar{height:72px}`，但 HTML 中是 `<header class="app-header">`，样式规则不会生效。
+3. **修改后：** 全量重写 `style.css`，所有选择器与 HTML 实际类名一一对应，覆盖全部 30+ 类名。
+4. **为什么这样改：** CSS 选择器必须与 HTML class 属性匹配才能生效；类名不匹配等于没有 CSS。
+5. **收益：** 页面视觉样式完全恢复；按钮、卡片、表单等全部组件正确渲染。
+
+#### 2. app/main.py 缩进错误导致服务器无法启动
+
+1. **问题：** `app/main.py` 第24行 `app = FastAPI(...)` 前有4个多余空格，Python 抛出 `IndentationError: unexpected indent`，服务器无法启动。
+2. **修改前：**
+   ```python
+       app = FastAPI(title="协作分工智能体", version="5.14")
+   ```
+3. **修改后：**
+   ```python
+   app = FastAPI(title="协作分工智能体", version="5.14")
+   ```
+4. **为什么这样改：** Python 对缩进严格敏感，模块级代码不能有缩进。
+5. **收益：** 服务器正常启动，前端可以加载。
+
+---
+
+### 健壮性提升（P1）
+
+#### 3. 大模块编辑缺少拖拽排序
+
+1. **问题：** 大模块拆解阶段无法调整模块顺序，用户想重新排列模块时没有操作手段。
+2. **修改前：** `renderLargeModules()` 的模块卡片没有拖拽手柄，`bindModuleCards()` 不处理拖拽事件。
+3. **修改后：** 每个模块卡片左侧新增 `.module-drag-handle`，`bindModuleCards()` 添加完整的 dragstart/dragover/drop 事件链，拖拽后调用 `reorder_modules` 操作更新后端。
+4. **为什么这样改：** 小项目任务拆解已有拖拽排序，大模块编辑应具备同等能力。
+5. **收益：** 模块顺序可自由调整，拖拽体验与任务排序一致。
+
+#### 4. 大模块编辑无法直接添加子任务
+
+1. **问题：** 大模块拆解阶段虽然能看到模块下的子任务数量，但无法直接添加任务到某个模块，必须先进入子任务拆解阶段。
+2. **修改前：** 模块卡片只显示子任务计数（"N 项子任务"），无操作按钮。
+3. **修改后：** 每个模块卡片新增"＋ 添加任务"按钮，点击直接调用 `add` 操作并传入 `module_id`。
+4. **为什么这样改：** 用户在大模块阶段就能快速调整每个模块的子任务量，无需切换阶段。
+5. **收益：** 编辑效率提升；模块阶段即可增减子任务。
+
+---
+
+### 体验优化（P2）
+
+#### 5. 大模块编辑阶段新增子任务预览
+
+1. **问题：** 大模块拆解只显示子任务数量，不显示具体是哪些任务，用户不清楚模块下有哪些内容。
+2. **修改前：** 只显示 `<span class="module-count-chip">N 项子任务</span>`。
+3. **修改后：** 新增 `.module-task-preview` 区域，展示前5个子任务名称和工时，超过5个显示"+N 项"。
+4. **为什么这样改：** 让用户在模块编辑阶段就能看到模块内容，判断是否需要调整。
+5. **收益：** 信息透明度提升；减少切换阶段的认知负担。
+
+#### 6. 大模块工具栏新增"重新生成"按钮
+
+1. **修改前：** 工具栏只有"新增模块"和"合并选中模块"。
+2. **修改后：** 新增"重新生成"按钮，调用 `generateDraft(true)` 重新走 AI 拆解。
+3. **收益：** 用户对 AI 拆解结果不满意时可一键重试。
+
+#### 7. CSS 视觉设计全面升级
+
+1. **修改后：** 重写全部 CSS，采用更精致的圆角层级（14px/10px/6px）、更细腻的阴影层级（xs/sm/md/lg）、更专业的色彩体系（indigo primary + 完整的 success/warning/danger/info 语义色），按钮增加 hover 上浮效果，卡片增加细微阴影层次。
+2. **收益：** 整体视觉更专业、更现代，组件间层次更清晰。
+
+---
+
+### 同步修改
+
+- `app/web/static/app.js`：`renderLargeModules` 和 `bindModuleCards` 函数重写，新增拖拽排序和添加任务功能。
+- `app/web/static/style.css`：全量重写，修复类名不匹配，新增 `.module-task-preview`、`.module-task-chip`、`.module-drag-handle` 等样式。
+- `app/main.py`：修复第24行缩进错误。
+- `app/models/schemas.py`：版本号从 5.14 更新为 5.15。
+- `app/web/templates/index.html`：版本引用从 v=5.14 更新为 v=5.15。
+- `README.md`：版本号和版本演进表同步更新。
+
+
+## v5.14 —— 前端全量重写：大型/小型项目完全分离 + 大模块编辑功能（2026-08-03）
+
+**定位：** 将所有前端 JavaScript 从内联 `<script>` 迁移到外部 `app/web/static/app.js`，大型项目与小型项目走完全不同的步骤流和页面布局；大模块编辑阶段补齐合并、新增、删除等编辑功能。
+
+**审查/修改背景：** 上一版（v5.13）前端仍保留左右分栏布局和内联脚本，大型项目步骤导航混在小项目框架内，大模块缺少编辑能力（无法合并/新增/删除模块），用户反映"切大型项目看不出区别"。本次彻底重写前端逻辑层。
+
+---
+
+### 关键缺陷（P0）
+
+#### 1. 大型项目与小项目的步骤流未完全分离
+
+1. **问题：** 切换到大型项目时，步骤栏仍显示小项目四步，无法体现"大模块拆解→骨干认领→子任务拆解"的独立流程。
+2. **修改前：** `renderSteps()` 固定输出五步导航，不区分项目模式。
+3. **修改后：**
+   ```js
+   var steps = isLargeProject()
+     ? ['项目配置','大模块拆解','骨干认领','子任务拆解','分工招募','最终方案']
+     : ['项目配置','任务拆解','智能分工','最终方案'];
+   ```
+4. **为什么这样改：** 大型项目六步 vs 小型项目四步，步骤数和内容完全不同，用户一眼就能看出自己处于哪种模式。
+5. **收益：** 步骤导航准确反映当前模式；点击步骤可跳转到对应阶段。
+
+#### 2. 大模块编辑阶段缺少合并/新增/删除功能
+
+1. **问题：** 大模块拆解阶段只能查看模块，不能编辑模块名称、合并模块或新增模块。
+2. **修改前：** 大模块区域只展示只读卡片，无工具栏按钮。
+3. **修改后：** 每个模块卡新增 checkbox 可多选合并；工具栏新增"新增模块"和"合并选中模块"按钮。
+4. **为什么这样改：** 大模块编辑应和小项目任务编辑一样灵活，用户需要调整 AI 拆解结果。
+5. **收益：** 大模块可新增、删除、合并、重命名；子任务拆解阶段每个模块可独立添加子任务。
+
+#### 3. 内联 JavaScript 迁移为外部文件
+
+1. **问题：** 全部 JS 逻辑写在 index.html 内联 script 标签内，无法被浏览器缓存。
+2. **修改前：** `<script>var state=...（约300行压缩代码）...</script>`
+3. **修改后：** `<script src="/static/app.js?v=5.14"></script>`，外部文件约1000行结构化代码。
+4. **为什么这样改：** 外部 JS 文件可被浏览器缓存，版本号 v=5.14 用于缓存刷新。
+5. **收益：** 首屏加载更快；代码结构清晰可维护。
+
+---
+
+### 健壮性提升（P1）
+
+#### 4. 模式切换时步骤导航不刷新
+
+1. **问题：** 点击"大型项目"模式卡片后，步骤栏不更新（仍显示四步）。
+2. **修改前：** 模式卡片点击只调用 `updateModeHint()`。
+3. **修改后：** 追加 `renderSteps()` 调用。
+4. **为什么这样改：** renderSteps 依赖 isLargeProject 判断步骤数，模式切换后需重新渲染。
+5. **收益：** 切换模式即时反馈步骤数变化（4 vs 6）。
+
+---
+
+### 体验优化（P2）
+
+#### 5. 吸顶工具栏和底部固定操作栏
+
+1. **问题：** 任务很多时需要滚动到底部才能找到操作按钮。
+2. **修改后：** draftToolbar 和 boardToolbar 使用 position:sticky 吸顶；确认按钮区域使用 sticky-action 固定底部。
+3. **收益：** 常用操作始终可见，无需滚动。
+
+#### 6. 大型项目看板拆分模块分工和志愿者招募两个标签页
+
+1. **修改后：** 大型项目看板顶部新增标签切换。
+2. **收益：** 分工和招募职责清晰分离。
+
+---
+
+### 同步修改
+
+- `README.md`：版本徽章更新至 v5.14，版本规划表新增 v5.14 行。
+- `app/models/schemas.py`：FullPlan.version 从 5.13 更新为 5.14。
+- `app/main.py`：FastAPI 版本号从 5.13 更新为 5.14。
+
+---
+## v5.13 —— 大型项目分步流程补齐：大模块拆解→骨干认领→子任务拆解→志愿者认领（2026-08-03）
+
+**定位：** 把大型项目从「一次展示模块+全部子任务」改为严格的三段式工作流：先只拆大模块，再由骨干认领模块，进入模块内子任务拆解，最后在看板中由志愿者认领人手不足的子任务；小型项目拆解与分工流程完全不变。
+
+**审查/修改背景：** 用户实测后指出，大型项目先不填骨干时应先看到大模块拆解，再由骨干认领大模块，之后才轮到模块内子任务拆解和志愿者认领；此前版本虽然后端已有 modules 层级，但前端把模块、子任务、骨干认领、志愿者一次性混在同一屏，流程感缺失，用户误以为只是「小型项目 + 志愿者」。
+
+---
+
+### 队友改动说明
+
+v5.10/v5.11 的 `large_project` 分支、`_fallback_large_project_plan`、`extra_helpers_needed`、志愿者池等来自队友本地改动，v5.12 已在其基础上建立模块层级。本版本只在 v5.12 基础上补全前端分步流程，不改变队友的后端模块结构与志愿者认领接口。
+
+---
+
+### 关键缺陷（P0）
+
+#### 1. 大型项目草案缺少「骨干认领大模块」和「大模块→子任务」两个独立环节
+
+1. **问题：** 不填骨干生成大型项目草案后，页面直接同时展示模块卡片与全部子任务，没有「先拆大模块 → 补骨干认领模块 → 再细化模块内子任务」的先后步骤。
+2. **修改前：** `renderDraft()` 对大型项目无条件渲染 `renderLargeModuleCards(tasks, modules, members, true)`，模块卡片里直接内嵌全部子任务和负责人下拉，任务编辑与骨干认领混在一起。
+   ```js
+   if (large) {
+     html = renderLargeModuleCards(tasks, modules, members, true);
+   } else {
+     html = tasks.map(...).join('');
+   }
+   ```
+3. **修改后：** 新增 `LARGE_DRAFT_STAGES` 与 `renderDraft()` 分阶段渲染：阶段1只显示模块卡（含「已预拆 N 项子任务」）；阶段2显示骨干编辑面板 + 模块认领下拉；阶段3才显示模块内子任务编辑卡。
+   ```js
+   var LARGE_DRAFT_STAGES = [
+     ['modules', '大模块拆解'],
+     ['backbones', '骨干认领'],
+     ['tasks', '子任务拆解']
+   ];
+   // renderDraft()
+   if (stage === 'modules') {
+     html = renderLargeModuleCards(tasks, modules, members, false);
+   } else if (stage === 'backbones') {
+     html = renderDraftMemberPanel() + renderLargeModuleCards(tasks, modules, state.largeMembersDraft, true);
+   } else {
+     html = renderLargeTaskEditor(tasks, modules, members);
+   }
+   ```
+4. **为什么这样改：** 大型项目与小型项目的本质差异在于任务层级与认领顺序；把「模块确认、骨干补录、模块内子任务拆解」拆成独立阶段，用户才能按正确顺序操作，避免把骨干认领和子任务编辑混为一屏。
+5. **收益：**
+   - 不填骨干也能先看到大模块骨架。
+   - 骨干在独立阶段按模块认领，认领完成后再进入子任务拆解。
+   - 小型项目渲染分支不变，原有流程零影响。
+
+#### 2. 大型项目看板缺少独立的「模块认领」和「志愿者认领」环节
+
+1. **问题：** 确认分工后看板直接把模块子任务分工和志愿者招募混在一起，用户找不到「骨干先认领模块、志愿者再认领子任务」的先后关系。
+2. **修改前：** `renderBoard()` 大型项目只有 `renderLargeAssignHtml()` 一个视图，模块分区内同时出现任务卡片与志愿者招募字段。
+   ```js
+   if (large) {
+     el('board').innerHTML = renderLargeAssignHtml();
+   } else {
+     el('board').innerHTML = renderSmallBoardHtml();
+   }
+   ```
+3. **修改后：** 看板新增 `largeBoardTabs`，拆为「1 模块认领」「2 子任务分工」「3 志愿者认领」三个 Tab；`renderLargeModulesHtml()` 只负责模块认领进度与负责人，`renderLargeAssignHtml()` 去掉任务卡内的志愿者字段，`renderLargeVolunteersHtml()` 按模块分组展示志愿者招募。
+   ```js
+   if (state.largeBoardTab === 'modules') {
+     el('board').innerHTML = renderLargeModulesHtml();
+   } else if (state.largeBoardTab === 'volunteers') {
+     el('board').innerHTML = renderLargeVolunteersHtml();
+   } else {
+     el('board').innerHTML = renderLargeAssignHtml();
+   }
+   ```
+4. **为什么这样改：** 三个 Tab 对应三段工作流，模块认领进度有独立统计，志愿者招募不再淹没在分工卡片中；前后端职责边界未变，只是展示层按环节聚焦。
+5. **收益：**
+   - 模块认领进度一目了然（已认领 n / m）。
+   - 子任务分工视图专注骨干与负责人调整。
+   - 志愿者按模块分组认领，招募需求更清晰。
+
+#### 3. 骨干成员只能在左侧提前填写，草案阶段无法先拆模块再补骨干
+
+1. **问题：** 大型项目允许空骨干生成草案，但草案阶段没有补录骨干的入口，用户仍要回到左侧表单填人，破坏了「先拆模块再认领」的顺序。
+2. **修改前：** 草案阶段只渲染模块与任务，没有成员编辑面板；`state.input.members` 只能来自左侧表单。
+3. **修改后：** 新增 `renderDraftMemberPanel()` / `addDraftMemberRow()` / `collectDraftMembers()`，骨干认领阶段可在页内直接添加、编辑、移除骨干，并同步写入 `state.input.members`；`syncDraft()` 在 backbones 阶段先 `collectDraftMembers()` 再提交。
+   ```js
+   function collectDraftMembers() {
+     var members = Array.from(document.querySelectorAll('.draft-member-row')).map(...);
+     state.largeMembersDraft = members;
+     if (state.input) state.input.members = members;
+     return members;
+   }
+   ```
+4. **为什么这样改：** 骨干补录属于大型项目工作流的中间环节，应当与模块认领同屏完成；把成员写入统一入口后再提交，后端仍按既有接口校验。
+5. **收益：**
+   - 用户可在模块拆解后直接补骨干并认领。
+   - 无需切换视图，减少流程打断。
+
+---
+
+### 健壮性提升（P1）
+
+#### 4. 未认领模块可进入子任务拆解，缺少前端兜底提示
+
+1. **问题：** 若骨干认领阶段漏掉某模块，仍可直接进入子任务拆解，用户不知道还有模块没人负责。
+2. **修改前：** `transitionLargeStage()` 只切换阶段，不检查骨干与模块认领状态。
+3. **修改后：** 进入子任务阶段前校验必须至少 1 名骨干，若存在未认领模块则弹出提示，允许继续但在看板「模块认领」Tab 补认领。
+   ```js
+   if (next === 'tasks' && !(state.input.members || []).length) {
+     showNotice('请先在「骨干认领」中添加至少一名骨干', 'error');
+     return;
+   }
+   ...
+   if (next === 'tasks' && claimed < modules.length) {
+     showNotice('还有 ' + (modules.length - claimed) + ' 个模块未认领，可在看板「模块认领」中补认领', 'info');
+   }
+   ```
+4. **为什么这样改：** 校验与提示分开：硬性阻止完全空骨干，未认领模块用非阻断提示，避免流程卡死又能提醒用户补全。
+5. **收益：**
+   - 不会带着零骨干进入子任务拆解。
+  - 未认领模块不会被静默带进下一步。
+
+---
+#### 5. 自动生成的模块名是「执行模块」等阶段名，看不到模块到底拆了什么
+
+1. **问题：** 当 LLM 返回了子任务但未返回 modules，`ensure_large_project_structure` 按执行阶段分组生成模块，名称直接用 `f"{stage}模块"`，用户看到「执行模块」「准备模块」，完全不知道模块里是什么任务。
+2. **修改前：**
+   ```python
+   for stage in stage_order:
+       stage_tasks = grouped.pop(stage, [])
+       for chunk_index in range(0, len(stage_tasks), 4):
+           chunk = stage_tasks[chunk_index:chunk_index + 4]
+           new_modules.append(ProjectModule(
+               id=module_id,
+               name=f"{stage}模块",
+               description=f"围绕「{stage}」阶段的一组子任务，由一名骨干认领推进。",
+               order=len(new_modules) + 1,
+           ))
+   ```
+3. **修改后：** 新增 `_derive_module_name_from_tasks()` 和 `_derive_module_description_from_tasks()`：优先按子任务技能规范词投票出领域名（如「调研与分析」「视觉设计与物料制作」「文案与内容创作」），其次用任务名关键词拼接，最后才回退阶段兜底名。描述也改为列出该模块包含的具体子任务名称。
+   ```python
+   name=_derive_module_name_from_tasks(chunk, stage),
+   description=_derive_module_description_from_tasks(chunk, stage),
+   ```
+   实测效果：6 个子任务自动分成 3 个模块——「调研与分析」「视觉设计与物料制作」「文案与内容创作」，而非原来的「准备模块」「执行模块」「收尾模块」。
+4. **为什么这样改：** 模块名是用户理解大型项目拆解结构的第一信息源，用阶段名命名等于没有名字；从子任务技能领域推导名字能直接反映这个模块在做什么。
+5. **收益：**
+   - 模块名不再是空洞的「执行模块」，而是「调研与分析」「视觉设计与物料制作」等具体领域名。
+   - 描述列出子任务名称，用户无需展开就能预览模块内容。
+   - 技能→领域映射复用 `scoring.py` 已有同义词表，不维护第二份。
+
+---
+
+### 同步修改
+
+- `app/web/templates/index.html`：新增 `#largeStageNav`、`#draftStageActions`、`#largeBoardTabs` 容器，CSS/JS 缓存版本升级为 `v=5.13`。
+- `app/web/static/style.css`：新增阶段导航、骨干面板、模块认领卡、看板 Tab、志愿者按模块分组样式。
+- `app/main.py` / `app/models/schemas.py`：版本号统一升级为 5.13。
+- `README.md`：顶部版本与版本演进表同步 v5.13。
+- `app/agents/validation.py`：修复自动生成模块名为阶段名 bug，改为从子任务技能和名称推导。
+- 测试：`python -m pytest tests/ -q` → 146 passed。
+
+---
+## v5.12 —— 大型项目模式重构：模块→子任务→骨干认领→子任务级志愿者招募（2026-08-03）
+
+**定位：** 把大型项目模式的拆解顺序彻底改为「先拆模块（大任务）→ 模块内拆子任务 → 骨干按模块认领 → 子任务级招募志愿者」，并为大型项目提供完全独立的前端页面；小型项目保留原「先看人再拆任务」流程不变，模式名由「小组作业」改为「小型项目」。
+
+**审查/修改背景：** 用户对照队友的汇报后确认，大型项目和小型项目不应共用同一套拆解顺序：小型项目人员固定，应保留原有的「先判断用户技能，再按个性化能力生成任务」算法；大型项目架构更复杂，需要先拆成若干大任务模块，再在模块内拆子任务，由骨干认领模块，只有人手不足的子任务才招募志愿者。用户同时指出当前「大型项目」页面与「小型项目」几乎一样（仍是先填人→拆任务→分配给成员→附加志愿者），并要求模式标签改为「小型项目」。本轮只做结构调整与修复，暂不 push。
+
+---
+
+### 队友改动说明
+
+v5.10/v5.11 的 `large_project` 分支、`_fallback_large_project_plan`、`extra_helpers_needed`、志愿者池等来自队友本地改动；本版本在其基础上把大型项目从「一次拆到底 + 附加志愿者」重构为「模块 → 子任务 → 骨干认领 → 子任务级招募」，并保留小组作业原有算法完全不变。队友遗留的两处旧测试断言（期望 5 项任务）已同步更新为 4 模块 × 8 子任务。
+
+---
+
+### 关键缺陷（P0）
+
+#### 1. 大型项目仍是「先填人再拆任务」，层级与小型项目没有本质区别
+
+1. **问题：** 用户选择大型项目后，页面仍要求先填写团队成员，再像小型项目一样把任务一次性拆完并分配给这几个人，只是最后附加了志愿者招募；用户反馈「现在的逻辑和之前小型项目逻辑不还是一样吗？」。
+2. **修改前：** 大型项目与小型项目共用同一套 Planner 输出（只有 `tasks`），页面也共用同一套任务编辑、看板与最终方案模板。
+3. **修改后：** 新增模块层级并贯穿全链路：
+   ```python
+   class ProjectModule(BaseModel):
+       id: str
+       name: str
+       description: str = ""
+       order: int = 0
+       status: TaskStatus = TaskStatus.pending
+       assignee_id: Optional[str] = None  # 骨干按模块认领
+
+   class SubTask(BaseModel):
+       ...
+       module_id: Optional[str] = None    # 子任务归属模块
+
+   class PlanOutput(BaseModel):
+       tasks: list[SubTask]
+       modules: list[ProjectModule] = []  # 大型项目：先拆模块
+   ```
+   大型项目兜底计划改为 4 个模块（需求梳理→内容制作→质量整合→汇报提交）× 8 项子任务，每项子任务带 `module_id`；前端草案编辑、分工看板、最终方案、报告与导出均按模块分组展示，小型项目仍只显示任务列表。
+4. **为什么这样改：** 大型项目区别于小型项目的本质是先有「大任务/模块」骨架，再由骨干认领骨架、按子任务细化执行；把 `modules` 放进 `PlanOutput` 并在所有展示层按模块分组，才能让两种模式在前端真正不同。
+5. **收益：**
+   - 大型项目前端出现「模块卡片 → 模块内子任务 → 模块负责人 → 志愿者招募」的独立层级。
+   - 小型项目页面与算法完全保留，无回归。
+
+#### 2. 大型项目仍要求先填骨干，无法「先拆任务再补人」
+
+1. **问题：** 用户希望大型项目先拆任务，再由骨干认领；但 `/run` 与 `AssignmentInput` 仍要求成员非空，先填人才能进入拆解。
+2. **修改前：**
+   ```python
+   valid_members = [m for m in req.members if m.name.strip()]
+   if not valid_members and req.project_mode != "large_project":
+       raise HTTPException(status_code=400, detail="至少需要 1 名有姓名的团队成员")
+   ```
+3. **修改后：** `/api/run` 保持大型项目允许空成员，`small_group` 仍要求至少 1 名成员；大型项目空成员时 Matcher 返回空 `QAOutput`，模块与子任务结构保留，填骨干后 `/api/manual-assignment` 可一次性按模块认领。
+   ```python
+   if not valid_members and req.project_mode != "large_project":
+       raise HTTPException(status_code=400, detail="至少需要 1 名有姓名的团队成员")
+   ```
+4. **为什么这样改：** 大型项目的工作流是「先有任务结构，再找人负责」，空骨干是合法中间状态；把校验放开后流程顺序真正可颠倒。
+5. **收益：**
+   - 用户可以先看到模块与子任务骨架，再补充骨干。
+   - 认领模块后，模块内未单独指定负责人的子任务默认归模块负责人，减少重复选择。
+
+---
+
+### 健壮性提升（P1）
+
+#### 3. 模块编辑缺少完整生命周期，空模块与排序会被静默清理
+
+1. **问题：** 新增模块后，`validate_plan`/`ensure_large_project_structure` 会立刻删除没有任何子任务的「孤儿模块」，导致用户「新增模块 → 再往里加子任务」的第一步就消失；`reorder_modules` 只改 `order` 字段，下游仍按列表顺序重建，排序不生效。
+2. **修改前：**
+   ```python
+   modules = [
+       m for m in modules
+       if m.id in used_module_ids  # 空模块直接被清掉
+   ]
+   ```
+3. **修改后：**
+   ```python
+   def validate_plan(plan, tolerate_cycle=True, preserve_empty_modules=False):
+       ...
+       modules = [
+           m.model_copy(update={...})
+           for index, m in enumerate(modules)
+           if preserve_empty_modules or m.id in used_module_ids
+       ]
+   ```
+   `mutate_draft` 在模块结构存在时传 `preserve_empty_modules=True`，并在操作结束后先按 `order` 排序再重建编号：
+   ```python
+   modules.sort(key=lambda module: (module.order or 10**9, module.id))
+   ```
+   同时补齐 `add_module / remove_module / reorder_modules / update_module` 指令与后端校验（模块 ID 唯一、删除非空模块报错、排序必须包含全部模块）。
+4. **为什么这样改：** 空模块是用户手工编辑的合法中间状态，排序依赖列表顺序与 `order` 字段保持一致；只靠「清理孤儿模块」会让新增模块和排序两个基础操作静默失效。
+5. **收益：**
+   - 新增空模块后可以继续命名、认领、添加子任务。
+   - 模块上移/下移与后端排序真实生效，且删除非空模块会被明确阻止。
+
+#### 4. 空骨干/未认领模块时手动分工会崩溃
+
+1. **问题：** `apply_manual_assignment` 为没有负责人的任务生成 `QAAssignment(presenter=None)`，Pydantic 校验报错，大型项目「先拆任务再补骨干」的路径无法保存。
+2. **修改前：**
+   ```python
+   assignments.append(QAAssignment(
+       task_id=task.id, task_name=task.name, presenter=owner, ...))
+   ```
+3. **修改后：**
+   ```python
+   assignments.append(QAAssignment(
+       task_id=task.id, task_name=task.name, presenter=owner or "", ...))
+   ```
+   并在重算出口统一透传 `module_assignees` 到模块 `assignee_id`。
+4. **为什么这样改：** 未认领是大型项目「先拆后补」过程中的正常状态，接口必须能表达「还没有负责人」，而不是抛校验错误。
+5. **收益：**
+   - 空骨干方案可以保存、继续编辑。
+   - 模块认领后子任务自动继承模块负责人，任务级手动分工仍优先。
+
+---
+
+### 体验优化（P2）
+
+#### 5. 大型项目前端与小型项目完全共用，模式标签误导
+
+1. **问题：** 模式选择仍叫「小组作业」，但小型项目还包括推送等非小组作业场景；大型项目页面几乎与小型项目一样，用户反馈「感觉没什么区别」。
+2. **修改前：** `<option value="small_group">小组作业（人固定，先看人再拆任务）</option>`；`index.html` 内联全部 JS，两种模式共用同一渲染函数。
+3. **修改后：**
+   ```html
+   <option value="small_group" selected>小型项目（人固定，先看人再拆任务）</option>
+   ```
+   大型项目新增独立视图：草案阶段按「模块卡片 + 模块内子任务 + 模块负责人 + 上移/下移/删除模块」展示；看板按模块分区展示子任务卡片并附志愿者招募面板；最终方案按模块分组并显示模块负责人与子任务进度。前端脚本抽离为 `/static/app.js?v=5.12`，样式新增 `.module-edit-card`、`.board-module`、`.final-module` 等模块化样式。
+4. **为什么这样改：** 两种模式的流程本质不同，共用视图会把「先看人」和「先拆模块」混在一起；把大型项目视图独立出来才能体现「先拆模块 → 骨干认领 → 子任务招募」的完整逻辑，模式名改为「小型项目」覆盖更准确。
+5. **收益：**
+   - 选择大型项目后看到的是模块化拆解页面，与小型项目明显区分。
+   - 「小型项目」命名覆盖小组作业、推送等非固定大型场景。
+
+---
+
+### 打磨（P3）
+
+#### 6. 版本号与前端资源未同步，旧测试断言停留在 5 任务结构
+
+1. **问题：** `app/main.py` 仍为 5.11，前端资源缓存为 5.11.1；`tests/test_large_project_mode.py` 仍断言兜底计划 5 项任务，与新的 4 模块 × 8 子任务不一致。
+2. **修改前：** `app.main` `version="5.11"`；`index.html` 引用 `style.css?v=5.11.1`；测试断言 `len(plan.tasks) == 5`。
+3. **修改后：** 版本统一为 5.12，CSS/JS 缓存引用 `v=5.12`；测试断言更新为 `len(plan.modules) == 4 and len(plan.tasks) == 8`，并新增空骨干草案、模块生命周期、模块认领持久化、非法模块拒绝等用例。
+4. **为什么这样改：** 版本号是跨文件契约，测试需要锁定新的模块层级，否则重构后的核心行为没有回归保护。
+5. **收益：**
+   - 资源缓存与版本一致，前端不会加载旧 JS。
+   - 模块化重构获得完整回归测试，全量 146 项通过。
+
+---
+
+### 版本规划表
+
+**v5.12 已由「规划中」更新为「已完成」**，详见文末版本规划表。
+
+---
+
+## v5.11 —— 大型项目模式闭环：志愿者招募与认领（2026-08-03）
+
+**定位：** 在 v5.10 的「先拆任务 → 骨干认领 → 标注志愿者需求」基础上，把大型项目模式补成完整可用闭环：志愿者池数据模型 + 统一校验 + API + 看板招募交互 + 最终方案/导出展示；小组作业既有算法完全不变。
+
+**审查/修改背景：** 用户确认优先把大型项目做好做实。v5.10 已有 `project_mode`、`extra_helpers_needed`、骨干认领和志愿者徽章，但志愿者只是「需求数字」，没有认领记录、没有交互，保存/导出也看不到招募进度，演示时闭环断在招募这一步。
+
+---
+
+### 队友改动说明
+
+v5.10 前队友的本地改动已包含：`large_project` 分支、`_fallback_large_project_plan`、`extra_helpers_needed`、scoring 内部协作位修正、前端项目模式选择和志愿者徽章。本版本在其基础上补齐志愿者池的增删改、校验、API、看板面板、最终视图与导出，不重写既有分工算法。
+
+---
+
+### 关键缺陷（P0）
+
+#### 1. 大型项目模式只有「需求数字」，没有可保存的认领记录
+
+1. **问题：** `extra_helpers_needed` 只标注需要多少志愿者，页面无法登记谁认领、联系方式、状态，保存/加载/导出都会丢失，演示断在招募这一步。
+2. **修改前：**
+   ```python
+   class FullPlan(BaseModel):
+       input: AssignmentInput
+       plan: PlanOutput
+       timeline: TimelineOutput
+       qa_matrix: QAOutput
+       report: ReportOutput
+       reflection: Optional[ReflectionOutput] = Field(default=None, ...)
+       version: str = "5.6"
+   ```
+3. **修改后：**
+   ```python
+   class Volunteer(BaseModel):
+       name: str
+       task_id: str
+       status: str = "待确认"   # 待确认 / 已确认 / 已婉拒
+       contact: str = ""
+       note: str = ""
+
+   class FullPlan(BaseModel):
+       ...
+       volunteer_pool: list[Volunteer] = Field(default_factory=list, ...)
+       version: str = "5.11"
+   ```
+4. **为什么这样改：** 招募的本质是「任务需求 × 认领状态」，需要结构化实体承载，而不是把数字写死在前端。放在 `FullPlan` 顶层，让保存/加载/导出/重算全链路共享同一份事实。
+5. **收益：**
+   - 志愿者认领记录可随方案保存、加载、导出，闭环可复现。
+   - 旧方案没有 `volunteer_pool` 时自动取空列表，向后兼容。
+
+#### 2. 重算链路会悄悄丢掉志愿者池
+
+1. **问题：** 手动分工、成员变动、状态重算、任务编辑都会重建 `FullPlan`，原实现没有透传 `volunteer_pool`，用户调整一次方案后认领记录就消失。
+2. **修改前：**
+   ```python
+   return FullPlan(
+       input=fp.input, plan=plan, timeline=timeline,
+       qa_matrix=qa, report=report, version=fp.version)
+   ```
+3. **修改后：**
+   ```python
+   return FullPlan(
+       input=fp.input, plan=plan, timeline=timeline,
+       qa_matrix=qa, report=report,
+       volunteer_pool=fp.volunteer_pool, version=fp.version)
+   ```
+   同步在 `editor.py`、`/api/recompute`、`/api/edit-members` 的重建出口保留志愿者池；删除任务时过滤掉指向已删除任务的认领记录。
+4. **为什么这样改：** `FullPlan` 是多处各自重建的聚合根，任何一处遗漏都会造成静默丢数据；在所有重建出口统一透传并清理失效任务引用，才能保证招募记录跨操作存活。
+5. **收益：**
+   - 调整分工、成员、状态后志愿者认领不再丢失。
+   - 删除任务后不会残留指向不存在任务的孤儿认领记录。
+
+---
+
+### 健壮性提升（P1）
+
+#### 3. 志愿者池缺少统一业务校验
+
+1. **问题：** 志愿者姓名可与团队成员重名、可在池内重复、可认领不存在的任务或需求为 0 的任务，人数还能超过需求，导致方案数据互相矛盾。
+2. **修改前：** 没有 `volunteer_pool` 校验入口，前端只能裸改 JSON，非法数据可以一路保存到导出。
+3. **修改后：**
+   ```python
+   def update_volunteer_pool(plan, volunteers):
+       if plan.input.project_mode != "large_project":
+           raise ProjectServiceError("志愿者招募仅适用于大型项目模式")
+       # 校验：姓名非空 / 不与成员重名 / 池内不重名
+       # 任务存在且 extra_helpers_needed > 0
+       # 已确认 + 待确认 <= 需求；已婉拒不占名额
+   ```
+   新增 `POST /api/volunteers`，以整池替换方式保存，非法状态返回 400。
+4. **为什么这样改：** 招募数据必须与任务结构强一致；把规则收在业务层，Web、CLI、未来对话指令共用同一套约束，而不是让每个前端各自校验。
+5. **收益：**
+   - 演示时不会被超额认领、重名或错乱状态打断。
+   - 校验规则集中在 `project_service`，可测试、可复用。
+
+---
+
+### 体验优化（P2）
+
+#### 4. 看板没有招募入口，最终方案/导出看不到进度
+
+1. **问题：** 大型项目确认分工后进入看板，只能看到「需招募 n 名志愿者」徽章，无法添加、改状态、移除志愿者；报告和导出也没有招募章节。
+2. **修改前：** `renderBoard` 只渲染成员列；`renderReportTab`、`_plan_to_markdown`、`plan_to_docx`、`plan_to_pdf` 均无志愿者内容。
+3. **修改后：** 看板新增「志愿者招募与认领」面板（每任务：姓名/联系方式/备注/状态/移除 + 满员提示）；任务卡片与最终任务、分工矩阵、报告展示「已确认/需求」进度；Markdown/Word/PDF 导出增加「志愿者招募计划」章节。
+4. **为什么这样改：** 招募是大型项目工作流的一等环节，应该在看板、最终方案、导出三处都有对应视图，演示链路才能完整走通。
+5. **收益：**
+   - 认领、改状态、移除全部可视化，并实时保存到后端。
+   - 导出文档可直接作为招募计划交付物。
+
+---
+
+#### 5. 大型项目模式界面沿用「团队成员」措辞，骨干/志愿者层级不明
+
+1. **问题：** 选择大型项目后，配置表单仍叫「团队成员」，任务里显示「招募志愿者」，看板又保留骨干分工，用户看不出这几种人的区别，误以为大型项目还要像小组作业一样先填全体人员。
+2. **修改前：** 表单区块标题固定为「团队成员」；志愿者面板文案只写「为需要外部参与的任务登记志愿者」，没有说明志愿者与骨干的关系；最终方案页的成员页签和报告基本信息也沿用「成员/团队成员」。
+3. **修改后：** 大型项目模式下表单标题切换为「骨干成员（固定核心团队）」，并在标题下显示说明「先按交付物拆解任务，再由骨干认领负责；需要更多人手的任务单独招募志愿者，志愿者不替换骨干分工」；志愿者面板文案补充「志愿者是骨干之外的补充人力，不替换骨干分工」；最终方案页成员页签、成员管理标题和报告基本信息按模式显示「骨干管理/骨干成员」，小组作业保持原「成员管理/团队成员」。
+4. **为什么这样改：** 大型项目的完整结构本来就是「骨干（固定、认领负责） + 志愿者（外部、补充人手）」，之前界面没有把这两个层级说清楚，用户会在分工逻辑上产生误解；把语义直接写进界面，让流程自解释。
+5. **收益：**
+   - 用户一进入表单就知道大型项目填的是骨干，不再误以为是全体成员。
+   - 看板上的骨干分工和志愿者招募两层关系一目了然，减少误解。
+   - 小组作业界面措辞完全不变，无回归风险。
+
+---
+
+### 打磨（P3）
+
+#### 6. 版本号与前端草案字段未同步
+
+1. **问题：** `app/main.py` / `index.html` 仍写 5.6，草案编辑器也没有 `extra_helpers_needed` 输入，用户只能依赖 LLM 输出，无法手工修正志愿者需求。
+2. **修改前：** `version="5.6"`；草案只有「建议人数」输入。
+3. **修改后：** 版本统一为 5.11；大型项目草案把「建议人数」替换为「招募志愿者」输入，`taskFromRow` 同步 `extra_helpers_needed` 并保持 `suggested_people = 1 + 需求`；小组作业仍保留原「建议人数」输入。
+4. **为什么这样改：** 版本号是跨文件契约，草案是需求修正入口；两者不同步会让演示结果与代码状态不一致。
+5. **收益：**
+   - 版本可追溯，前端资源缓存按 5.11 刷新。
+   - 用户可手工调整志愿者需求，确认分工后立即反映到看板和导出。
+
+---
+
+### 版本规划表
+
+**v5.11 已由「规划中」更新为「已完成」**，详见文末版本规划表。
+
+---
+
+## v5.10 —— 大型项目模式补做 + 评审预演多轮互动 + 前端适配（2026-08-03）
+
+**定位：** 把 v5.8「文档先行」的大型项目模式真正落地：先拆任务 → 骨干认领 → 标注志愿者需求；评审预演从一次性问题列表升级为多轮互动；修复由此暴露的"分工算法把外部志愿者需求当成内部协作位"的问题。
+
+**审查/修改背景：** 用户反馈之前没试过答辩模拟，且现有模拟"问的都是一些关于怎么保证任务准时完成的问题，也没有互动"；梳理 `建议(2).docx` 后确认，大型项目模式应区分"小组作业（人固定，先看人再拆任务）"和"大型项目（先拆任务再认领招募）"。队友在 0801/0802 的本地改动已搭出雏形，但测试文件曾丢失、均衡算法仍会把零负载内部成员塞进志愿者需求任务，全量回归曾失败。
+
+---
+
+### 关键缺陷（P0）
+
+#### 1. 大型项目模式仅有文档、没有可运行代码（补做 v5.8）
+
+1. **问题：** v5.8 的 CHANGELOG 描述了大量大型项目代码，但仓库里没有 `project_mode`、`extra_helpers_needed`、`_fallback_large_project_plan`、`LARGE_PROJECT_PLANNER_*`，`/api/run` 也不会透传项目模式；选择大型项目后实际仍走小组作业链路。
+2. **修改前：**
+   ```python
+   class AssignmentInput(BaseModel):
+       ...
+       deadline: date
+       # 没有 project_mode / extra_helpers_needed
+
+   # Coordinator
+   if isinstance(plan, AgentError):
+       plan = self._fallback_plan(inp, plan.message)
+   ```
+3. **修改后：**
+   ```python
+   class AssignmentInput(BaseModel):
+       project_mode: str = Field(default="small_group", ...)
+
+   # Coordinator
+   plan = (self._fallback_large_project_plan(inp, plan.message)
+           if inp.project_mode == "large_project"
+           else self._fallback_plan(inp, plan.message))
+   ```
+   同步补齐：`_step_planner_large_project`（先拆任务→骨干认领）、`_fallback_large_project_plan`（5 阶段确定性兜底）、`LARGE_PROJECT_PLANNER_SYSTEM/USER_TEMPLATE`、`SubTask.extra_helpers_needed`、`PlanOutput.member_assessment`、`/api/run` 透传 `project_mode`、`generate_draft(use_ai=False)` 走大型项目兜底。
+4. **为什么这样改：** 小组作业和大型项目的人员结构不同：小组作业人固定，先看人再拆任务；大型项目先拆交付模块，再由骨干认领并对外招募志愿者。只有把模式贯穿 schema → Planner → 兜底 → 路由 → 前端，产品行为才能真正分叉，而不是文档和代码两套说法。
+5. **收益：**
+   - 大型项目模式首次成为可运行功能，LLM 与确定性兜底都能产出骨干 + 志愿者结构。
+   - `member_assessment` 让"先看人"在小组作业里也有可解释的评估依据。
+   - `/api/run` 与快速草案两条入口行为一致。
+
+#### 2. 分工算法把外部志愿者需求当成内部协作位
+
+1. **问题：** 大型项目任务用 `extra_helpers_needed` 标注志愿者后，`_balance_workload` 仍会把零负载的内部成员搬到该任务的 `qa_primary/qa_support`；`enhance` 和 `recompute_preserve` 也可能重新引入内部协作者，导致"骨干 + 志愿者"分层被算法破坏。
+2. **修改前：**
+   ```python
+   max_collaborators = max(0, t.suggested_people - 1)
+   ...
+   active = [a for a in assignments
+             if a.presenter != "(已完成)" and n not in (a.qa_support or [])]
+   ```
+3. **修改后：**
+   ```python
+   def _internal_collab_slots(task) -> int:
+       internal_people = max(1, task.suggested_people - (task.extra_helpers_needed or 0))
+       return max(0, internal_people - 1)
+
+   def _has_volunteer_demand(task) -> bool:
+       return (task.extra_helpers_needed or 0) > 0 and _internal_collab_slots(task) <= 0
+
+   fixed_task_ids = {t.id for t in plan.tasks if _has_volunteer_demand(t)}
+   work = _balance_workload(..., fixed_task_ids=fixed_task_ids)
+   ```
+   `_balance_workload`/`_rebalance_presenters` 增加 `fixed_task_ids`，志愿者需求任务不再参与负责人/协助搬运；`enhance` 初始就清空这类任务的协助位。
+4. **为什么这样改：** 志愿者不在注册成员名单里，`suggested_people` 中属于志愿者的名额不应被内部成员顶替。用"内部协作位 = suggested_people - 志愿者需求 - 1"计算，并在均衡阶段把这类任务视为固定结构，才能保住"骨干负责、志愿者补充"的分层。
+5. **收益：**
+   - 大型项目不再出现"明明要招 2 名志愿者，却又把 Bob 塞成内部主要协助"的矛盾。
+   - 分工结果与前端志愿者徽章一致，答辩展示可自圆其说。
+
+#### 3. 评审预演没有互动，只是一次性问题列表
+
+1. **问题：** 原 `InterviewSimAgent` 只有一次性 `run()`，前端 `/api/interview` 返回问题列表后就没有后续；用户反馈"问的都是一些关于怎么保证任务准时完成的问题，也没有互动"。
+2. **修改前：**
+   ```html
+   <button id="startInterviewBtn" class="btn btn-primary">生成模拟问题</button>
+   <div id="interviewQuestions" class="interview-list"></div>
+   ```
+3. **修改后：**
+   ```python
+   # app/agents/interview_sim.py
+   def chat_turn(self, plan, qa_matrix, user_answer, history, user_requirements=""):
+       messages = [{"role": "user", "content": context + "请开始模拟评审，提第一个问题。"}]
+       # 追加 history 与本次回答，调用 INTERVIEW_CHAT_SYSTEM
+   ```
+   同步新增 `POST /api/interview/chat`、`INTERVIEW_CHAT_SYSTEM`（点评 + 追问 + 维度切换）、前端开始/作答/重新开始三态 UI。
+4. **为什么这样改：** 真实答辩是"评委提问 → 你回答 → 评委点评并追问"的循环。多轮 `chat_turn` 携带完整 history 和用户要求，才能模拟出有来有回、能追问细节的评审，而不是把一堆问题一次性倒给用户。
+5. **收益：**
+   - 预演从"读问题"变成"练答辩"，回答含糊时会被追问。
+   - 问题维度按项目理解和分工动态生成，不再全是"怎么保证准时完成"。
+
+### 健壮性提升（P1）
+
+#### 4. 志愿者约束不能误伤小组作业的"全员参与"
+
+1. **问题：** 零负载兜底直接按 `_internal_collab_slots(task) > 0` 过滤，会把小组作业 `suggested_people=1`、新增零技能成员等场景的"全员参与"也一并禁掉，导致既有 `test_add_member_with_no_skills_gets_nonzero_workload`、`test_assign_with_balance_respects_suggested_people` 失败。
+2. **修改前：**
+   ```python
+   active = [... and _internal_collab_slots(task_by_id[a.task_id]) > 0]
+   ```
+3. **修改后：**
+   ```python
+   active = [... and not _has_volunteer_demand(task_by_id[a.task_id])]
+   ```
+   即只有"标注了外部志愿者需求且内部协作位已满"的任务才锁定；小组作业仍保留每个任务 1 主协 + 2 辅协、零工时成员也能参与的行为。
+4. **为什么这样改：** 两类场景约束来源不同：大型项目的约束是"志愿者名额不能被内部成员占"，小组作业的约束是"固定成员都应参与"。用 `extra_helpers_needed > 0` 做区分，而不是一刀切按 `suggested_people` 计算。
+5. **收益：**
+   - 大型项目志愿者语义正确，小组作业全员参与回归不受影响。
+   - 全量 125 个测试通过，两个历史回归用例重新变绿。
+
+### 体验优化（P2）
+
+#### 5. 前端支持项目模式选择与大型项目信息展示
+
+1. **问题：** 前端没有项目模式入口，`collectInput()` 不传 `project_mode`；看板任务卡既不显示"需招募 N 名志愿者"，也不展示 Planner 的 `member_assessment` 能力评估。
+2. **修改前：**
+   ```js
+   return {course:..., members:..., deadline:..., ...};
+   ```
+3. **修改后：**
+   ```js
+   return {project_mode:el('projectMode').value, course:..., members:..., ...};
+   function renderVolunteersField(task){...'需招募 '+n+' 名志愿者'...}
+   function renderAssessment(task){...assessments[task.assignee_id]...}
+   ```
+   新增项目模式下拉框、志愿者徽章、能力评估块，并在 `style.css` 增加对应样式。
+4. **为什么这样改：** 用户需要能显式切换"小组作业/大型项目"，且大型项目模式的核心信息（要招多少志愿者、骨干为什么适合该任务）必须在看板上可见，否则前端与后端模式分叉。
+5. **收益：**
+   - 项目模式真正端到端生效，而非后端默认为 small_group。
+   - 大型项目看板信息完整，评审或演示时一眼看懂"骨干 + 志愿者"结构。
+
+#### 6. 评审预演界面改为聊天式交互
+
+1. **问题：** 一次性问题列表没有输入框，用户无法作答，也没有重置入口。
+2. **修改前：** 静态 `.interview-list`，点击"生成模拟问题"后只渲染问题文本。
+3. **修改后：** `.interview-messages` 消息流 + `.interview-form` 作答框 + 开始/重新开始按钮；新增 `ivChat` 状态，作答后自动发 `/api/interview/chat` 并追加点评。
+4. **为什么这样改：** 聊天气泡天然符合"多轮互动"心智，作答入口始终可用，重置能清空历史重新预演。
+5. **收益：**
+   - 交互闭环：开始 → 回答 → 点评 → 追问 → 重新开始。
+   - 答辩练习的真实感和完成度提升。
+
+### 打磨（P3）
+
+#### 7. README 版本同步
+
+1. **问题：** README 版本号仍停在 v5.7，版本演进表缺少 v5.8/v5.9/v5.10，与 CHANGELOG 实际进度脱节。
+2. **修改前：** README 顶部 `**版本：v5.7**`，演进表最新为 v5.7。
+3. **修改后：** 顶部更新为 v5.10，演进表补充 v5.8/v5.9/v5.10 三行。
+4. **为什么这样改：** README 是团队成员和验收方第一眼看到的信息，版本不一致会让人误以为大型项目模式和互动预演尚未落地。
+5. **收益：** 文档入口与 CHANGELOG 保持一致，避免再次出现"文档先行、代码脱节"。
+
+### 队友改动说明
+
+**改动来源：** 队友在 0801/0802 的本地改动（当前工作区未提交部分），包括大型项目 Planner/兜底雏形、`extra_helpers_needed`/`member_assessment` 字段、评审预演 `chat_turn` 雏形、前端项目模式下拉与志愿者展示；v5.9 已恢复被误删的测试并清理 BOM。
+
+**本版本在其基础上的增强：**
+- 补齐 `TaskStatus` 导入，避免大型项目 Planner 路径 `NameError`。
+- 修复 `_balance_workload` 把志愿者需求任务当成内部协作位、以及零负载兜底误伤小组作业的问题。
+- 前端补齐 `/api/interview/chat` 交互闭环与看板徽章/评估展示。
+- 新增 `tests/test_large_project_mode.py`、`tests/test_interview_chat.py`，全量 `125 passed`。
+
+**验证：** 按 AGENTS.md 前端 4 步验证：内联 JS `new Function` 语法检查通过；HTML 字符串拼接变量均在字符串外；JS 无 `\u0022`；`python -m pytest tests/ -q` 125 passed。
+
+---
+## v5.9 —— 测试恢复 + BOM 清理 + 文档与代码一致性修正（2026-08-03）
+
+**定位：** 修复队友提交（commit `4c28963`「0801第二次」）误删全部测试文件导致 CI 空转的问题，清理历史遗留的 UTF-8 BOM，并诚实记录 v5.8「大型项目模式」代码未进库的文档脱节问题。
+
+**修改背景：** 队友在 0801 的多次 push 中，`4c28963` 把 `tests/` 下全部 15 个测试文件（含 `conftest.py`，共 118 个 `test_` 函数）删除；`fa6aba6` 只改了 CHANGELOG 却新增了 v5.8「大型项目模式」条目，描述了大量后端/前端代码与 `tests/test_large_project.py`，但这些代码从未进入 `main`（全分支、全历史搜索 `large_project` / `extra_helpers_needed` / `member_type` 均无命中）。本版只做「修问题」，不改功能；大型项目模式的补做列为下一步。
+
+---
+
+### 关键缺陷（P0）
+
+#### 1. 全部测试文件被误删，CI 形同空转
+
+1. **问题：** `4c28963`「0801第二次」一次性删除了 `tests/` 下 15 个 `test_*.py`、`conftest.py`、`__init__.py`（共 2401 行删除）。`pytest` 变成 `no tests ran`，`.github/workflows/test.yml` 的 `pytest -v` 步骤不再有任何实际验证，AGENTS.md「必须 118 passed」的基线彻底失效。
+2. **修改前：**
+   ```
+   $ pytest -q
+   no tests ran in 0.01s
+   ```
+3. **修改后：**
+   ```
+   $ git checkout 424f459 -- tests/      # 恢复删除前的完整测试目录
+   $ pytest -q
+   118 passed, 1 warning in 109.29s
+   ```
+4. **为什么这样改：** 测试是在 `424f459`（删除前最后一个测试完好版本）里完整存在的，直接从 git 历史恢复即可，无需重写。恢复后 118 个测试对当前「顺序B改造」代码全绿，说明 `3e883bf` 的匹配逻辑改动未破坏既有契约。
+5. **收益：**
+   - CI 恢复真实门禁，后续任何改动重新有「全绿才安全」的护栏。
+   - 顺序B改造（`assign_with_balance` 尊重 Planner 的 `assignee_id`）在 118 个既有用例下验证无回归。
+
+#### 2. v5.8「大型项目模式」CHANGELOG 与代码严重脱节
+
+1. **问题：** v5.8 条目描述了 `_step_planner_large_project`、`_fallback_large_project_plan`、`LARGE_PROJECT_PLANNER_SYSTEM`、`large_project` 模式、`extra_helpers_needed`、骨干/志愿者 `member_type`、`apply_manual_assignment` 的 `is_large_project` 分支、`tests/test_large_project.py`（3 个测试）等大量内容，但这些代码/文件在 `main` 及所有远程分支、全部历史提交中均不存在——`fa6aba6` 那个 commit 实际只改了 CHANGELOG.md 一个文件。
+2. **修改前：** CHANGELOG 宣称功能已修复并测试通过，实际代码库里无任何大型项目模式实现。
+3. **修改后：** 本条如实记录该脱节。按 AGENTS.md「不得覆盖或删除旧版本详细内容」的约定，v5.8 原文予以保留；大型项目模式的补做列入下一步「改功能」阶段。版本规划表中 v5.8 标注为「文档先行，代码待补」。
+4. **为什么这样改：** CHANGELOG 是团队和答辩时理解「改了什么、为什么」的依据。文档与代码不一致会误导后续判断，必须显式标注，而不是假装它存在或悄悄删掉。
+5. **收益：**
+   - 后续接手者能立即知道 v5.8 是「待落地」而非「已完成」。
+   - 为下一步补做大型项目模式提供明确的待办锚点。
+
+### 打磨（P3）
+
+#### 3. 13 个 Python 文件残留 UTF-8 BOM
+
+1. **问题：** 8 个 `app/` 源文件与 5 个恢复回来的测试文件以 UTF-8 BOM（`U+FEFF`）开头。运行时无害，但用 `ast.parse` 按原始字节解析会报「invalid non-printable character U+FEFF」，且不同编辑器/工具链对 BOM 处理不一致。
+2. **修改前：**
+   ```python
+   # 文件首字节为 EF BB BF（BOM），ast.parse 原始字节报错
+   ```
+3. **修改后：**
+   ```python
+   # 剥离开头 3 字节 BOM，统一为无 BOM 的 UTF-8
+   with open(p,'rb') as fh: b=fh.read()
+   if b.startswith(b'\xef\xbb\xbf'): open(p,'wb').write(b[3:])
+   ```
+4. **为什么这样改：** Python 源文件标准是 UTF-8 无 BOM。BOM 只在极少数 Windows 工具里有意义，却会干扰字节级静态检查、diff 可读性和跨平台一致性。
+5. **收益：**
+   - `ast.parse` 原始字节解析不再误报，外部静态分析工具可正常工作。
+   - 全仓库 Python 文件编码风格统一。
+
+**验证：** `pytest` 118 passed；`index.html` 内联 JS `new Function(js)` 语法检查通过；全部模块 `importlib.import_module` 成功；BOM 残留 0。
+
 ## v5.8 —— 大型项目模式后端+前端修复（2026-08-01）
 
 **定位：** 修复 `feature/large-project-mode` 分支引入的大型项目模式问题，包括服务器500错误、成员类型设计矛盾、分工兜底缺失、前端未适配 large_project 模式等。
@@ -4319,4 +5353,13 @@ LLM 负责"创造性"：拆任务、分配角色、写报告
 | **v5.5** | **新增成员零工时修复 + 任务分工术语清理** | **已完成** |
 | **v5.6** | **成员变动后分工失衡 + 导出与报告问题修复** | **已完成** |
 | **v5.7** | **第二轮深度审查全量修复 + AI 协作助手体验重写** | **已完成** |
+| v5.8 | 大型项目模式后端+前端修复 | 文档先行，代码待补 |
+| **v5.9** | **测试恢复 + BOM 清理 + 文档与代码一致性修正** | **已完成** |
+| **v5.10** | **大型项目模式补做 + 评审预演多轮互动 + 前端适配** | **已完成** |
+| **v5.11** | **大型项目模式闭环：志愿者招募与认领** | **已完成** |
+| **v5.12** | **大型项目模式重构：模块→子任务→骨干认领→子任务级志愿者招募** | **已完成** |
+| **v5.14** | **前端全量重写：外部 app.js 替代内联脚本，大型/小型项目完全分离** | **已完成** |
+| **v5.15.1** | **骨干认领阶段补齐骨干管理面板** | **已完成** |
+| **v5.15** | **CSS 全量重写修复类名不匹配 + 大模块编辑增强** | **已完成** |
+| **v5.13** | **大型项目分步流程补齐：模块拆解→骨干认领→子任务拆解→志愿者认领** | **已完成** |
 | v6.x | 正式发布与功能扩展 | 规划中 |

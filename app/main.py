@@ -1,4 +1,4 @@
-"""
+﻿"""
 FastAPI 应用入口（A5）
 """
 
@@ -21,7 +21,7 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="协作分工智能体", version="5.6")
+app = FastAPI(title="协作分工智能体", version="5.15")
 
 # 全局异常处理器：意外错误不暴露代码堆栈，返回 JSON 错误信息
 _DEBUG = os.getenv("DEBUG", "").lower() in ("1", "true", "yes")

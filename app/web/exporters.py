@@ -1,4 +1,4 @@
-﻿"""
+"""
 计划导出工具：将 FullPlan 转换为 Word(.docx) 和 PDF 格式。
 供 /api/export 端点调用，提供普通用户友好的可打印文档。
 """
@@ -215,6 +215,81 @@ def _register_cjk_font():
         return None
 
 
+def _volunteers_markdown(plan: FullPlan) -> str:
+    """生成志愿者招募计划 Markdown（供 Word/PDF 复用渲染）。"""
+    tasks = [
+        t for t in plan.plan.tasks if (t.extra_helpers_needed or 0) > 0
+    ]
+    if not tasks:
+        return ""
+    task_name = {t.id: t.name for t in plan.plan.tasks}
+    module_by_task = {
+        t.id: module.name
+        for module in plan.plan.modules
+        for t in plan.plan.tasks
+        if t.module_id == module.id
+    }
+    is_large = plan.input.project_mode == "large_project"
+    pool = plan.volunteer_pool or []
+    lines = (
+        ["| 所属模块 | 任务 | 需招募 | 已确认 | 待确认 | 已婉拒 | 进度 |",
+         "|---|---|---|---|---|---|---|"]
+        if is_large
+        else ["| 任务 | 需招募 | 已确认 | 待确认 | 已婉拒 | 进度 |",
+              "|---|---|---|---|---|---|"]
+    )
+    for task in tasks:
+        rows = [v for v in pool if v.task_id == task.id]
+        confirmed = sum(1 for v in rows if v.status == "已确认")
+        pending = sum(1 for v in rows if v.status == "待确认")
+        declined = sum(1 for v in rows if v.status == "已婉拒")
+        need = task.extra_helpers_needed or 0
+        row = (
+            f"| {module_by_task.get(task.id, '-')} | {task.id} {task.name} | "
+            f"{need} | {confirmed} | {pending} | {declined} | "
+            f"{confirmed + pending}/{need} |"
+            if is_large
+            else f"| {task.id} {task.name} | {need} | {confirmed} | {pending} | "
+                 f"{declined} | {confirmed + pending}/{need} |"
+        )
+        lines.append(row)
+    if pool:
+        lines.append("")
+        lines.append("### 认领明细")
+        lines.append("| 志愿者 | 任务 | 状态 | 联系方式 | 备注 |")
+        lines.append("|---|---|---|---|---|")
+        for volunteer in pool:
+            lines.append(
+                f"| {volunteer.name} | {task_name.get(volunteer.task_id, volunteer.task_id)} | "
+                f"{volunteer.status} | {volunteer.contact or '-'} | "
+                f"{volunteer.note or '-'} |")
+    return "\n".join(lines)
+
+
+def _modules_markdown(plan: FullPlan) -> str:
+    """生成大型项目「模块 → 子任务」拆解 Markdown（供 Word/PDF 复用渲染）。"""
+    status_map = {"pending": "待开始", "in_progress": "进行中",
+                  "completed": "已完成", "blocked": "阻塞"}
+    lines: list[str] = []
+    for module in sorted(plan.plan.modules, key=lambda m: m.order or 0):
+        owner = module.assignee_id or "待认领"
+        lines.append(f"### {module.id} {module.name}（负责人：{owner}）")
+        if module.description:
+            lines.append(module.description)
+        lines.append("")
+        lines.append("| 编号 | 任务 | 工时 | 依赖 | 所需技能 | 需招募 | 状态 |")
+        lines.append("|---|---|---|---|---|---|---|")
+        for task in [t for t in plan.plan.tasks if t.module_id == module.id]:
+            deps = ", ".join(task.dependencies) if task.dependencies else "-"
+            skills = ", ".join(task.required_skills) if task.required_skills else "-"
+            lines.append(
+                f"| {task.id} | {task.name} | {task.estimated_hours:g}h | "
+                f"{deps} | {skills} | {task.extra_helpers_needed or 0} | "
+                f"{status_map.get(task.status, task.status)} |")
+        lines.append("")
+    return "\n".join(lines)
+
+
 def plan_to_docx(plan: FullPlan) -> bytes:
     """将 FullPlan 转换为 Word 文档，返回 bytes。"""
     doc = Document()
@@ -246,22 +321,25 @@ def plan_to_docx(plan: FullPlan) -> bytes:
 
     # 任务列表
     doc.add_heading("二、任务拆解", level=1)
-    table = doc.add_table(rows=1, cols=6, style="Table Grid")
-    hdr = table.rows[0].cells
-    for i, text in enumerate(["ID", "任务", "工时", "依赖", "所需技能", "状态"]):
-        hdr[i].text = text
-        for run in hdr[i].paragraphs[0].runs:
-            run.bold = True
-    status_map = {"pending": "待开始", "in_progress": "进行中",
-                  "completed": "已完成", "blocked": "阻塞"}
-    for t in plan.plan.tasks:
-        row = table.add_row().cells
-        row[0].text = t.id
-        row[1].text = t.name
-        row[2].text = f"{t.estimated_hours}h"
-        row[3].text = ", ".join(t.dependencies) if t.dependencies else "-"
-        row[4].text = ", ".join(t.required_skills) if t.required_skills else "-"
-        row[5].text = status_map.get(t.status, t.status)
+    if plan.input.project_mode == "large_project" and plan.plan.modules:
+        _md_to_docx(doc, _modules_markdown(plan), base_heading_level=2)
+    else:
+        table = doc.add_table(rows=1, cols=6, style="Table Grid")
+        hdr = table.rows[0].cells
+        for i, text in enumerate(["ID", "任务", "工时", "依赖", "所需技能", "状态"]):
+            hdr[i].text = text
+            for run in hdr[i].paragraphs[0].runs:
+                run.bold = True
+        status_map = {"pending": "待开始", "in_progress": "进行中",
+                      "completed": "已完成", "blocked": "阻塞"}
+        for t in plan.plan.tasks:
+            row = table.add_row().cells
+            row[0].text = t.id
+            row[1].text = t.name
+            row[2].text = f"{t.estimated_hours}h"
+            row[3].text = ", ".join(t.dependencies) if t.dependencies else "-"
+            row[4].text = ", ".join(t.required_skills) if t.required_skills else "-"
+            row[5].text = status_map.get(t.status, t.status)
 
     # 时间线
     if plan.timeline.tasks:
@@ -297,9 +375,15 @@ def plan_to_docx(plan: FullPlan) -> bytes:
             row[2].text = a.qa_primary
             row[3].text = ", ".join(a.qa_support) if a.qa_support else "-"
 
+    volunteer_md = _volunteers_markdown(plan)
+    if volunteer_md:
+        doc.add_heading("五、志愿者招募计划", level=1)
+        _md_to_docx(doc, volunteer_md, base_heading_level=2)
+
     # 风险提示
     if plan.report.risk_note:
-        doc.add_heading("五、风险提示", level=1)
+        heading = "六、风险提示" if volunteer_md else "五、风险提示"
+        doc.add_heading(heading, level=1)
         _md_to_docx(doc, plan.report.risk_note, base_heading_level=2)
 
     buf = io.BytesIO()
@@ -342,16 +426,21 @@ def plan_to_pdf(plan: FullPlan) -> bytes:
         story.append(Spacer(1, 10))
 
     story.append(Paragraph("二、任务拆解", h2_style))
-    status_map = {"pending": "待开始", "in_progress": "进行中",
-                  "completed": "已完成", "blocked": "阻塞"}
-    task_data = [["ID", "任务", "工时", "依赖", "状态"]]
-    for t in plan.plan.tasks:
-        task_data.append([
-            t.id, t.name, f"{t.estimated_hours}h",
-            ", ".join(t.dependencies) or "-", status_map.get(t.status, t.status),
-        ])
-    story.append(_build_table(task_data, font_name, body_style))
-    story.append(Spacer(1, 10))
+    if plan.input.project_mode == "large_project" and plan.plan.modules:
+        story.extend(_md_to_pdf_story(
+            _modules_markdown(plan), body_style, h2_style, h3_style, font_name))
+        story.append(Spacer(1, 10))
+    else:
+        status_map = {"pending": "待开始", "in_progress": "进行中",
+                      "completed": "已完成", "blocked": "阻塞"}
+        task_data = [["ID", "任务", "工时", "依赖", "状态"]]
+        for t in plan.plan.tasks:
+            task_data.append([
+                t.id, t.name, f"{t.estimated_hours}h",
+                ", ".join(t.dependencies) or "-", status_map.get(t.status, t.status),
+            ])
+        story.append(_build_table(task_data, font_name, body_style))
+        story.append(Spacer(1, 10))
 
     if plan.timeline.tasks:
         story.append(Paragraph("三、时间线安排", h2_style))
@@ -377,8 +466,15 @@ def plan_to_pdf(plan: FullPlan) -> bytes:
         story.append(_build_table(qa_data, font_name, body_style))
         story.append(Spacer(1, 10))
 
+    volunteer_md = _volunteers_markdown(plan)
+    if volunteer_md:
+        story.append(Paragraph("五、志愿者招募计划", h2_style))
+        story.extend(_md_to_pdf_story(volunteer_md, body_style, h2_style, h3_style, font_name))
+        story.append(Spacer(1, 10))
+
     if plan.report.risk_note:
-        story.append(Paragraph("五、风险提示", h2_style))
+        heading = "六、风险提示" if volunteer_md else "五、风险提示"
+        story.append(Paragraph(heading, h2_style))
         risk_style = ParagraphStyle("Risk", parent=body_style, textColor=colors.red)
         story.extend(_md_to_pdf_story(plan.report.risk_note, risk_style, h2_style, h3_style, font_name))
 
