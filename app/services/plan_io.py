@@ -1,0 +1,341 @@
+"""Excel/CSV/ICS 导入导出服务。"""
+
+from __future__ import annotations
+
+import csv
+import io
+import re
+import zipfile
+from datetime import date, timedelta
+from xml.sax.saxutils import escape
+
+from app.models.schemas import FullPlan, PlanOutput, ProjectModule, SubTask
+
+
+def _as_date(value) -> date | None:
+    if not value:
+        return None
+    if isinstance(value, date):
+        return value
+    text = str(value)[:10]
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _safe_text(value, default=""):
+    return "" if value is None else str(value)
+
+
+def plan_to_csv(plan: FullPlan) -> str:
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "编号", "任务", "模块", "计划工时", "实际工时", "负责人",
+        "开始日期", "结束日期", "依赖", "阶段", "状态",
+    ])
+    for task in plan.plan.tasks:
+        writer.writerow([
+            task.id,
+            task.name,
+            task.module_id or "",
+            task.estimated_hours,
+            task.actual_hours if task.actual_hours is not None else "",
+            task.assignee_id or "",
+            task.start_date.isoformat() if task.start_date else "",
+            task.end_date.isoformat() if task.end_date else "",
+            ",".join(task.dependencies or []),
+            task.execution_stage or "",
+            task.status.value if hasattr(task.status, "value") else task.status,
+        ])
+    return output.getvalue()
+
+
+def plan_to_ics(plan: FullPlan) -> str:
+    timeline_map = {}
+    if plan.timeline and plan.timeline.tasks:
+        for item in plan.timeline.tasks:
+            timeline_map[item.task_id] = item
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//Collaboration Planner//CN",
+        "CALSCALE:GREGORIAN",
+    ]
+    for task in plan.plan.tasks:
+        start = task.start_date
+        end = task.end_date
+        tl = timeline_map.get(task.id)
+        if start is None and tl is not None:
+            start = _as_date(getattr(tl, "start_date", None))
+        if end is None and tl is not None:
+            end = _as_date(getattr(tl, "end_date", None))
+        if start is None or end is None:
+            continue
+        uid = f"{task.id}@collaboration-planner"
+        summary = task.name.replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,")
+        description = (
+            f"{task.estimated_hours}h · {task.assignee_id or '未分配'}"
+            .replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,")
+        )
+        lines.append("BEGIN:VEVENT")
+        lines.append(f"UID:{uid}")
+        lines.append(f"DTSTAMP:{start.strftime('%Y%m%d')}T000000Z")
+        lines.append(f"DTSTART;VALUE=DATE:{start.strftime('%Y%m%d')}")
+        lines.append(f"DTEND;VALUE=DATE:{(end + timedelta(days=1)).strftime('%Y%m%d')}")
+        lines.append(f"SUMMARY:{summary}")
+        lines.append(f"DESCRIPTION:{description}")
+        lines.append("END:VEVENT")
+    lines.append("END:VCALENDAR")
+    return "\r\n".join(lines) + "\r\n"
+
+
+def _xlsx_bytes(sheets: list[tuple[str, list[list]]]) -> bytes:
+    """极简 XLSX 生成器，不依赖 openpyxl。"""
+    ns_main = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    ns_pkg = "http://schemas.openxmlformats.org/package/2006/content-types"
+    ns_rel = "http://schemas.openxmlformats.org/package/2006/relationships"
+    ns_rel_ws = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+
+    content = [
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+        f'<Types xmlns="{ns_pkg}">',
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>',
+        '<Default Extension="xml" ContentType="application/xml"/>',
+        '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>',
+    ]
+    for i in range(1, len(sheets) + 1):
+        content.append(
+            f'<Override PartName="/xl/worksheets/sheet{i}.xml" '
+            'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        )
+    content.append("</Types>")
+
+    workbook = [
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+        f'<workbook xmlns="{ns_main}" xmlns:r="{ns_rel_ws}"><sheets>',
+    ]
+    for i, (name, _) in enumerate(sheets, start=1):
+        workbook.append(
+            f'<sheet name="{escape(name)}" sheetId="{i}" r:id="rId{i}"/>'
+        )
+    workbook.append("</sheets></workbook>")
+
+    workbook_rels = [
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+        f'<Relationships xmlns="{ns_rel}">',
+    ]
+    for i in range(1, len(sheets) + 1):
+        workbook_rels.append(
+            f'<Relationship Id="rId{i}" '
+            f'Type="{ns_rel_ws}/worksheet" Target="worksheets/sheet{i}.xml"/>'
+        )
+    workbook_rels.append("</Relationships>")
+
+    sheet_xmls = []
+    for _, rows in sheets:
+        xml_rows = []
+        for row_idx, row in enumerate(rows, start=1):
+            cells = []
+            for col_idx, value in enumerate(row, start=1):
+                ref = f"{chr(64 + col_idx)}{row_idx}"
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    cells.append(f'<c r="{ref}"><v>{value}</v></c>')
+                else:
+                    text = escape("" if value is None else str(value))
+                    cells.append(
+                        f'<c r="{ref}" t="inlineStr"><is><t>{text}</t></is></c>'
+                    )
+            xml_rows.append("<row>" + "".join(cells) + "</row>")
+        sheet_xmls.append(
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            f'<worksheet xmlns="{ns_main}"><sheetData>'
+            + "".join(xml_rows)
+            + "</sheetData></worksheet>"
+        )
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("[Content_Types].xml", "\n".join(content))
+        zf.writestr("_rels/.rels", (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            f'<Relationships xmlns="{ns_rel}">'
+            f'<Relationship Id="rId1" Type="{ns_rel}/officeDocument" Target="xl/workbook.xml"/>'
+            "</Relationships>"
+        ))
+        zf.writestr("xl/workbook.xml", "\n".join(workbook))
+        zf.writestr("xl/_rels/workbook.xml.rels", "\n".join(workbook_rels))
+        for i, sheet_xml in enumerate(sheet_xmls, start=1):
+            zf.writestr(f"xl/worksheets/sheet{i}.xml", sheet_xml)
+    return buffer.getvalue()
+
+
+def plan_to_excel(plan: FullPlan) -> bytes:
+    """导出 Excel 工作簿（任务/成员/分工/时间线/参与清单/复盘）。"""
+    sheets: list[tuple[str, list[list]]] = []
+
+    task_rows = [[
+        "编号", "任务", "模块", "计划工时", "实际工时", "负责人",
+        "开始日期", "结束日期", "依赖", "阶段", "状态",
+    ]]
+    for task in plan.plan.tasks:
+        task_rows.append([
+            task.id, task.name, task.module_id or "", task.estimated_hours,
+            task.actual_hours if task.actual_hours is not None else "",
+            task.assignee_id or "",
+            task.start_date.isoformat() if task.start_date else "",
+            task.end_date.isoformat() if task.end_date else "",
+            ",".join(task.dependencies or []),
+            task.execution_stage or "",
+            task.status.value if hasattr(task.status, "value") else task.status,
+        ])
+    sheets.append(("任务", task_rows))
+
+    member_rows = [["姓名", "角色", "上级", "每日可用工时", "技能"]]
+    for member in plan.input.members:
+        member_rows.append([
+            member.name, member.role or "执行成员", member.manager or "",
+            member.daily_available_hours, ",".join(member.skill_tags or []),
+        ])
+    sheets.append(("成员", member_rows))
+
+    matrix_rows = [["任务", "负责人", "主要协助", "辅助协助", "匹配度"]]
+    for item in plan.qa_matrix.assignments:
+        matrix_rows.append([
+            item.task_name, item.presenter, item.qa_primary,
+            ",".join(item.qa_support or []),
+            item.score,
+        ])
+    sheets.append(("分工矩阵", matrix_rows))
+
+    timeline_rows = [["任务", "开始", "结束", "关键", "浮动"]]
+    for item in plan.timeline.tasks:
+        timeline_rows.append([
+            item.name, item.start_date, item.end_date,
+            "是" if item.is_critical else "",
+            getattr(item, "float_days", 0),
+        ])
+    sheets.append(("时间线", timeline_rows))
+
+    participant_rows = [["任务", "参与者", "角色", "投入工时", "类型"]]
+    for task in plan.plan.tasks:
+        for p in task.participants:
+            participant_rows.append([
+                f"{task.id} {task.name}", p.name, p.role,
+                p.contribution_hours,
+                "志愿者 / 外部协作者" if p.is_volunteer else "内部成员",
+            ])
+    sheets.append(("参与清单", participant_rows))
+
+    review_rows = [["任务", "计划工时", "实际工时", "偏差", "实际完成"]]
+    for task in plan.plan.tasks:
+        if task.actual_hours is None:
+            continue
+        dev = round(task.actual_hours - task.estimated_hours, 2)
+        review_rows.append([
+            task.name, task.estimated_hours, task.actual_hours, dev,
+            task.actual_end_date.isoformat() if task.actual_end_date else "",
+        ])
+    sheets.append(("复盘", review_rows))
+
+    return _xlsx_bytes(sheets)
+
+
+def parse_task_file(content: bytes, filename: str, project_mode: str = "small_group") -> PlanOutput:
+    """从 CSV/Excel 第一张表导入任务草稿。"""
+    lower = filename.lower()
+    if lower.endswith(".xlsx") or lower.endswith(".xlsm"):
+        try:
+            from openpyxl import load_workbook
+        except ImportError as exc:
+            raise ValueError("openpyxl 未安装，无法导入 Excel") from exc
+        wb = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+        ws = wb.active
+        rows = list(ws.iter_rows(values_only=True))
+    elif lower.endswith(".csv"):
+        text = content.decode("utf-8-sig", errors="replace")
+        rows = list(csv.reader(io.StringIO(text)))
+    else:
+        raise ValueError("仅支持 .csv / .xlsx 文件导入")
+
+    if not rows:
+        raise ValueError("文件为空")
+    headers = [str(c or "").strip().lower() for c in rows[0]]
+    data_rows = rows[1:]
+
+    def col(*names):
+        for idx, header in enumerate(headers):
+            if any(name in header for name in names):
+                return idx
+        return -1
+
+    id_idx = col("编号", "id")
+    name_idx = col("任务", "名称", "name")
+    module_idx = col("模块", "module")
+    hours_idx = col("计划工时", "工时", "hours")
+    actual_idx = col("实际工时", "actual")
+    owner_idx = col("负责人", "assignee", "owner")
+    start_idx = col("开始日期", "start")
+    end_idx = col("结束日期", "end", "截止")
+    dep_idx = col("依赖", "dependencies")
+    stage_idx = col("阶段", "stage")
+    skill_idx = col("技能", "skills")
+
+    if name_idx < 0:
+        raise ValueError("缺少“任务/名称”列")
+
+    tasks: list[SubTask] = []
+    module_names: list[str] = []
+    for idx, row in enumerate(data_rows, start=1):
+        def cell(ci):
+            if ci < 0 or ci >= len(row):
+                return ""
+            value = row[ci]
+            return "" if value is None else str(value).strip()
+
+        name = cell(name_idx)
+        if not name:
+            continue
+        module_name = cell(module_idx)
+        if module_name and module_name not in module_names:
+            module_names.append(module_name)
+        try:
+            hours = max(0.5, float(cell(hours_idx) or 2))
+        except ValueError:
+            hours = 2.0
+        actual = None
+        if cell(actual_idx):
+            try:
+                actual = max(0.0, float(cell(actual_idx)))
+            except ValueError:
+                actual = None
+        deps = [d.strip() for d in re.split(r"[,，;；]", cell(dep_idx)) if d.strip()]
+        task_id = cell(id_idx) or f"T{idx}"
+        tasks.append(SubTask(
+            id=task_id,
+            module_id=f"M{module_names.index(module_name) + 1}" if module_name else None,
+            name=name,
+            description="",
+            estimated_hours=round(hours, 2),
+            actual_hours=actual,
+            assignee_id=cell(owner_idx) or None,
+            start_date=_as_date(cell(start_idx)),
+            end_date=_as_date(cell(end_idx)),
+            dependencies=deps,
+            execution_stage=cell(stage_idx) or "执行",
+            required_skills=[
+                s.strip() for s in re.split(r"[,，;；]", cell(skill_idx))
+                if s.strip()
+            ],
+        ))
+
+    if not tasks:
+        raise ValueError("没有可导入的任务行")
+    modules = [
+        ProjectModule(id=f"M{i + 1}", name=name, order=i + 1)
+        for i, name in enumerate(module_names)
+    ]
+    if project_mode != "large_project":
+        modules = []
+    return PlanOutput(tasks=tasks, modules=modules, summary=f"导入 {len(tasks)} 项任务")

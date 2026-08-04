@@ -33,6 +33,8 @@ Thumbs.db
 # Project specific
 memory/*.json
 memory/*.jsonl
+memory/audit/
+memory/versions/
 editor_sdk.log
 
 # Jupyter

@@ -71,6 +71,7 @@ class InterviewSimAgent(BaseAgent):
 
     def chat_turn(self, plan: PlanOutput, qa_matrix: QAOutput,
                   user_answer: str, history: list[dict],
+                  mode: str = "answer",
                   user_requirements: str = "") -> str:
         """多轮互动模式：根据用户回答给出点评并提出下一个问题。
 
@@ -81,7 +82,7 @@ class InterviewSimAgent(BaseAgent):
             history: 之前的对话历史 [{role, content}]。
             user_requirements: 用户自定义要求。
         """
-        from app.llm.prompts import INTERVIEW_CHAT_SYSTEM
+        from app.llm.prompts import INTERVIEW_ADJUST_SYSTEM, INTERVIEW_CHAT_SYSTEM
         task_lines = "\n".join(f"- {t.id} {t.name}" for t in plan.tasks)
         qa_lines = "\n".join(
             f"- {a.task_name}: {a.presenter}" for a in qa_matrix.assignments) or "无"
@@ -99,14 +100,19 @@ class InterviewSimAgent(BaseAgent):
         for msg in history:
             messages.append({"role": msg.get("role", "user"),
                              "content": msg.get("content", "")})
-        if user_answer.strip():
+        adjust_mode = mode == "adjust"
+        if adjust_mode:
+            feedback = user_answer.strip() or "这道题不够精确，请调整得更具体、更贴合我们的项目。"
+            messages.append({"role": "user", "content":
+                "请根据我的反馈重新调整你刚才提出的评审问题。只输出调整后的一个问题，不要点评，不要解释。\n\n反馈：" + feedback})
+        elif user_answer.strip():
             messages.append({"role": "user", "content": user_answer})
         else:
             messages.append({"role": "user",
                              "content": "请提第一个评审问题。"})
 
         result = self.llm.chat_messages(
-            system_prompt=INTERVIEW_CHAT_SYSTEM,
+            system_prompt=INTERVIEW_ADJUST_SYSTEM if adjust_mode else INTERVIEW_CHAT_SYSTEM,
             messages=messages,
             temperature=0.6,
         )

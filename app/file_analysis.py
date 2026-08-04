@@ -9,15 +9,23 @@ from pathlib import Path
 
 MAX_FILE_SIZE = 15 * 1024 * 1024
 MAX_TEXT_CHARS = 60000
-SUPPORTED = {".txt", ".md", ".pdf", ".docx", ".xlsx", ".pptx"}
+SUPPORTED = {
+    ".txt", ".md", ".pdf", ".docx", ".xlsx", ".pptx",
+    ".png", ".jpg", ".jpeg", ".webp", ".mp3", ".wav", ".m4a",
+}
 
 
 def extract_text(filename: str, content: bytes) -> str:
     suffix = Path(filename).suffix.lower()
+    from app.services.media_analysis import analyze_audio, analyze_image
     if len(content) > MAX_FILE_SIZE:
         raise ValueError("文件超过 15MB 限制")
     if suffix not in SUPPORTED:
         raise ValueError("暂不支持该格式；支持 PDF、Word、TXT、Markdown、Excel、PowerPoint")
+    if suffix in {".png", ".jpg", ".jpeg", ".webp"}:
+        return analyze_image(filename, content)
+    if suffix in {".mp3", ".wav", ".m4a"}:
+        return analyze_audio(filename, content)
     try:
         if suffix in {".txt", ".md"}:
             text = content.decode("utf-8-sig", errors="replace")

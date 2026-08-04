@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import date, timedelta
 
 from app.agents.validation import (
     PlanValidationError, ensure_large_project_structure, validate_plan,
@@ -14,7 +15,8 @@ from app.agents.validation import (
 from app.coordinator import Coordinator
 from app.models.schemas import (
     AssignmentInput, DraftOperation, FullPlan, ManualAssignmentRequest,
-    PlanOutput, ProjectModule, QAAssignment, QAOutput, ReportOutput, SubTask, Volunteer,
+    PlanOutput, ProjectModule, QAAssignment, QAOutput, ReportOutput, SubTask,
+    TaskParticipant, Volunteer,
 )
 from app.services.duration_estimator import (
     calibrate_plan_estimates, record_duration_feedback,
@@ -245,6 +247,94 @@ def update_volunteer_pool(plan: FullPlan, volunteers: list[Volunteer]) -> FullPl
     return plan.model_copy(update={"volunteer_pool": list(volunteers)})
 
 
+def record_task_actual(
+    plan: FullPlan,
+    task_id: str,
+    actual_hours: float | None = None,
+    actual_end_date=None,
+) -> FullPlan:
+    """记录任务实际工时/实际完成日期，并把明显偏差沉淀回工时知识库。"""
+    original = next((t for t in plan.plan.tasks if t.id == task_id), None)
+    if original is None:
+        raise ProjectServiceError(f"任务不存在：{task_id}")
+    updates: dict = {}
+    if actual_hours is not None:
+        updates["actual_hours"] = round(max(0.0, float(actual_hours)), 2)
+    if actual_end_date is not None:
+        updates["actual_end_date"] = actual_end_date
+    updated = original.model_copy(update=updates)
+    tasks = [updated if t.id == task_id else t for t in plan.plan.tasks]
+
+    if (
+        updated.actual_hours is not None
+        and not updated.actual_feedback_recorded
+        and abs(updated.estimated_hours - updated.actual_hours) >= 0.5
+        and original.estimate_reason
+    ):
+        corrected = updated.model_copy(update={
+            "estimated_hours": updated.actual_hours,
+        })
+        if record_duration_feedback(original, corrected):
+            updated = updated.model_copy(update={"actual_feedback_recorded": True})
+            tasks = [updated if t.id == task_id else t for t in tasks]
+
+    return plan.model_copy(update={
+        "plan": plan.plan.model_copy(update={"tasks": tasks}),
+    })
+
+
+def update_task_participants(
+    plan: FullPlan,
+    task_id: str,
+    participants: list[dict],
+) -> FullPlan:
+    """保存任务级参与清单，并同步 assignee/collaborator/志愿者数量。"""
+    task = next((t for t in plan.plan.tasks if t.id == task_id), None)
+    if task is None:
+        raise ProjectServiceError(f"任务不存在：{task_id}")
+    normalized: list[TaskParticipant] = []
+    for item in participants or []:
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        role = str(item.get("role") or "执行成员").strip() or "执行成员"
+        contribution = max(0.0, float(item.get("contribution_hours") or 0))
+        is_volunteer = bool(item.get("is_volunteer"))
+        normalized.append(TaskParticipant(
+            name=name,
+            role=role,
+            contribution_hours=round(contribution, 2),
+            is_volunteer=is_volunteer,
+            status=str(item.get("status") or "已确认"),
+        ))
+    updates: dict = {"participants": normalized}
+    if normalized:
+        internals = [p for p in normalized if not p.is_volunteer]
+        volunteers = [p for p in normalized if p.is_volunteer]
+        updates["assignee_id"] = internals[0].name if internals else None
+        updates["collaborator_ids"] = [p.name for p in internals[1:]]
+        updates["extra_helpers_needed"] = len(volunteers)
+    updated = task.model_copy(update=updates)
+    tasks = [updated if t.id == task_id else t for t in plan.plan.tasks]
+    volunteer_pool = [
+        v for v in (plan.volunteer_pool or [])
+        if v.task_id != task_id
+    ]
+    for participant in normalized:
+        if participant.is_volunteer:
+            volunteer_pool.append(Volunteer(
+                name=participant.name,
+                task_id=task_id,
+                status=participant.status or "已确认",
+                contact="",
+                note="",
+            ))
+    return plan.model_copy(update={
+        "plan": plan.plan.model_copy(update={"tasks": tasks}),
+        "volunteer_pool": volunteer_pool,
+    })
+
+
 def apply_manual_assignment(req: ManualAssignmentRequest) -> FullPlan:
     """保存负责人/协作者并重算排期；Web 与未来对话指令共用。"""
     from app.agents.scoring import _work_from, skill_score
@@ -278,7 +368,7 @@ def apply_manual_assignment(req: ManualAssignmentRequest) -> FullPlan:
                 score=0.0, reasoning="任务已完成",
             ))
             continue
-        # ???????????????????????????
+        # 优先沿用任务已有负责人，并校验其是否仍在当前成员名单内
         owner = task.assignee_id if task.assignee_id in member_map else None
         if req.assignees.get(task.id):
             owner = req.assignees.get(task.id)
@@ -356,33 +446,69 @@ def _build_manual_risk_note(plan: PlanOutput, timeline, workload: dict,
 
 def workload_snapshot(plan: FullPlan) -> dict:
     """统一的工作量与提示计算，避免页面自行复制业务规则。"""
-    # 既统计负责人（assignee_id）的全工时，也统计协作者的折算工时。
-    # 只数负责人会让"仅作为协作者参与"的新增成员显示 0 工时/0 任务，
-    # 看起来像被系统晾在一边（B-P0：新增成员零工时）。
+    # 角色与志愿者折算为通用能力，不区分大/小项目。
+    from datetime import date as _date
     from app.agents.scoring import (
         QA_PRIMARY_RATIO, QA_SUPPORT_RATIO)
 
+    PROJECT_LEAD_OVERHEAD_RATIO = 0.10
+    MODULE_LEAD_OVERHEAD_HOURS = 1.0
+    VOLUNTEER_RATIO = 0.5
+
     qa_by_task = {a.task_id: a for a in (plan.qa_matrix.assignments
                                          if plan.qa_matrix else [])}
-
-    work = {member.name: 0.0 for member in plan.input.members}
-    stage_work = {member.name: defaultdict(float) for member in plan.input.members}
-    counts = {member.name: 0 for member in plan.input.members}
-    assist_counts = {member.name: 0 for member in plan.input.members}
+    member_map = {m.name: m for m in plan.input.members}
+    work = {name: 0.0 for name in member_map}
+    stage_work = {name: defaultdict(float) for name in member_map}
+    counts = {name: 0 for name in member_map}
+    assist_counts = {name: 0 for name in member_map}
+    participant_tasks = {name: [] for name in member_map}
     warnings: list[str] = []
-    for task in plan.plan.tasks:
+    active_tasks = [t for t in plan.plan.tasks if t.status != "completed"]
+    active_total = sum(t.estimated_hours for t in active_tasks)
+
+    volunteer_work: dict[str, float] = {}
+    volunteer_stage: dict[str, defaultdict] = {}
+    volunteer_counts: dict[str, int] = {}
+
+    def as_date(value):
+        if isinstance(value, _date):
+            return value
+        return _date.fromisoformat(str(value)[:10])
+
+    def overlap(a, b):
+        if not (a.start_date and a.end_date and b.start_date and b.end_date):
+            return False
+        return (as_date(a.start_date) <= as_date(b.end_date)
+                and as_date(b.start_date) <= as_date(a.end_date))
+
+    for task in active_tasks:
+        participants = task.participants or []
+        if participants:
+            for participant in participants:
+                name = participant.name
+                hours = participant.contribution_hours or 0.0
+                if name in work:
+                    work[name] += hours
+                    counts[name] += 1
+                    stage_work[name][task.execution_stage] += hours
+                    participant_tasks[name].append(task)
+                else:
+                    volunteer_work[name] = volunteer_work.get(name, 0.0) + hours
+                    volunteer_counts[name] = volunteer_counts.get(name, 0) + 1
+                    volunteer_stage.setdefault(
+                        name, defaultdict(float))[task.execution_stage] += hours
+            continue
         owner = task.assignee_id
         if not owner or owner not in work:
             warnings.append(f"{task.name} 尚未设置负责人")
-            continue
-        # 已完成的任务不再计入剩余工作量——标记完成后成员条带应缩短
-        if task.status == "completed":
             continue
         h = task.estimated_hours
         work[owner] += h
         counts[owner] += 1
         stage_work[owner][task.execution_stage] += h
-        # 协作者折算工时：优先用 qa_matrix 角色，否则回退 collaborator_ids
+        participant_tasks[owner].append(task)
+
         qa = qa_by_task.get(task.id)
         if qa is not None:
             collaborators = []
@@ -402,27 +528,251 @@ def workload_snapshot(plan: FullPlan) -> dict:
             work[cname] += share
             assist_counts[cname] += 1
             stage_work[cname][task.execution_stage] += share
+            participant_tasks[cname].append(task)
+
+        for volunteer in (plan.volunteer_pool or []):
+            if volunteer.task_id != task.id or volunteer.status != "已确认":
+                continue
+            share = h * VOLUNTEER_RATIO
+            volunteer_work[volunteer.name] = volunteer_work.get(volunteer.name, 0.0) + share
+            volunteer_counts[volunteer.name] = volunteer_counts.get(volunteer.name, 0) + 1
+            volunteer_stage.setdefault(
+                volunteer.name, defaultdict(float))[task.execution_stage] += share
+
+    module_owner_counts: dict[str, int] = defaultdict(int)
+    for module in (plan.plan.modules or []):
+        if module.assignee_id:
+            module_owner_counts[module.assignee_id] += 1
+
+    for member in plan.input.members:
+        role = (member.role or "执行成员").strip()
+        overhead = 0.0
+        if role == "项目负责人":
+            overhead += active_total * PROJECT_LEAD_OVERHEAD_RATIO
+        if "骨干" in role or "模块负责人" in role:
+            overhead += MODULE_LEAD_OVERHEAD_HOURS * module_owner_counts.get(member.name, 0)
+        if overhead:
+            work[member.name] += overhead
+            stage_work[member.name]["统筹"] += overhead
+
     average = sum(work.values()) / max(1, len(work))
-    for name, hours in work.items():
+    warning_seen: set[str] = set()
+
+    def add_warning(text):
+        if text not in warning_seen:
+            warning_seen.add(text)
+            warnings.append(text)
+
+    for name, member in member_map.items():
         if counts[name] == 0 and assist_counts[name] == 0:
-            warnings.append(f"{name} 尚未分配任务")
+            add_warning(f"{name} 尚未分配任务")
+        if member.available_hours and work[name] > member.available_hours + 0.01:
+            add_warning(f"{name} 负载 {work[name]:.1f}h 超过可用 {member.available_hours:.1f}h")
+        hours = work[name]
         if hours > average * 1.35 and hours - average > 2:
-            warnings.append(f"{name} 总工时明显高于团队平均")
+            add_warning(f"{name} 总工时明显高于团队平均")
         for stage, stage_hours in stage_work[name].items():
             if stage_hours > max(8, average):
                 stage_label = stage if str(stage).endswith("阶段") else f"{stage}阶段"
-                warnings.append(f"{name} 在{stage_label}任务较集中")
+                add_warning(f"{name} 在{stage_label}任务较集中")
+
+        tasks = participant_tasks[name]
+        for task in tasks:
+            if not (task.start_date and task.end_date):
+                continue
+            start, end = as_date(task.start_date), as_date(task.end_date)
+            for unavailable in (member.unavailable_dates or []):
+                if start <= as_date(unavailable) <= end:
+                    add_warning(f"{name} 在 {task.name} 排期内有不可用日期（{as_date(unavailable)}）")
+        for i in range(len(tasks)):
+            for j in range(i + 1, len(tasks)):
+                if tasks[i].id != tasks[j].id and overlap(tasks[i], tasks[j]):
+                    add_warning(f"{name} 同时参与 {tasks[i].name} 和 {tasks[j].name}，排期重叠")
+
+    total_load = sum(work.values()) + sum(volunteer_work.values())
+    members_out = {}
+    for name in work:
+        members_out[name] = {
+            "role": member_map[name].role or "执行成员",
+            "task_count": counts[name],
+            "assist_count": assist_counts[name],
+            "total_hours": round(work[name], 2),
+            "share": round(work[name] / max(1, total_load), 4),
+            "stage_hours": dict(stage_work[name]),
+        }
+    volunteers_out = [
+        {
+            "name": name,
+            "role": "志愿者 / 外部协作者",
+            "task_count": volunteer_counts.get(name, 0),
+            "total_hours": round(volunteer_work[name], 2),
+            "share": round(volunteer_work[name] / max(1, total_load), 4),
+            "stage_hours": dict(volunteer_stage.get(name, {})),
+        }
+        for name in sorted(volunteer_work, key=lambda n: -volunteer_work[n])
+    ]
     return {
+        "members": members_out,
+        "volunteers": volunteers_out,
+        "average_hours": round(average, 2),
+        "warnings": warnings,
+    }
+
+
+def resource_calendar(plan: FullPlan) -> dict:
+    """资源日历：把任务工时按天摊到参与者，检测每日超载与不可用日期冲突。"""
+    from app.agents.scoring import QA_PRIMARY_RATIO, QA_SUPPORT_RATIO
+
+    member_map = {m.name: m for m in plan.input.members}
+    active_tasks = [t for t in plan.plan.tasks if t.status != "completed"]
+
+    def as_date(value):
+        if isinstance(value, date):
+            return value
+        return date.fromisoformat(str(value)[:10])
+
+    timeline_map = {}
+    if plan.timeline and plan.timeline.tasks:
+        for tl in plan.timeline.tasks:
+            timeline_map[tl.task_id] = tl
+    dated = []
+    for task in active_tasks:
+        start = task.start_date
+        end = task.end_date
+        tl = timeline_map.get(task.id)
+        if tl:
+            if start is None:
+                start = getattr(tl, "start_date", None)
+            if end is None:
+                end = getattr(tl, "end_date", None)
+        if start and end:
+            dated.append(task.model_copy(update={
+                "start_date": as_date(start),
+                "end_date": as_date(end),
+            }))
+    if not dated:
+        return {
+            "days": [],
+            "members": {},
+            "volunteers": {},
+            "warnings": ["暂无带排期的任务"],
+        }
+
+    min_date = min(as_date(t.start_date) for t in dated)
+    max_date = max(as_date(t.end_date) for t in dated)
+    days = [
+        min_date + timedelta(days=i)
+        for i in range((max_date - min_date).days + 1)
+    ]
+    day_keys = [d.isoformat() for d in days]
+    member_load = {name: {k: 0.0 for k in day_keys} for name in member_map}
+    volunteer_load: dict[str, dict] = {}
+    member_tasks = {name: [] for name in member_map}
+    volunteer_tasks: dict[str, list] = {}
+    warnings: list[str] = []
+
+    def participants_for(task):
+        if task.participants:
+            return [
+                (p.name, p.contribution_hours or 0.0, p.is_volunteer)
+                for p in task.participants
+            ]
+        out = []
+        if task.assignee_id:
+            out.append((task.assignee_id, task.estimated_hours or 0.0, False))
+        qa = None
+        if plan.qa_matrix:
+            qa = next(
+                (a for a in plan.qa_matrix.assignments if a.task_id == task.id),
+                None,
+            )
+        if qa is not None:
+            collabs = []
+            if qa.qa_primary and qa.qa_primary != task.assignee_id:
+                collabs.append((qa.qa_primary, QA_PRIMARY_RATIO))
+            for s in (qa.qa_support or []):
+                if s != task.assignee_id and s != qa.qa_primary:
+                    collabs.append((s, QA_SUPPORT_RATIO))
+            for cname, ratio in collabs:
+                out.append((cname, (task.estimated_hours or 0.0) * ratio, False))
+        else:
+            for cname in (task.collaborator_ids or []):
+                if cname != task.assignee_id:
+                    out.append(
+                        (cname, (task.estimated_hours or 0.0) * QA_PRIMARY_RATIO, False)
+                    )
+        for volunteer in (plan.volunteer_pool or []):
+            if volunteer.task_id == task.id and volunteer.status == "已确认":
+                out.append(
+                    (volunteer.name, (task.estimated_hours or 0.0) * 0.5, True)
+                )
+        return out
+
+    for task in dated:
+        start = as_date(task.start_date)
+        end = as_date(task.end_date)
+        span = max(1, (end - start).days + 1)
+        for name, hours, is_vol in participants_for(task):
+            daily = hours / span
+            for i in range(span):
+                key = (start + timedelta(days=i)).isoformat()
+                if key not in day_keys:
+                    continue
+                if is_vol or name not in member_map:
+                    volunteer_load.setdefault(name, {k: 0.0 for k in day_keys})
+                    volunteer_load[name][key] += daily
+                    if not any(x["id"] == task.id for x in volunteer_tasks.setdefault(name, [])):
+                        volunteer_tasks[name].append({
+                            "id": task.id,
+                            "name": task.name,
+                            "start": task.start_date.isoformat(),
+                            "end": task.end_date.isoformat(),
+                            "hours": round(hours, 2),
+                        })
+                else:
+                    member_load[name][key] += daily
+                    if not any(x["id"] == task.id for x in member_tasks[name]):
+                        member_tasks[name].append({
+                            "id": task.id,
+                            "name": task.name,
+                            "start": task.start_date.isoformat(),
+                            "end": task.end_date.isoformat(),
+                            "hours": round(hours, 2),
+                        })
+
+    for name, member in member_map.items():
+        for key in day_keys:
+            load = member_load[name][key]
+            if load <= 0:
+                continue
+            day = as_date(key)
+            if day in (member.unavailable_dates or []):
+                warnings.append(f"{key} {name} 在不可用日期仍有任务（{load:.1f}h）")
+            available = member.daily_available_hours or 0
+            if load > available + 0.01:
+                warnings.append(
+                    f"{key} {name} 每日负载 {load:.1f}h 超过可用 {available:.1f}h"
+                )
+
+    return {
+        "days": day_keys,
         "members": {
             name: {
-                "task_count": counts[name],
-                "assist_count": assist_counts[name],
-                "total_hours": round(work[name], 2),
-                "share": round(work[name] / max(1, sum(work.values())), 4),
-                "stage_hours": dict(stage_work[name]),
-            } for name in work
+                "role": member.role or "执行成员",
+                "daily_available_hours": member.daily_available_hours,
+                "unavailable_dates": [str(d) for d in (member.unavailable_dates or [])],
+                "daily_load": member_load[name],
+                "tasks": member_tasks[name],
+            }
+            for name, member in member_map.items()
         },
-        "average_hours": round(average, 2),
+        "volunteers": {
+            name: {
+                "daily_load": volunteer_load[name],
+                "tasks": volunteer_tasks[name],
+            }
+            for name in volunteer_load
+        },
         "warnings": warnings,
     }
 

@@ -7,6 +7,1113 @@
 ---
 ---
 ---
+---
+---
+---
+## v5.34 —— 深度审查修复（2026-08-04）
+
+**定位：** 按第三方深度审查结论修复 P0/P1：ACL 越权、所有权、回滚权限、跨用户知识隔离、音频转写、只读一致性等。
+
+**审查/修改背景：** 审查实测发现登录用户之间可互相读方案、创建分享链接、普通编辑者保存夺走 owner、回滚产物无 ACL、知识库跨用户泄漏、音频转写参数不兼容等高风险问题。
+
+---
+
+### 关键缺陷（P0）
+
+#### 1. ACL 全链路补校验
+
+1. **问题：** `/api/load` 有校验，但历史版本、导出、分享创建、回滚未校验，bob 能越权读取 alice 方案。
+2. **修改前：** `plan-history`、`/plans/{filename}/export`、`share`、`plan-rollback` 直接放行。
+3. **修改后：** 这些接口全部接入 `can_read/can_write`，越权请求返回 403。
+4. **为什么这样改：** 权限必须覆盖所有能拿到方案内容的入口，只堵 `/load` 等于没堵。
+5. **收益：** 越权读取、越权创建公开分享链接、越权回滚均被后端拦截。
+
+#### 2. 所有权与回滚 ACL
+
+1. **问题：** `save_plan` 每次把 owner 改成当前用户；回滚生成的新文件没有 ACL，原作者也访问不了。
+2. **修改前：** `set_acl(filename, owner=username)` 无条件覆盖；回滚只生成新文件。
+3. **修改后：** 新建方案才设 owner，已有方案只 `add_editor`；回滚前校验写权限，回滚后继承 owner/editors/viewers。
+4. **为什么这样改：** 项目归属应稳定；回滚产物必须和原方案保持同一权限模型。
+5. **收益：** 编辑者不再夺权；回滚不会产生无主或越权方案。
+
+#### 3. 跨用户知识隔离
+
+1. **问题：** `knowledge_search` 遍历全部 memory 文件，bob 能检索 alice 私有方案。
+2. **修改前：** 知识检索不感知当前用户。
+3. **修改后：** 按当前用户 ACL 过滤 memory 文件，`/api/knowledge`、`/api/tools/call`、`/api/agent/ask` 均透传 username。
+4. **为什么这样改：** 知识检索是“读方案内容”的另一种入口，必须与 `/load` 同一套权限。
+5. **收益：** 私有方案不会出现在其他用户的知识库、工具或 Agent 回答中。
+
+#### 4. 音频转写参数
+
+1. **问题：** `audio.transcriptions.create` 传了 SDK 不支持的 `filename/mime_type`，必然失败。
+2. **修改前：** `file=BytesIO(...), filename=..., mime_type=...`。
+3. **修改后：** `file=(filename, BytesIO, mime)`。
+4. **为什么这样改：** OpenAI SDK 要求文件信息放进 `file` 元组。
+5. **收益：** 配置语音模型后转写可真正调用。
+
+### 健壮性提升（P1）
+
+#### 5. 只读模式一致性
+
+1. **问题：** 只读模式会拦截所有非 GET 请求，连报告/知识库等只读查询都 403；同时部分编辑入口仍可操作。
+2. **修改前：** 所有非 GET `/api` 都按写请求拦截。
+3. **修改后：** 中间件只拦截真正的写接口，只读查询白名单放行；前端只读模式隐藏返回调整/成员管理/评审预演等入口，并禁用编辑控件。
+4. **为什么这样改：** 只读模式应“可看不可改”，不是“什么都用不了”。
+5. **收益：** 分享页能正常查看报告、知识库和 Agent 结果，但不能改数据。
+
+#### 6. 参与清单工时与数据同步
+
+1. **问题：** 协作者/志愿者默认 0h，保存参与清单后原折算工时被清零；`volunteer_pool` 与参与清单互相打架。
+2. **修改前：** 前端默认填 0，后端保存参与清单不改 volunteer_pool。
+3. **修改后：** 默认按 0.3/0.5 折算；保存参与清单时同步重建 volunteer_pool。
+4. **为什么这样改：** 同一份参与数据只能有一个口径，否则 workload 与资源日历会不一致。
+5. **收益：** 参与清单保存后工作量不归零，志愿者数据一致。
+
+#### 7. 前端流程与验证规则
+
+1. **问题：** Token 失效后没有重新登录入口；新方案会复用旧文件名静默覆盖；AGENTS.md 前端验证空跑。
+2. **修改前：** fetch 包装闭包固定 Token；`generateDraft` 不清旧文件名；内联 script 检查匹配不到内容。
+3. **修改后：** 每次请求动态读 Token，401 自动弹登录；新方案/导入清空旧文件名；AGENTS.md 改为 `node --check app.js / participants.js`。
+4. **为什么这样改：** 会话恢复、防覆盖、真实语法检查都是可落地前必须补的流程。
+5. **收益：** 登录过期可恢复；不会静默覆盖旧方案；前端验证规则真实有效。
+
+### 同步修改
+
+- `app/services/auth_store.py`：ACL 缺省收紧、add_editor/get_acl、set_acl 保留 owner 并支持 viewers。
+- `app/web/routes.py`：save/history/export/share/rollback ACL，knowledge/agent/tools 用户透传，文件读取限流。
+- `app/main.py`：只读模式写接口白名单。
+- `app/services/collab.py`：知识检索按 ACL 过滤、经验去重。
+- `app/services/knowledge_agent.py`：风险意图调用多工具、用户透传。
+- `app/services/media_analysis.py`：音频转写参数、OpenAI client 参数。
+- `app/services/plan_io.py`：ICS DTEND 与转义。
+- `app/services/project_service.py`：参与清单同步 volunteer_pool。
+- `app/web/static/app.js`：Token 动态读取、401 重新登录、新方案清空旧版本号。
+- `app/web/static/participants.js`：参与默认工时、只读模式禁用态。
+- `app/web/static/style.css`：只读禁用态与入口隐藏。
+- `AGENTS.md`：前端语法检查规则修正。
+- `tests/test_auth_routes.py`：P0 越权/夺权/回滚/知识泄漏回归测试。
+
+
+## v5.33 —— 图片 OCR / 音频转写（2026-08-04）
+
+**定位：** 把图片和音频从“只记元数据”升级为可配置的 OCR/ASR，无模型时仍保留兜底。
+
+**审查/修改背景：** 上一版图片/音频只能记录文件名和大小，无法真正识别内容。
+
+---
+
+### 体验优化（P2）
+
+#### 1. 视觉模型 OCR
+
+1. **问题：** 图片无法读取文字，项目要求里的截图/海报只能人工看。
+2. **修改后：** 新增 `APP_VISION_MODEL` 配置，接入 OpenAI 兼容视觉模型后，文件分析会自动提取图片文字；未配置时返回元数据兜底。
+3. **收益：** 截图、海报、手写方案等图片内容可进入项目分析。
+
+#### 2. 语音模型转写
+
+1. **修改后：** 新增 `APP_ASR_MODEL` 配置，接入 OpenAI 兼容语音转写模型后，音频文件自动转写为文本；未配置时返回元数据兜底。
+2. **收益：** 会议录音、口头需求也能成为可分析的项目资料。
+
+#### 3. 文件分析统一入口
+
+1. **修改后：** 图片/音频走 `media_analysis` 服务，与 PDF/Word/Excel 等文档共用 `extract_text` 流程。
+2. **收益：** 多模态资料统一进入 `requirement_analysis`，不需要用户区分文件类型。
+
+### 同步修改
+
+- `app/config.py`：新增 `APP_VISION_MODEL`、`APP_ASR_MODEL`。
+- `app/services/media_analysis.py`：OCR/ASR 服务与兜底。
+- `app/file_analysis.py`：图片/音频接入识别流程。
+- `app/services/auth_store.py`：ACL 缺省收紧，未登记方案仅 admin 可访问。
+- `app/main.py`：只读分享请求禁止写操作。
+- `app/web/static/app.js`：登录 Token 动态读取，只读模式带写保护头。
+- `app/services/collab.py`：经验写入去重。
+- `app/services/media_analysis.py`：OpenAI client 参数兼容。
+- `app/web/templates/index.html`：缓存版本升级为 5.33。
+- `README.md`：版本与演进表同步 v5.33。
+- `tests/test_media_analysis.py`：OCR/ASR 兜底与模型调用用例。
+
+
+## v5.32 —— 多用户账号 + 项目级权限（2026-08-04）
+
+**定位：** 从单管理密码升级为多用户登录，并按方案控制谁能查看、谁能编辑。
+
+**审查/修改背景：** 上一版鉴权只是单 Token，没有账号体系，也没有“某个方案归谁管、谁能改”的项目级权限。
+
+---
+
+### 健壮性提升（P1）
+
+#### 1. 多用户账号与会话
+
+1. **问题：** 只有一个管理密码，无法区分不同用户。
+2. **修改后：** 新增 `APP_USERS_JSON` 配置定义用户列表（用户名/密码/角色）；未配置时兼容原 `APP_ADMIN_TOKEN` 生成 admin 账号。登录成功后发放会话 Token。
+3. **收益：** 团队多人各自登录，可审计当前用户。
+
+#### 2. 项目级 ACL
+
+1. **问题：** 任何登录用户都能读改所有方案。
+2. **修改后：** 每个方案保存时记录 owner；保存/加载/删除/列表按 ACL 判断读写权限，admin 拥有全部权限。
+3. **收益：** 项目归属清晰，编辑和查看范围可控。
+
+#### 3. 前端登录表单
+
+1. **修改后：** 登录弹窗改为“用户名 + 密码”，登录后记住当前用户并给所有 `/api` 请求加 Bearer Token。
+2. **收益：** 使用体验与账号体系一致。
+
+### 同步修改
+
+- `app/config.py`：新增 `APP_USERS_JSON`。
+- `app/services/auth_store.py`：用户、会话、ACL 存储。
+- `app/main.py`：多用户鉴权中间件，注入当前用户。
+- `app/web/routes.py`：登录/me 接口，保存/加载/列表/删除 ACL 控制。
+- `app/web/static/app.js`：登录表单用户名/密码与用户记忆。
+- `app/web/templates/index.html`：登录弹窗加用户名输入，缓存版本升级为 5.32。
+- `README.md`：版本与演进表同步 v5.32。
+- `tests/test_auth_store.py`：用户/会话/ACL 用例。
+
+
+## v5.31 —— 外部通知：Webhook 推送提醒（2026-08-04）
+
+**定位：** 让提醒不再只停留在系统内，可通过 Webhook 推送到企业微信/钉钉/自建服务。
+
+**审查/修改背景：** 提醒中心已经能在页面展示，但没有外部通知渠道，无法主动触达团队成员。
+
+---
+
+### 体验优化（P2）
+
+#### 1. Webhook 通知服务
+
+1. **问题：** 提醒只能打开系统看，到期/志愿者确认等不会主动通知。
+2. **修改后：** 新增 `APP_NOTIFY_WEBHOOK` 配置与 `/api/notify` 接口，把项目名和提醒列表以 JSON POST 到外部 Webhook。
+3. **收益：** 可接入企业微信机器人、钉钉机器人、飞书或自建消息服务。
+
+#### 2. 提醒中心一键发送
+
+1. **修改后：** 提醒 Tab 新增“发送提醒通知”按钮，发送后显示成功/失败；未配置 Webhook 时明确提示。
+2. **收益：** 操作入口与提醒列表放在一起，不需要记接口。
+
+### 同步修改
+
+- `app/config.py`：新增 `APP_NOTIFY_WEBHOOK`。
+- `app/services/notifier.py`：Webhook 推送。
+- `app/web/routes.py`：新增 `/api/notify`。
+- `app/web/static/participants.js`：提醒页发送按钮与反馈。
+- `app/web/templates/index.html`：缓存版本升级为 5.31。
+- `README.md`：版本与演进表同步 v5.31。
+- `tests/test_notifier.py`：Webhook 启用/禁用与载荷用例。
+
+
+## v5.30 —— Knowledge Agent 自主工具调用 + 跨项目经验复用（2026-08-04）
+
+**定位：** 把工具调用从“手动按钮”升级为 Agent 自主选择，并把组织复盘经验沉淀成跨项目知识。
+
+**审查/修改背景：** 上一版已有 `/api/tools/call`，但没有 Agent 能根据问题自己决定调哪些工具；组织复盘建议也只停留在单方案里，没有被后续项目复用。
+
+---
+
+### 体验优化（P2）
+
+#### 1. 组织复盘经验自动沉淀
+
+1. **问题：** 组织复盘建议只在当前页面显示，换个项目就查不到。
+2. **修改后：** 保存方案时自动把组织复盘建议写入 `memory/experience.jsonl`，知识库问答会同时检索历史方案和经验记录。
+3. **收益：** “这类任务易低估/高估”会成为跨项目经验，不再是一次性结论。
+
+#### 2. Knowledge Agent 自主选择工具
+
+1. **问题：** 用户必须自己点工具按钮，AI 不能根据问题决定调哪个工具。
+2. **修改后：** 新增 `/api/agent/ask`，Agent 根据问题关键词自主调用工作量、资源日历、提醒、组织复盘、知识检索等工具，并把多个工具结果合成一段回答。
+3. **收益：** 问“分析一下当前排期风险”能同时看资源日历和提醒，而不是让用户分别点。
+
+#### 3. 前端 Agent 模式
+
+1. **修改后：** 知识库页新增“Agent 分析”按钮，回答下方显示实际调用链路（如 `workload → reminders`）。
+2. **收益：** 工具调用过程透明，结果可追溯。
+
+### 同步修改
+
+- `app/services/collab.py`：经验持久化与检索。
+- `app/services/knowledge_agent.py`：Agent 意图识别、工具调用与回答合成。
+- `app/web/routes.py`：`/api/agent/ask`；保存时沉淀经验。
+- `app/web/static/app.js`：知识库页新增“Agent 分析”按钮。
+- `app/web/static/participants.js`：Agent 调用与轨迹展示。
+- `app/web/templates/index.html`：缓存版本升级为 5.30。
+- `README.md`：版本与演进表同步 v5.30。
+- `tests/test_knowledge_agent.py`：Agent 工具调用与经验复用用例。
+
+
+## v5.29 —— 鉴权 + 工具调用 + 并发冲突 + 多模态文件（2026-08-04）
+
+**定位：** 把最后一批基础能力补齐：可选网络鉴权、系统工具调用、并发保存冲突检测，以及图片/音频文件接入。
+
+**审查/修改背景：** 之前系统没有登录保护，AI 工具只能靠知识问答，多人同时保存会互相覆盖，文件分析也只支持文档。
+
+---
+
+### 健壮性提升（P1）
+
+#### 1. 可选网络鉴权
+
+1. **问题：** `/api` 接口没有访问控制，部署到公网后任何知道地址的人都能读写方案。
+2. **修改后：** 配置 `APP_ADMIN_TOKEN` 后自动开启鉴权，除健康检查/登录/只读分享外，所有 `/api` 请求需要 `Bearer` Token；前端显示登录弹窗并持久化登录态。
+3. **收益：** 本地不配 Token 不影响开发；公网部署配一个密码即可保护写入。
+
+#### 2. 系统工具调用
+
+1. **问题：** 知识库只能问答，AI 没有可调用的系统工具。
+2. **修改后：** 新增 `GET /api/tools` 与 `POST /api/tools/call`，支持工作量、资源日历、提醒、组织复盘、知识检索五类工具；前端知识库页可直接点按钮调用。
+3. **收益：** 为后续 Knowledge Agent 提供统一工具入口。
+
+#### 3. 并发保存冲突检测
+
+1. **问题：** 多人打开同一个方案后各自保存，后保存的人会覆盖前面的修改。
+2. **修改后：** 保存时携带当前版本 ID；如果服务端已有更新版本，返回 409 并提示先载入最新版本。
+3. **收益：** 避免无声覆盖，协作时数据更安全。
+
+#### 4. 图片/音频文件接入
+
+1. **问题：** 文件分析只支持文档，图片/音频无法上传。
+2. **修改后：** 上传支持 png/jpg/jpeg/webp/mp3/wav/m4a，提取文件名、大小、类型并提示人工查看/收听。
+3. **收益：** 项目资料入口覆盖常见图片和音频，不再被拒收。
+
+### 同步修改
+
+- `app/config.py`：新增 `APP_ADMIN_TOKEN`。
+- `app/main.py`：`/api` 可选鉴权中间件。
+- `app/web/routes.py`：登录接口、工具接口、保存冲突、分享/提醒/知识/复盘接口，导出旧路由乱码注释清理。
+- `app/services/tools.py`：系统工具列表与调用。
+- `app/services/audit_store.py`：版本 ID 唯一化与顺序化。
+- `app/file_analysis.py`：图片/音频元数据提取。
+- `app/web/static/app.js`：登录态、请求头、保存版本 ID、工具按钮。
+- `app/web/static/participants.js`：工具调用交互。
+- `app/web/static/style.css`：登录弹窗与工具输出样式。
+- `app/web/templates/index.html`：登录弹窗、多模态文件 accept，缓存版本升级为 5.29。
+- `README.md`：版本与演进表同步 v5.29。
+- `tests/test_auth_tools.py`：鉴权、工具、冲突、多模态用例。
+
+
+## v5.28 —— 只读分享 + 提醒中心 + 知识库 + 组织复盘（2026-08-04）
+
+**定位：** 补上团队协作与知识沉淀：方案可分享只读链接，系统主动提醒待办，支持从历史方案检索知识，并按成员/角色输出组织级复盘。
+
+**审查/修改背景：** 之前方案只能自己看，没有分享、提醒和跨方案知识检索；复盘也只按任务，没有按组织角色汇总。
+
+---
+
+### 体验优化（P2）
+
+#### 1. 只读分享链接
+
+1. **问题：** 方案无法安全地发给别人查看，只能导出文件。
+2. **修改后：** 最终方案页新增“复制只读链接”，生成 `/api/share` token；他人打开 `/?share=token` 可查看方案，但保存/导出/编辑按钮全部禁用。
+3. **收益：** 一键分享只读视图；不会被误改。
+
+#### 2. 提醒中心
+
+1. **问题：** 任务到期、志愿者未确认、骨干空缺等需要主动找。
+2. **修改后：** 新增 `/api/reminders` 与“提醒”Tab，自动汇总：3 天内到期任务、未分配负责人任务、待确认志愿者、未认领模块。
+3. **收益：** 待办一眼可见，不再漏掉关键节点。
+
+#### 3. 轻量知识库问答
+
+1. **问题：** 历史方案只有保存功能，没有知识复用。
+2. **修改后：** 新增 `/api/knowledge` 与“知识库”Tab，按中文字符 n-gram 检索当前方案和 memory 里的历史方案，返回相关内容与来源。
+3. **收益：** 同类项目怎么拆、怎么排工时，可以从历史方案里找到参考。
+
+#### 4. 组织级复盘
+
+1. **问题：** 复盘只按任务看偏差，看不到成员/角色/模块层面的规律。
+2. **修改后：** 新增 `/api/org-review` 与“组织复盘”Tab，按成员、角色、模块汇总计划/实际工时偏差，并自动给出“这类任务易低估/高估”的经验建议。
+3. **收益：** 偏差能沉淀为组织经验，下一轮计划更有依据。
+
+### 同步修改
+
+- `app/services/share_store.py`：只读分享 token 存储。
+- `app/services/collab.py`：提醒、知识检索、组织复盘。
+- `app/web/routes.py`：分享/提醒/知识/复盘接口。
+- `app/web/static/participants.js`：只读模式、提醒、知识库、组织复盘前端。
+- `app/web/static/app.js`：分享按钮与新增 Tab。
+- `app/web/static/style.css`：提醒卡片、知识库、组织复盘样式。
+- `app/web/templates/index.html`：新增“提醒 / 知识库 / 组织复盘”Tab 与分享按钮，缓存版本升级为 5.28。
+- `README.md`：版本与演进表同步 v5.28。
+- `tests/test_collab.py`：新增分享、提醒、知识检索、组织复盘用例。
+
+
+## v5.27 —— 变更记录 / 审计 / 回滚（2026-08-04）
+
+**定位：** 每次保存都留下完整版本快照和审计记录，用户可查看历史版本并一键回滚成新方案。
+
+**审查/修改背景：** 之前保存方案只覆盖 memory 文件，改错了只能靠人工找回，没有“谁在什么时候改过、之前版本长什么样”的追踪能力。
+
+---
+
+### 健壮性提升（P1）
+
+#### 1. 保存时自动生成版本快照与审计记录
+
+1. **问题：** `/api/save` 只写一个 JSON 文件，改错后没有历史可查。
+2. **修改后：** 保存时同步写入 `memory/versions/{方案}/` 下的完整快照，并在 `memory/audit/{方案}.jsonl` 追加一条审计记录（版本 ID、时间、动作、说明）。
+3. **收益：** 每个保存版本都可追溯；同一方案不会被后续保存覆盖。
+
+#### 2. 历史版本列表与回滚接口
+
+1. **修改后：** 新增 `GET /api/plan-history/{filename}` 返回版本列表；新增 `POST /api/plan-rollback/{filename}/{version_id}` 回滚指定版本。
+2. **修改前：** 没有版本入口，误改只能手动重做。
+3. **为什么这样改：** 回滚不覆盖原文件，而是生成新的 `_rollback.json` 方案，保留原始记录，避免“回滚本身也覆盖掉历史”。
+4. **收益：** 误改可一键恢复；原方案和回滚后的新方案并存，审计链不断。
+
+#### 3. 前端历史方案增加版本/回滚入口
+
+1. **修改后：** 历史方案弹窗里每个方案新增“版本”按钮，进入版本列表后可查看动作/时间/说明，并点击“回滚到此版本”。
+2. **收益：** 不需要记接口，直接在历史方案界面完成查看与回滚。
+
+### 同步修改
+
+- `app/services/audit_store.py`：新增版本快照、审计日志、回滚存储。
+- `app/web/routes.py`：保存时写审计；新增历史/回滚接口。
+- `app/web/static/app.js`：历史方案增加版本与回滚交互。
+- `app/web/static/style.css`：版本按钮与版本列表样式。
+- `app/web/templates/index.html`：缓存版本升级为 5.27。
+- `README.md`：版本与演进表同步 v5.27。
+- `tests/test_audit_store.py`：新增审计与回滚用例。
+
+
+## v5.26 —— Excel / CSV / ICS 导入导出（2026-08-04）
+
+**定位：** 打通与 Excel/CSV/日历工具的进出接口，让计划能导入团队已有任务表，也能导出给团队使用。
+
+**审查/修改背景：** 之前只能导出 MD/Word/PDF，任务计划无法从 Excel/CSV 快速进入系统，也无法导出成日历或表格给团队。
+
+---
+
+### 体验优化（P2）
+
+#### 1. Excel 多表导出
+
+1. **修改后：** 新增 `/api/export/excel`，导出工作簿包含任务、成员、分工矩阵、时间线、参与清单、复盘六张表。
+2. **收益：** 一份 Excel 就能覆盖项目全部结构，方便二次编辑和交付。
+
+#### 2. CSV 与 ICS 导出
+
+1. **修改后：** 新增 `/api/export/csv` 导出任务表；新增 `/api/export/ics` 导出日历事件，可直接导入 Outlook/日历 App。
+2. **收益：** 与常用办公工具无缝衔接，排期能进入团队成员自己的日历。
+
+#### 3. CSV / Excel 任务导入
+
+1. **问题：** 团队已有的任务表只能手敲进系统。
+2. **修改后：** 新增 `/api/import/tasks`，支持从 CSV/Excel 第一张表导入任务，包含编号、任务、模块、工时、负责人、日期、依赖、阶段、技能；配置页新增“导入任务文件”入口。
+3. **收益：** 已有任务清单可快速变成可编辑草稿，再走确认分工流程。
+
+#### 4. 前端导出按钮
+
+1. **修改后：** 最终方案底部新增“导出Excel / 导出CSV / 导出ICS”按钮。
+2. **收益：** 导出入口与 MD/Word/PDF 并列，用户不需要记接口。
+
+### 同步修改
+
+- `app/services/plan_io.py`：新增 CSV/ICS/Excel 导出与 CSV/Excel 导入解析。
+- `app/web/routes.py`：新增 `/api/export/excel`、`/api/export/csv`、`/api/export/ics`、`/api/import/tasks`。
+- `app/web/static/app.js`：导入任务文件、导出按钮绑定。
+- `app/web/static/style.css`：配置页与最终页导出按钮布局。
+- `app/web/templates/index.html`：新增导入文件入口与导出按钮，缓存版本升级为 5.26。
+- `README.md`：版本与演进表同步 v5.26。
+- `tests/test_plan_io.py`：新增导入导出用例。
+
+
+## v5.25 —— 资源日历 + 冲突检测深化（2026-08-04）
+
+**定位：** 把成员每日可用工时、任务排期、不可用日期放在同一张日历上，并自动提示每日超载与日期冲突。
+
+**审查/修改背景：** 之前只能看总负载和基础重叠提示，看不出“某天谁已经排满、谁那天请假”；任务日期散落在时间线里，子任务本身没有回填。
+
+---
+
+### 体验优化（P2）
+
+#### 1. 资源日历统计接口
+
+1. **问题：** 成员每日负载没有统一计算，任务工时无法按天摊开。
+2. **修改后：** 新增 `resource_calendar` 服务与 `/api/resource-calendar` 接口，把任务参与人的投入工时按排期天数均匀分摊，返回成员每日负载、志愿者负载和不可用日期。
+3. **收益：** 前端能直接渲染“某天几点几小时”的真实资源视图。
+
+#### 2. 子任务日期自动合并时间线
+
+1. **问题：** 很多任务只有时间线里有开始/结束日期，`SubTask` 本身没回填，日历统计会误报“暂无排期”。
+2. **修改后：** `resource_calendar` 会先从 `timeline.tasks` 按任务 ID 合并日期，再计算每日负载。
+3. **收益：** 日历和甘特图使用同一套排期，不再因为字段没回填而显示空日历。
+
+#### 3. 前端资源日历视图
+
+1. **修改后：** 结果页新增“资源日历”Tab，展示日期横轴、每位成员的每日负载格子、不可用日期灰显、超载标红，并列出每个成员的任务清单。
+2. **收益：** 谁哪天有空、谁哪天排满、谁在请假当天还有任务，一眼可见。
+
+#### 4. 冲突检测深化
+
+1. **问题：** 之前只检测“总超载/任务重叠”，没有“单日负载超过每日可用工时”和“不可用日期当天仍有任务”。
+2. **修改后：** 资源日历接口新增两类冲突提示：每日负载超过 `daily_available_hours`；成员在 `unavailable_dates` 当天仍有任务。
+3. **收益：** 冲突从“大概超载”细化到“具体哪一天、哪个人、超了多少”。
+
+### 同步修改
+
+- `app/services/project_service.py`：新增 `resource_calendar`，合并时间线日期。
+- `app/web/routes.py`：新增 `/api/resource-calendar`。
+- `app/web/static/participants.js`：资源日历渲染与冲突提示。
+- `app/web/static/app.js`：结果页新增“资源日历”Tab。
+- `app/web/static/style.css`：资源日历格子、超载/不可用样式。
+- `app/web/templates/index.html`：新增“资源日历”Tab，缓存版本升级为 5.25。
+- `README.md`：版本与演进表同步 v5.25。
+- `tests/test_project_service.py`：新增每日超载与不可用日期用例。
+
+
+## v5.24 —— 组织树 + 任务级参与清单（2026-08-04）
+
+**定位：** 把组织层级和任务资源计划显式化：成员可设上级形成组织树，每个任务可配置参与者、角色与投入工时。
+
+**审查/修改背景：** 之前角色只挂在成员身上，任务工作量仍按“负责人+协作者+志愿者”的旧口径推算；现实项目需要先看清组织关系，再按任务逐一确认谁投入多少。
+
+---
+
+### 体验优化（P2）
+
+#### 1. 成员增加“上级”，形成组织树
+
+1. **问题：** 成员只有角色，没有上下级关系，项目负责人、骨干、基层员工之间的汇报关系无法表达。
+2. **修改后：** `TeamMember` 新增 `manager` 字段；成员/骨干/成员管理表单都能填写上级，结果页新增“组织树”Tab，按上级关系渲染层级。
+3. **收益：** 组织层级可见；负责人、骨干、基层员工不再是平级标签，而是真实树形结构。
+
+#### 2. 子任务增加任务级参与清单
+
+1. **问题：** 一个任务“谁参加、以什么角色、投入多少工时”没有单独入口，只能靠负责人/协作者/志愿者字段间接推断。
+2. **修改后：** 新增 `TaskParticipant` 模型与 `SubTask.participants` 字段；结果页新增“参与清单”Tab，每个任务可添加/删除参与者，填写姓名、角色、投入工时、是否志愿者，并保存。
+3. **收益：** 任务资源计划可逐项确认；负责人、协作者、志愿者数量会随参与清单自动同步。
+
+#### 3. 工作量统计优先使用参与清单
+
+1. **问题：** 旧 workload 用固定折算比例推协作者工时，无法反映“这个人在这项任务里实际投了 3h”。
+2. **修改后：** `workload_snapshot` 在任务存在 `participants` 时直接按各参与者 `contribution_hours` 统计，成员进入成员负载，外部志愿者进入志愿者负载。
+3. **收益：** 工作量条反映真实投入；内部与外部人力分开展示。
+
+#### 4. 报告与导出包含组织树和参与清单
+
+1. **修改后：** 完整 Markdown 增加“组织树”和“任务参与清单”两个章节，报告页因复用同一生成器自动同步。
+2. **收益：** 导出文档不再只有分工表，还能直接看到组织关系和每个任务的实际人力投入。
+
+### 同步修改
+
+- `app/models/schemas.py`：`TeamMember.manager`、`TaskParticipant`、`SubTask.participants`。
+- `app/services/project_service.py`：`update_task_participants`；workload 优先按参与清单统计。
+- `app/web/routes.py`：`/api/task-participants`；完整 Markdown 增加组织树/参与清单；成员编辑支持上级。
+- `app/web/static/participants.js`：组织树与参与清单前端逻辑。
+- `app/web/static/app.js`：成员/骨干/成员管理表单增加上级字段；结果页新增两个 Tab。
+- `app/web/static/style.css`：组织树与参与清单样式。
+- `app/web/templates/index.html`：新增“组织树”“参与清单”Tab 与参与者姓名候选，缓存版本升级为 5.24。
+- `README.md`：版本与演进表同步 v5.24。
+- `tests/test_project_service.py`：新增参与清单驱动工作量用例。
+
+
+## v5.23 —— 实际工时 + 复盘闭环（2026-08-04）
+
+**定位：** 任务完成后记录实际工时和实际完成日期，方案内对比计划/实际偏差，并把明显偏差沉淀回工时知识库。
+
+**审查/修改背景：** 之前系统只能“计划、分工、排期”，任务标记完成后实际投入没有记录，无法复盘，工时知识库也无法吸收真实完成数据。
+
+---
+
+### 体验优化（P2）
+
+#### 1. 任务增加实际工时与实际完成日期
+
+1. **问题：** `SubTask` 只有 `estimated_hours`，没有实际完成数据，任务完成后“实际花了多久”无从记录。
+2. **修改后：** `SubTask` 新增 `actual_hours`、`actual_end_date`、`actual_feedback_recorded` 三个字段，前端任务完成状态卡自动显示实际工时/完成日期输入框。
+3. **收益：** 完成任务的真实投入可留痕；导出和复盘都能读取这些数据。
+
+#### 2. 新增 `/api/task-actual` 记录接口
+
+1. **问题：** 前端不能把实际工时安全写回方案，且没有“只记录一次知识反馈”的防重复机制。
+2. **修改后：** 新增 `record_task_actual` 服务与 `/api/task-actual` 接口；实际工时与计划偏差超过 0.5h 且任务来自知识库建议时，自动写一条反馈，并标记 `actual_feedback_recorded` 防止重复沉淀。
+3. **收益：** 实际数据进入同一套 FullPlan 数据流；知识库只吸收一次真实修正，不被反复编辑污染。
+
+#### 3. 新增“复盘”页
+
+1. **问题：** 计划工时和实际工时散落在不同地方，无法快速看出哪些任务偏差大。
+2. **修改后：** 结果页新增“复盘”Tab，展示计划总工时、已记录实际工时、已完成任务数、已填写复盘数，以及每个任务的实际/计划偏差表。
+3. **收益：** 哪里超时、哪里提前、哪些任务还没填实际工时，一眼可见。
+
+#### 4. 完整报告包含实际工时复盘
+
+1. **问题：** 报告页与导出的 Markdown 之前没有复盘信息。
+2. **修改后：** `_plan_to_markdown` 增加“实际工时复盘”表格，包含计划工时、实际工时、偏差、实际完成日期、状态；报告页因复用同一生成器，自动同步。
+3. **收益：** 页面报告和导出报告都包含复盘数据，口径一致。
+
+### 同步修改
+
+- `app/models/schemas.py`：`SubTask` 增加实际工时/日期/反馈标记。
+- `app/services/project_service.py`：新增 `record_task_actual`，沉淀知识库反馈。
+- `app/web/routes.py`：新增 `/api/task-actual`；完整 Markdown 增加复盘表。
+- `app/web/static/app.js`：完成状态卡实际工时输入、复盘 Tab。
+- `app/web/static/style.css`：实际工时输入与复盘汇总样式。
+- `app/web/templates/index.html`：结果页增加“复盘”Tab，缓存版本升级为 5.23。
+- `README.md`：版本与演进表同步 v5.23。
+- `tests/test_project_service.py`：新增实际工时与知识反馈用例。
+
+
+## v5.22 —— 角色模型第一版：角色化工作量 + 志愿者折算 + 冲突检测（2026-08-04）
+
+**定位：** 让角色成为大小项目共用的组织维度，工作量按角色折算，已确认志愿者进入总人力，并检测基础排期冲突。
+
+**审查/修改背景：** 用户希望系统向现实组织落地：大型项目不仅有骨干和志愿者，还有项目负责人、基层员工等角色；这些能力也不应只属于大型项目，小型项目同样需要角色与冲突检测。
+
+---
+
+### 体验优化（P2）
+
+#### 1. 成员增加角色字段，支持自定义角色
+
+1. **问题：** 成员只有姓名/技能/工时，没有角色概念，工作量无法体现“项目负责人统筹、骨干带模块、执行成员做事”的现实差异。
+2. **修改前：**
+   ```python
+   class TeamMember(BaseModel):
+       name: str
+       skill_tags: list[str] = Field(default_factory=list, ...)
+   ```
+3. **修改后：**
+   ```python
+   class TeamMember(BaseModel):
+       name: str
+       role: str = Field(
+           default="执行成员",
+           description="角色：项目负责人 / 骨干 / 执行成员 / 志愿者 / 自定义角色。",
+       )
+   ```
+4. **为什么这样改：** 角色是组织属性，不是任务层级；自定义角色用自由文本即可，内置选项用于快速选择，不新增复杂角色管理。
+5. **收益：** 大小项目都能表达负责人、骨干、基层成员、外援等角色；工作量展示可以带角色标签。
+
+#### 2. 工作量加入角色折算与已确认志愿者
+
+1. **问题：** 之前只统计 `input.members`，志愿者完全不进工作量；项目负责人、骨干的统筹成本也没有体现。
+2. **修改后：**
+   - 项目负责人按项目活跃总工时 10% 计统筹工时。
+   - 骨干/模块负责人按认领模块数计模块统筹工时。
+   - 已确认志愿者按任务估时 50% 折算进“总人力”，待确认/已婉拒不计入。
+   - 工作台新增 `volunteers` 区块，和成员工作量并列展示。
+3. **为什么这样改：** 角色成本要可见但不能替代任务估时；志愿者只有确认后才算实际投入，避免把“招募中”当成已到位。
+4. **收益：** 项目负责人、骨干、执行成员、志愿者的负载都能看见；工作量口径从“只算内部成员”升级为“内部 + 已确认外援”。
+
+#### 3. 基础排期冲突检测
+
+1. **问题：** 成员有不可用日期、任务有起止日期，但系统之前不检查“被排进不可用日期”或“同一人同时参与两个重叠任务”。
+2. **修改后：** `workload_snapshot` 增加两类提示：任务排期与成员不可用日期重叠；同一成员同时参与排期重叠的任务。
+3. **收益：** 分工看板能提前暴露排期冲突；与超载、未分配等已有提示合并显示，不需要新增页面。
+
+#### 4. 修复大小项目顶部步骤条不随模式切换
+
+1. **问题：** 切换大/小项目模式时，旧的 `state.input.project_mode` 仍然残留，导致顶部导航继续按旧模式渲染，小型项目也出现“大模块拆解/骨干认领/子任务拆解”这些大型项目步骤。
+2. **修改前：** `isLargeProject()` 只要 `state.input.project_mode` 存在就直接用它，且模式切换不清空旧方案状态。
+3. **修改后：** 配置页可见时优先按当前选中的模式卡判断；切换模式时清空 `state.input/draft/plan` 等旧状态并重设步骤导航。
+4. **为什么这样改：** 步骤条是“当前项目流程”的导航，不能跟着旧方案残留；切换模式代表开始新的项目配置，旧的内存方案应该让位。
+5. **收益：** 小型项目回到 4 步流程，大型项目保持 6 步流程；切换模式后步骤条立即正确。
+
+#### 5. 修复成员“简介”文本框样式脱节
+
+1. **问题：** 成员行从“标签”切到“简介”后，`textarea.member-bio` 没有参与 `.member-row` 的统一样式，边框、背景、圆角和高度都像原生控件，和其它输入框不在一个图层。
+2. **修改后：** 给 `.member-row textarea.member-bio` 补齐边框、圆角、背景、内边距和聚焦态；移动端下跨整行显示。
+3. **收益：** 标签/简介两种输入模式视觉一致；简介输入更清晰，不再像临时塞进去的控件。
+
+#### 6. 角色从默认文本改为可选下拉，并随模式切换更新
+
+1. **问题：** 角色之前用文本输入框，默认值只有“执行成员”，用户看不到其它角色选项；切换大/小项目模式后，已有成员行的角色也不会跟着更新。
+2. **修改后：** 成员、骨干、成员管理里的角色都改成下拉选择：项目负责人 / 骨干 / 模块负责人 / 执行成员 / 志愿者 / 外部协作者 / 自定义；切换项目模式时同步更新已有行的默认角色。
+3. **收益：** 角色入口一眼可见；大型项目默认“骨干 / 模块负责人”，小型项目默认“执行成员”；自定义角色仍可通过下拉触发输入。
+
+#### 7. 报告页改为渲染完整报告，与导出一致
+
+1. **问题：** 报告页只渲染 `ReportOutput` 里的概要、时间线、分工矩阵三段，模块说明、志愿者、完整表格和详细说明都没有；导出的 MD/Word/PDF 却有完整内容，页面和导出不一致。
+2. **修改前：** 报告页手动拼 `summary / timeline_section / qa_matrix_section / risk_note` 四个字段。
+3. **修改后：** 报告页调用导出用的同一份完整 Markdown 生成器，再复用 `renderMd` 渲染，页面和导出报告完全一致。
+4. **收益：** 报告页不再“缩水”；模块、任务表、时间线、分工矩阵、志愿者和风险说明都能在页面直接看到。
+
+#### 8. 补齐站点 favicon，消除 404 请求
+
+1. **问题：** 浏览器访问页面时会自动请求 `/favicon.ico`，项目没有站点图标，服务日志持续出现 404。
+2. **修改后：** 新增 `app/web/static/favicon.svg` 并在 `index.html` 中显式声明站点图标。
+3. **收益：** 浏览器标签页有品牌图标；服务日志不再出现 favicon 404。
+
+### 同步修改
+
+- `app/models/schemas.py`：`TeamMember` 增加 `role` 字段。
+- `app/services/project_service.py`：`workload_snapshot` 支持角色工时、已确认志愿者折算、排期冲突检测。
+- `app/web/routes.py`：成员编辑支持 `member_roles` 角色更新，新增成员支持角色。
+- `app/web/static/app.js`：角色改为下拉选择并随模式更新；报告页复用完整 Markdown 渲染；工作量卡片显示角色标签与志愿者区块。
+- `app/web/static/style.css`：成员行栅格适配角色列；简介文本框统一样式；志愿者负载卡片样式。
+- `app/web/templates/index.html`：移除已不使用的角色 `datalist`，缓存版本升级为 5.22。
+- `app/web/static/favicon.svg`：新增站点图标。
+- `README.md`：版本与演进表同步 v5.22。
+- `tests/test_project_service.py`：新增角色/志愿者/冲突用例。
+
+
+## v5.21 —— 阶段导航去重 + 评审预演双模式（2026-08-04）
+
+**定位：** 去掉大型项目草稿区重复的阶段条，并把评审预演从单向“回答后点评”改成可回答、可让 AI 调整提问的互动模式。
+
+**审查/修改背景：** 用户反馈大模块拆解、骨干认领、子任务拆解在顶部导航之外又出现一组小阶段条，重复累赘；评审预演目前只能输入回答等点评，用户不想写长回答或觉得题目不精确时没有更自然的互动入口。
+
+---
+
+### 体验优化（P2）
+
+#### 1. 移除大型项目底部重复阶段条
+
+1. **问题：** 大模块/骨干/子任务三个阶段除了顶部全局导航，草稿区还渲染了一组小阶段条，同一批按钮在页面里出现两遍。
+2. **修改前：**
+   ```html
+   <div id="largeStageNav" class="large-stage-nav hidden"></div>
+   ```
+   ```js
+   function renderDraftView(){var stageNav=el('largeStageNav');...renderLargeStageNav();...}
+   ```
+3. **修改后：**
+   ```js
+   function renderDraftView(){
+     if(isLargeProject()){...}else{renderSmallDraft()}
+   }
+   ```
+4. **为什么这样改：** 顶部 `stepNav` 已经能直接在大模块/骨干/子任务三阶段间切换，小阶段条只是冗余副本；删掉后导航入口唯一，流程更清楚。
+5. **收益：** 草稿区不再出现两组相同阶段按钮；顶部导航保持完整；三阶段切换能力不受影响。
+
+#### 2. 评审预演新增「调整提问」互动模式
+
+1. **问题：** 评审预演只有“输入回答 → AI 点评 → 下一题”单向流程，用户不想输入长回答时没有出口；觉得题目不精确或不好时，也无法让 AI 根据反馈重新出题。
+2. **修改前：**
+   ```html
+   <form ...><textarea id="interviewAnswer" ...></textarea><button type="submit">回答</button></form>
+   ```
+   ```python
+   if user_answer.strip():
+       messages.append({"role": "user", "content": user_answer})
+   result = self.llm.chat_messages(
+       system_prompt=INTERVIEW_CHAT_SYSTEM, ...)
+   ```
+3. **修改后：**
+   ```html
+   <div class="interview-mode-toggle">
+     <button class="active" data-interview-mode="answer">回答问题</button>
+     <button data-interview-mode="adjust">调整提问</button>
+   </div>
+   ```
+   ```python
+   adjust_mode = mode == "adjust"
+   if adjust_mode:
+       feedback = user_answer.strip() or "这道题不够精确，请调整得更具体、更贴合我们的项目。"
+       messages.append({"role": "user", "content":
+           "请根据我的反馈重新调整你刚才提出的评审问题。只输出调整后的一个问题，不要点评，不要解释。\n\n反馈：" + feedback})
+   result = self.llm.chat_messages(
+       system_prompt=INTERVIEW_ADJUST_SYSTEM if adjust_mode else INTERVIEW_CHAT_SYSTEM, ...)
+   ```
+4. **为什么这样改：** “回答问题”和“调整提问”是评审预演里两种互补的互动方式：前者保留原有点评闭环，后者让用户用一两句话就能修正题目；后端用独立系统提示约束 AI 只重出问题，避免把“调整意见”误当成回答来点评。
+5. **收益：** 不想长篇回答时可以直接要求调整题目；题目不精确时能得到贴合项目的新问题；调整完成后自动切回回答模式，点评闭环不被破坏。
+
+### 同步修改
+
+- `app/web/templates/index.html`：移除 `largeStageNav` 容器，缓存版本升级为 5.21。
+- `app/web/static/app.js`：移除 `renderLargeStageNav`；评审预演双模式交互、`mode` 请求参数。
+- `app/agents/interview_sim.py`：`chat_turn` 支持 `mode="adjust"`，调整提问时只输出新问题。
+- `app/llm/prompts.py`：新增 `INTERVIEW_ADJUST_SYSTEM` 评审调整提示词。
+- `app/web/routes.py`：`InterviewChatRequest` 增加 `mode` 字段并透传。
+- `app/web/static/style.css`：评审输入区双模式切换样式。
+- `README.md`：版本与演进表同步 v5.21。
+- `tests/test_interview_chat.py`：新增调整提问用例。
+
+
+## v5.20 —— 前端交互修复 + 流程职责理顺 + 时间线/历史弹窗/品牌视觉再打磨（2026-08-04）
+
+**定位：** 修复用户实测反馈的按钮白化、添加任务不可编辑、骨干下拉简陋等问题，并继续收敛时间线、历史弹窗和品牌视觉。
+
+**审查/修改背景：** 用户在 v5.19 之后继续试用，发现「生成任务拆解」等主按钮悬浮后背景变白、文字看不清；大模块阶段添加任务后只能看到「新任务 2h」却无法编辑名称和工时；骨干认领和分工看板里的骨干下拉框仍是浏览器默认样式；时间线页甘特图与排期明细内容重复；历史方案弹窗关闭按钮会随滚动跑出视野、文件名还容易折行；同时希望品牌小图标和整体界面再精致一点。
+
+---
+
+### 体验优化（P2）
+
+#### 1. 主按钮悬浮白化导致文字不可见
+
+1. **问题：** 悬浮「生成任务拆解」「下一步：骨干认领」等主按钮时背景变成近白色，而文字仍是白色，用户完全看不到按钮上的字。
+2. **修改前：**
+   ```css
+   .btn:hover {
+     background: linear-gradient(180deg,#fff,var(--card-soft));
+     ...
+   }
+   .btn-primary:hover {
+     color: #fff;
+     box-shadow: ...;
+     transform: translateY(-1px);
+   }
+   ```
+3. **修改后：**
+   ```css
+   .btn-primary:hover {
+     background: linear-gradient(135deg,#6e6cf3,#5147e8 58%,#4539cc);
+     color: #fff;
+     box-shadow: ...;
+     transform: translateY(-1px);
+   }
+   ```
+4. **为什么这样改：** `.btn:hover` 是通用规则，会覆盖 `.btn-primary` 的渐变背景；`.btn-primary:hover` 只改了文字和阴影、没有重新声明背景，于是悬浮时背景被通用规则换成了白色。重新在 `:hover` 里声明主色渐变即可消除层级冲突。
+5. **收益：** 主按钮悬浮时文字始终可读；主色悬停反馈更明显；其它普通按钮/幽灵按钮行为不受影响。
+
+#### 2. 移除大模块阶段的子任务添加/编辑入口
+
+1. **问题：** 大模块拆解本应只负责模块结构，但模块卡片里仍有「添加子任务」按钮，点击后自动跳到子任务拆解阶段，用户在大模块阶段编辑一次就跳一次，还会直接跳过骨干认领。
+2. **修改前：**
+   ```js
+   renderLargeModules() {
+     ...
+     '<button class="btn-small add-task-to-module" ...>＋ 添加子任务</button>'
+     ...
+     btn.onclick=function(){mutateDraft([{op:'add',module_id:btn.dataset.module}]).then(function(){
+       state.largeStage='tasks';renderDraftView();...
+     })}
+   }
+   ```
+3. **修改后：**
+   ```js
+   renderLargeModules() {
+     // 只保留模块新增/合并/删除/排序，不再渲染 add-task-to-module
+   }
+   ```
+4. **为什么这样改：** 大模块、骨干认领、子任务拆解是三段职责明确的阶段；子任务的新增和编辑只在「子任务拆解」里做，模块阶段不该重复入口，否则用户会被反复弹走、打断骨干认领流程。
+5. **收益：** 大模块阶段保持专注；骨干认领不会被自动跳过；子任务新增/编辑入口只保留在正确阶段，流程更清晰。
+
+#### 3. 子任务拆解工具栏补齐「重新生成」
+
+1. **问题：** 子任务拆解阶段没有「重新生成」入口，代码里虽然有 `if(el('redraftBtn'))` 但工具栏根本没有渲染该按钮。
+2. **修改前：**
+   ```js
+   el('draftToolbar').innerHTML='...id="addTaskBtn">＋ 新增任务</button>...id="mergeTaskBtn">合并选中</button></div>'
+   ```
+3. **修改后：**
+   ```js
+   el('draftToolbar').innerHTML='...id="addTaskBtn">＋ 新增任务</button>...id="mergeTaskBtn">合并选中</button><button class="btn btn-ghost" id="redraftBtn">重新生成</button></div>'
+   ```
+4. **为什么这样改：** v5.18 已预留 `if(el('redraftBtn'))` 的事件绑定，但工具栏字符串里没渲染按钮，导致入口“有代码没 UI”；把按钮放回工具栏即可复用既有重新生成流程。
+5. **收益：** 对 AI 拆解结果不满意时可在任务阶段直接重试；大型/小型项目操作对等。
+
+#### 4. 骨干下拉框统一成正式控件样式
+
+1. **问题：** 骨干认领、模块分工看板中的 `module-owner-select` 只有宽度定义，边框、背景、圆角全靠浏览器默认，看起来像没做样式。
+2. **修改前：**
+   ```css
+   .module-claim-card .module-owner-select { width: 150px; }
+   .board-module-head .module-owner-select { width: 130px; }
+   ```
+3. **修改后：**
+   ```css
+   .module-owner-select {
+     min-width: 0;
+     border: 1px solid var(--line);
+     border-radius: var(--radius-xs);
+     padding: 7px 10px;
+     font-size: 12px;
+     color: var(--text);
+     background: #fff;
+     cursor: pointer;
+     transition: border-color .16s,box-shadow .16s,background .16s;
+   }
+   ```
+4. **为什么这样改：** 同一控件在不同页面复用同一基础样式，再各自保留宽度即可；默认原生下拉在浅色卡片里显得突兀。
+5. **收益：** 骨干认领、模块分工、分工招募里的下拉框视觉一致；悬停/聚焦反馈与其它输入控件统一。
+
+#### 5. 时间线页甘特图与排期明细合并
+
+1. **问题：** 时间线页先渲染一整张甘特图，下面又重复一份「排期明细」，同一批任务出现两遍，信息冗余。
+2. **修改前：**
+   ```js
+   content=renderGantt()+'<div class="timeline-detail"><h3>排期明细</h3>'+(state.plan.timeline.tasks||[]).map(...).join('')+'</div>'
+   ```
+3. **修改后：** `content=renderGantt()`，甘特图每行新增 `.gantt-meta`，直接展示日期、工期、关键/浮动状态和任务状态，并增加表头行。
+4. **为什么这样改：** 甘特图本身已经是「任务 + 时间条 + 日期」的结构，单独再列一遍明细只会让页面更长、更重复；把明细并入每行后仍然能一眼看到排期要素。
+5. **收益：** 时间线页信息密度更高；滚动距离明显缩短；关键路径、浮动和状态不再需要上下对照。
+
+#### 6. 历史方案弹窗关闭按钮与行高优化
+
+1. **问题：** 历史方案弹窗里关闭按钮固定在顶部，列表很长时滚到下方就没法快速关闭；改成单行省略后，长文件名直接变成省略号，用户反而看不清方案名；删除按钮也仍然占位偏大。
+2. **修改前：**
+   ```css
+   .modal { padding: 20px; }
+   .modal-head { ... margin-bottom: 12px; }
+   .modal #planList button { padding: 11px 13px; }
+   .modal #planList button span { white-space: nowrap; text-overflow: ellipsis; }
+   .delete-plan { width: 32px; height: 32px; }
+   ```
+3. **修改后：**
+   ```css
+   .modal { padding: 0; }
+   .modal-head { position: sticky; top: 0; z-index: 5; padding: 14px 20px 12px; background: rgba(255,255,255,.97); }
+   .modal #planList button { padding: 8px 12px; min-height: 44px; }
+   .modal #planList button span { white-space: normal; overflow-wrap: anywhere; }
+   .delete-plan { width: 24px; height: 24px; font-size: 14px; }
+   ```
+4. **为什么这样改：** 吸顶解决关闭入口问题；文件名从强制单行改为自然换行后，长名称能完整显示出来，删除按钮缩小后也能把更多宽度让给文件名。
+5. **收益：** 滚动到任意位置都能看到关闭入口；历史方案名可读性恢复；删除按钮更紧凑，列表仍保持清爽。
+
+#### 7. 品牌小图标升级为六边形节点网络
+
+1. **问题：** 第一版节点图缺少容器，第二版六边形结构太复杂，反馈效果反而更差。
+2. **修改前：**
+   ```html
+   <svg viewBox="0 0 32 32" fill="none"><path d="M16 3.2 27 9.1v13.8L16 28.8 5 22.9V9.1L16 3.2z" .../><circle .../></svg>
+   ```
+3. **修改后：**
+   ```html
+   <svg viewBox="0 0 32 32" fill="none"><rect x="4.5" y="4.5" width="23" height="23" rx="7" .../><circle .../><path .../></svg>
+   ```
+4. **为什么这样改：** 圆角方形外框更贴近产品气质，内部只保留三个节点和三条连线，信息更简洁，缩小后仍然清楚。
+5. **收益：** 图标更耐看；与顶部渐变背景、品牌状态点更协调；识别度高于纯散点版本。
+
+#### 8. 志愿者招募标题与底部说明文字留白
+
+1. **问题：** 志愿者招募页标题和「调整完成后确认最终方案 / 建议不会阻止你保存」说明文字紧贴容器左边缘，视觉上缺少呼吸感。
+2. **修改后：**
+   ```css
+   .volunteer-recruit-head { padding: 0 2px; }
+   .sticky-action>div { padding-left: 2px; }
+   ```
+3. **收益：** 标题与下方方框内容对齐更自然；底部说明不再贴边，页面观感更精致。
+
+#### 9. 子任务拆解阶段按钮文案被 finally 恢复成旧值
+
+1. **问题：** 从骨干认领进入子任务拆解后，`renderLargeTasks` 已把按钮改成「确认拆解并开始分工」，但 `onConfirmDraft` 的 `finally` 又把进入前的旧文案「下一步：骨干认领」写回去，用户看到阶段和按钮不一致。
+2. **修改前：** `finally{btn.disabled=false;btn.textContent=oldText}`
+3. **修改后：** `finally{btn.disabled=false;updateDraftFooter()}`
+4. **为什么这样改：** `oldText` 记录的是点击前的文案，不是当前阶段该有的文案；`updateDraftFooter()` 会根据 `state.largeStage` 实时计算，成功、失败、切换阶段都能得到正确按钮文字。
+5. **收益：** 子任务拆解阶段按钮稳定显示「确认拆解并开始分工」；模块、骨干、任务三个阶段切换后按钮文案始终正确。
+
+### 同步修改
+
+- `app/web/static/app.js`：移除大模块阶段添加子任务入口，子任务新增/编辑只在子任务拆解阶段；修复 finally 覆盖阶段按钮文案；任务阶段补回重新生成；甘特图合并排期明细。
+- `app/web/static/style.css`：主按钮 hover 渐变、骨干下拉统一、时间线表头/元信息、历史弹窗吸顶与文件名可换行、志愿者/底部说明留白。
+- `app/web/templates/index.html`：品牌 SVG 最终版升级为圆角方形节点网络，CSS/JS 缓存版本升级为 5.20。
+- `app/main.py`、`app/models/schemas.py`：版本号统一升级为 5.20。
+- `README.md`：顶部版本与版本演进表同步 v5.20。
+- `CHANGELOG.md`：新增 v5.20 详细记录，版本规划表新增 v5.20。
+
+
+## v5.19 —— 前端视觉精细度整体打磨（2026-08-04）
+
+**定位：** 在不推翻现有结构的前提下，对页面布局、配色、图案与组件质感做一轮精细化升级，让工作台更精致美观。
+
+**审查/修改背景：** 用户反馈页面整体偏平、大圆角模板感较重、卡片层次与细节不足，希望继续提升整体美观和精致度；本轮为纯视觉打磨，不改变业务流程。
+
+---
+
+### 体验优化（P2）
+
+#### 1. 设计变量与页面背景升级为有质感的浅色工作台
+
+1. **问题：** `body` 只有两个很淡的 radial-gradient，背景几乎纯平；阴影与圆角体系偏大偏松，卡片层次靠大圆角支撑，整体不够精致。
+2. **修改前：**
+   ```css
+   --shadow: 0 4px 16px rgba(30,41,59,.08),0 1px 3px rgba(30,41,59,.04);
+   --radius: 16px;
+   body{background-image:radial-gradient(at 20% 0%,rgba(99,102,241,.04) 0,transparent 50%),radial-gradient(at 80% 100%,rgba(14,165,233,.03) 0,transparent 50%)}
+   ```
+3. **修改后：**
+   ```css
+   --shadow: 0 1px 2px rgba(30,41,59,.04),0 10px 30px -8px rgba(30,41,59,.12);
+   --ring: 0 0 0 3px rgba(99,102,241,.16);
+   --radius: 14px;
+   body{background-image:radial-gradient(at 16% -6%,rgba(99,102,241,.08) 0,transparent 46%),radial-gradient(at 88% 4%,rgba(14,165,233,.07) 0,transparent 42%),radial-gradient(at 74% 96%,rgba(124,58,237,.05) 0,transparent 46%),linear-gradient(rgba(99,102,241,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(99,102,241,.025) 1px,transparent 1px)}
+   ```
+4. **为什么这样改：** 视觉精致度来自层次而非单纯加大阴影/圆角；把阴影改为「贴边微阴影 + 远距离柔影」、背景叠加细网格后，页面会显得更薄、更有秩序，圆角收敛也更符合办公工具的气质。
+5. **收益：** 背景不再偏平，有克制的立体感；阴影层级更清晰；后续组件共用 `--ring` 焦点环，交互状态统一。
+
+#### 2. 顶栏、品牌标识与步骤导航细节点缀
+
+1. **问题：** 顶栏和步骤导航都只有一条普通底边框，品牌方块缺少细节，页面头部显得朴素、缺少精致记忆点。
+2. **修改前：**
+   ```css
+   .app-header{...border-bottom:1px solid var(--line);...}
+   .brand-mark{...border-radius:12px;background:linear-gradient(135deg,#6366f1,#7c3aed);...}
+   .step-nav{...border-bottom:1px solid var(--line);...}
+   ```
+3. **修改后：**
+   ```css
+   .app-header{...border-bottom:none;box-shadow:0 1px 0 rgba(30,41,59,.04),0 12px 32px -28px rgba(30,41,59,.3)}
+   .app-header::after{content:"";...background:linear-gradient(90deg,transparent 2%,var(--primary-soft2) 30%,var(--accent-soft) 72%,transparent 98%)}
+   .brand-mark{...border-radius:13px;background:linear-gradient(135deg,#6366f1,#7c3aed 72%,#a855f7);box-shadow:0 6px 18px rgba(79,70,229,.32),inset 0 1px 0 rgba(255,255,255,.28),inset 0 -1px 0 rgba(30,41,59,.12)}
+   .brand-mark::after{content:"";...width:11px;height:11px;border-radius:50%;background:linear-gradient(135deg,#34d399,#10b981);border:2px solid #fff}
+   .step-nav{...backdrop-filter:blur(14px);border-bottom:none;box-shadow:0 1px 0 rgba(30,41,59,.04)}
+   .step-nav::after{content:"";...background:linear-gradient(90deg,transparent 4%,var(--primary-soft2) 34%,var(--accent-soft) 66%,transparent 96%)}
+   ```
+4. **为什么这样改：** 用渐变细线和品牌状态点替代硬边框，能在不增加视觉噪音的前提下强化顶部识别度；品牌多一层高光和状态点后更像一个有细节的产品标识。
+5. **收益：** 头部层次更精致；品牌与导航有明确视觉锚点；步骤导航悬浮感更自然。
+
+#### 3. 卡片、按钮与输入焦点统一质感
+
+1. **问题：** 各组件各自定义边框/阴影，悬停只改边框色，输入聚焦也只有边框变色，交互反馈弱且不统一。
+2. **修改前：**
+   ```css
+   .btn{...transition:all .18s cubic-bezier(.4,0,.2,1)}
+   .task-edit-card{...box-shadow:var(--shadow-xs)}
+   .task-edit-card:hover{border-color:var(--primary-soft2);box-shadow:var(--shadow-sm)}
+   ```
+3. **修改后：**
+   ```css
+   .btn{...box-shadow:inset 0 1px 0 rgba(255,255,255,.75),0 1px 2px rgba(30,41,59,.04)}
+   .task-edit-card{...box-shadow:inset 0 1px 0 rgba(255,255,255,.9),var(--shadow-xs)}
+   .task-edit-card:hover{transform:translateY(-1px)}
+   :focus-visible{outline:2px solid rgba(99,102,241,.5);outline-offset:2px}
+   ```
+4. **为什么这样改：** 顶部高光让卡片有「可点击的实体」感，悬停微位移提供即时反馈；全局焦点环让键盘导航与表单聚焦状态一致可辨。
+5. **收益：** 卡片、按钮、看板、工作量卡、甘特图等统一获得精致悬停/聚焦反馈；表单聚焦更醒目；可访问性更好。
+
+#### 4. 模式卡、汇总卡、弹窗与 AI 抽屉细节
+
+1. **问题：** 模式卡选中态是纯色填充，汇总卡只有渐变底色，弹窗/抽屉阴影偏轻，关键入口和状态缺少细节层级。
+2. **修改前：**
+   ```css
+   .config-head{...background:linear-gradient(180deg,var(--card-soft),transparent)}
+   .mode-card.active{...background:var(--primary-soft);box-shadow:0 0 0 4px rgba(99,102,241,.1),var(--shadow-sm)}
+   .modal{...border-radius:var(--radius);box-shadow:var(--shadow-lg)}
+   ```
+3. **修改后：**
+   ```css
+   .config-head{...background:linear-gradient(180deg,#fff,var(--card-soft));position:relative}
+   .mode-card.active::after{content:"\2713";...background:linear-gradient(135deg,var(--primary2),var(--primary));color:#fff}
+   .summary-card::before{content:"";...width:3px;background:linear-gradient(180deg,var(--primary2),var(--primary))}
+   .modal{...border-radius:18px;box-shadow:0 24px 80px rgba(15,23,42,.3),inset 0 1px 0 rgba(255,255,255,.8)}
+   .drawer-head::after{content:"";...background:linear-gradient(90deg,var(--primary-soft2),transparent 70%)}
+   ```
+4. **为什么这样改：** 选中模式用对勾徽章而非单纯换底色，状态语义更明确；汇总卡加主题色边条、弹窗加深层阴影，让「正在编辑的内容」和「覆盖层」层次拉开。
+5. **收益：** 选中态更直观；页面焦点区域层次分明；弹窗/抽屉更有悬浮感，不再像平铺面板。
+
+#### 5. 移动端细节适配
+
+1. **问题：** 窄屏下部分按钮、表单和悬浮按钮沿用桌面尺寸，间距偏紧，移动端预览不够从容。
+2. **修改前：**
+   ```css
+   @media(max-width:760px){
+     .app-header{padding:0 14px}
+     .app-main{padding:16px 12px 50px}
+     .assistant-button{right:24px;bottom:24px;padding:13px 20px}
+   }
+   ```
+3. **修改后：**
+   ```css
+   @media(max-width:760px){
+     .step-nav button{padding:7px 12px}
+     .app-main{padding:18px 14px 60px}
+     .mode-card{padding:16px}
+     .assistant-button{right:16px;bottom:16px;padding:11px 16px}
+   }
+   ```
+4. **为什么这样改：** 移动端不是简单等比缩小，而是需要同时收紧组件内距并保留页面呼吸感；悬浮按钮贴边可减少误触和遮挡，让关键入口在小屏上依然易点。
+5. **收益：** 移动端按钮和内容不再拥挤；悬浮按钮避开边缘；整体在小屏下保持与桌面一致的精致度。
+
+### 同步修改
+
+- `app/web/static/style.css`：样式从压缩格式整理为可读格式并完成视觉精修；注释乱码修复。
+- `app/main.py`、`app/models/schemas.py`、`app/web/templates/index.html`：版本号统一升级为 5.19。
+- `README.md`：顶部版本与版本演进表同步 v5.19。
+- `CHANGELOG.md`：新增 v5.19 详细记录，版本规划表补齐 v5.16-v5.19。
+
+
+## v5.18 —— 大型项目体验对标小型项目 + P0–P3 全量修复（2026-08-04）
+
+**定位：** 修复审查发现的关键缺陷与体验短板，并把大型项目的交互精细度补齐到与小型项目同等水平。
+
+**审查/修改背景：** 第二轮深度审查发现大型项目看板改骨干负责人后不联动重算、志愿者行内编辑触发整池保存导致竞态丢输入、骨干姓名失焦收集按索引错位、版本号三处不同步、三处乱码注释残留、以及 /api/export/{filename} 老路由与 POST 导出路由前缀冲突等隐患。同时大型项目相比小型项目仍缺"恢复自动分工"、"需招募志愿者"可编辑字段、子任务跨模块移动、重新生成等入口。
+
+---
+
+### 关键缺陷（P0）
+
+#### 1. 大型项目看板改骨干负责人后不联动重算
+
+1. **问题：** 分工看板中改模块骨干下拉（module-owner-select）只把值写进内存对象，既不刷新工作量、也不把模块下未指定负责人的子任务归给新骨干，用户"改了没反应"。
+2. **修改前：** onchange 只写 `original.assignee_id=sel.value||null`，无后续动作。
+3. **修改后：** 改骨干后联动该模块下子任务（未指定负责人的自动归骨干、清空骨干时原跟随任务清空），记录变更描述，并 renderBoard() 刷新工作量条。
+4. **为什么这样改：** 骨干认领的语义是"模块负责人统领模块下子任务"，与后端 apply_manual_assignment 中"模块下未单独指定负责人的子任务默认归模块负责人"的规则一致；前端缺这步会导致看板分工与最终确认结果不一致。
+5. **收益：** 改骨干即时反映到工作量；与小型项目改负责人即时刷新的行为对齐；分工数据自洽。
+
+---
+
+### 健壮性提升（P1）
+
+#### 2. 志愿者行内编辑整池保存竞态导致丢输入
+
+1. **问题：** 志愿者招募面板中姓名/联系/状态/备注的 onchange 直接触发 saveVolunteers，该方法从 DOM 整池收集后 POST 并 renderVolunteerRecruit() 全量重渲染。用户编辑 A 行时若 B 行正在输入，B 行失焦且回车失效；连续改状态会反复重渲染打断输入。
+2. **修改前：** `field.onchange=saveVolunteers` 直接同步保存+重渲染。
+3. **修改后：** 引入 600ms 防抖 debouncedSaveVolunteers，并在 saveVolunteers 重渲染前后捕获并恢复焦点与光标位置。
+4. **为什么这样改：** 整池替换式 upsert 的后端校验无法省略，但重渲染时机可推迟到用户停手；焦点/光标恢复确保即使重渲染也不打断编辑。
+5. **收益：** 连续编辑不再丢输入或丢焦点；志愿者状态切换不再触发抖动式重渲染。
+
+#### 3. 骨干姓名失焦收集按过滤后的索引错位
+
+1. **问题：** 骨干姓名 blur 时先过滤掉空名生成 names 数组，再按索引写回 state.input.members，删除中间一行后数组长度不一致导致后续骨干姓名全部错位张冠李戴。
+2. **修改前：** `var names=[];...if(v)names.push(v); ...m.name=names[i]`（过滤后数组与原数组索引错位）。
+3. **修改后：** 按 DOM 行顺序与 members 数组逐位对齐写入，最后统一过滤空名成员。
+4. **为什么这样改：** DOM 行顺序恒等于 members 数组顺序（渲染与删除均保持一致），按行对齐不会错位；过滤空值应在对齐完成后统一做。
+5. **收益：** 删除中间骨干不再导致后续姓名错位；认领下拉选项与实际骨干一一对应。
+
+#### 4. 三处中文注释被编码损坏为问号
+
+1. **问题：** project_service.py:281、routes.py:754、exporters.py:209 的中文注释被某次编辑损坏为 # ?????... 。
+2. **修改后：** 分别恢复为"优先沿用任务已有负责人，并校验其是否仍在当前成员名单内""基于实际分工重算详细风险提示""本地字体都找不到时，回退用 reportlab 内置 CID 字典注册 STSong-Light"。
+3. **收益：** 代码可读性恢复，评审不再看到乱码。
+
+---
+
+### 体验优化（P2）
+
+#### 5. 大型项目分工看板缺少"恢复自动分工"
+
+1. **问题：** 小型项目看板有"恢复自动分工"按钮，大型项目改坏分工后无一键回退。
+2. **修改后：** 大型看板"模块分工"tab 工具栏补 resetAssignBtn，复用 resetAssignment() 从 state.automatic 恢复。
+3. **收益：** 大型/小型看板操作对等；误改可一键回退。
+
+#### 6. 任务卡无法编辑"需招募志愿者"数量与跨模块移动
+
+1. **问题：** extra_helpers_needed 只有 LLM/兜底生成时携带，前端任务卡无编辑入口；大型项目也无法把子任务从一个模块移到另一个模块。
+2. **修改后：** renderTaskCard 在大型模式下新增"需招募"数字输入框与"所属模块"下拉（仅有模块时显示）；taskFromCard 收集 module_id 与 extra_helpers_needed。
+3. **为什么这样改：** 这两项是大型项目"分工招募"阶段的核心可调参数，缺失意味着用户无法根据实际情况调整招募规模与模块归属。
+4. **收益：** 志愿者招募需求可按任务手动调整；子任务可跨模块移动重组。
+
+#### 7. 大型项目子任务阶段缺少"重新生成"
+
+1. **修改后：** renderLargeTasks 工具栏补"重新生成"按钮，与小型项目任务拆解阶段对齐。
+2. **收益：** 对 AI 拆解不满意时可一键重试，无需退回大模块阶段。
+
+---
+
+### 打磨（P3）
+
+#### 8. 版本号三处不同步
+
+1. **问题：** app/main.py 与 schemas.py 的 version 仍为 5.15，而 HTML 引用已是 ?v=5.17，CHANGELOG 到 v5.17，README 演进表只到 v5.15。
+2. **修改后：** main.py、schemas.py、index.html 统一升至 5.18；README 顶部版本与演进表补齐 v5.16/v5.17/v5.18。
+3. **收益：** 前后端版本号一致；调试与文档对齐。
+
+#### 9. /api/export/{filename} 老路由与 POST 导出路由前缀冲突
+
+1. **问题：** GET /api/export/{filename}（导出已保存方案，前端未使用、无测试覆盖、README 未列）与 POST /api/export/{format} 共用 /export 前缀，GET /api/export/markdown 会被老路由吃掉。
+2. **修改后：** 老路由迁移到 GET /api/plans/{filename}/export，消除前缀冲突。
+3. **收益：** 消除路由歧义隐患；路径语义更清晰（属于已保存方案的操作）。
+
+---
+
+### 同步修改
+
+- app/web/static/app.js：骨干联动、志愿者防抖+焦点恢复、blur 错位、恢复自动分工、需招募字段、所属模块下拉、重新生成等 12 处。
+- app/web/exporters.py、app/services/project_service.py、app/web/routes.py：乱码注释修复；export 老路由迁移。
+- app/main.py、app/models/schemas.py、app/web/templates/index.html、README.md：版本号与演进表同步。
+- 146 项测试全过，JS 语法检查通过，后端 API 端到端验证（跨模块移动/需招募更新/志愿者超员校验）通过。
+
+
 ## v5.17 —— 品牌标识与视觉精细化重设计（2026-08-04）
 
 **定位：** 将单字 logo 替换为专业 SVG 图标，并对整体配色、卡片、按钮、背景做精细化打磨。
@@ -5362,4 +6469,23 @@ LLM 负责"创造性"：拆任务、分配角色、写报告
 | **v5.15.1** | **骨干认领阶段补齐骨干管理面板** | **已完成** |
 | **v5.15** | **CSS 全量重写修复类名不匹配 + 大模块编辑增强** | **已完成** |
 | **v5.13** | **大型项目分步流程补齐：模块拆解→骨干认领→子任务拆解→志愿者认领** | **已完成** |
+| **v5.16** | **静态资源缓存版本号修复** | **已完成** |
+| **v5.17** | **品牌标识 SVG 重设计 + 配色/质感精细化** | **已完成** |
+| **v5.18** | **大型项目体验对标小型项目 + P0–P3 全量修复** | **已完成** |
+| **v5.19** | **前端视觉精细度整体打磨** | **已完成** |
+| **v5.20** | **前端交互修复 + 时间线/历史弹窗/品牌视觉再打磨** | **已完成** |
+| **v5.21** | **阶段导航去重 + 评审预演双模式** | **已完成** |
+| **v5.22** | **角色模型第一版：角色化工作量 + 志愿者折算 + 冲突检测** | **已完成** |
+| **v5.23** | **实际工时 + 复盘闭环** | **已完成** |
+| **v5.24** | **组织树 + 任务级参与清单** | **已完成** |
+| **v5.25** | **资源日历 + 冲突检测深化** | **已完成** |
+| **v5.26** | **Excel / CSV / ICS 导入导出** | **已完成** |
+| **v5.27** | **变更记录 / 审计 / 回滚** | **已完成** |
+| **v5.28** | **只读分享 + 提醒中心 + 知识库 + 组织复盘** | **已完成** |
+| **v5.29** | **鉴权 + 工具调用 + 并发冲突 + 多模态文件** | **已完成** |
+| **v5.30** | **Knowledge Agent + 跨项目经验复用** | **已完成** |
+| **v5.31** | **外部通知：Webhook 推送提醒** | **已完成** |
+| **v5.32** | **多用户账号 + 项目级权限** | **已完成** |
+| **v5.33** | **图片 OCR / 音频转写** | **已完成** |
+| **v5.34** | **深度审查修复** | **已完成** |
 | v6.x | 正式发布与功能扩展 | 规划中 |

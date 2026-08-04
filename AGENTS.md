@@ -56,14 +56,8 @@
 
 1. **语法检查**：
    ```
-   node -e "
-   const fs=require('fs');
-   const html=fs.readFileSync('app/web/templates/index.html','utf8');
-   const m=[...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
-   const js=m[m.length-1][1];
-   new Function(js);
-   console.log('OK');
-   "
+   node --check app/web/static/app.js
+   node --check app/web/static/participants.js
    ```
 
 2. **字符串拼接排查**：凡是在 JS 中构造 HTML 字符串的地方，必须确认变量的拼接符号 `+` 没有被写入字符串字面量内部。常见错误模式：
@@ -77,6 +71,6 @@
 
 3. **Unicode 转义排查**：JS 字符串中不能使用 `\u0022` 表示双引号，必须用 `\"`。`\uXXXX` 只在 HTML 层面有效，在 JS 源码中会被提前解析破坏字符串边界。
 
-4. **运行全部测试**：`python -m pytest tests/ -q`，必须 118 passed。
+4. **运行全部测试**：`python -m pytest tests/ -q`，必须 175 passed。
 
 **以上 4 步全部通过才能提交。改完不验证就提交 = 极大概率引入 404 或页面无响应 bug。**

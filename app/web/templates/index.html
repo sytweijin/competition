@@ -4,13 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>协作分工智能体 · 项目工作台</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <style>.hidden{display:none!important}</style>
-  <link rel="stylesheet" href="/static/style.css?v=5.17">
+  <link rel="stylesheet" href="/static/style.css?v=5.34">
 </head>
 <body>
 <header class="app-header">
   <div class="header-brand">
-    <div class="brand-mark"><svg viewBox="0 0 28 28" fill="none"><path d="M14 5.5l8.5 4.9v9.8L14 25.1 5.5 20.2v-9.8L14 5.5z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" opacity=".45"/><circle cx="14" cy="5" r="2.6" fill="currentColor"/><circle cx="5" cy="22.5" r="2.4" fill="currentColor" opacity=".85"/><circle cx="23" cy="22.5" r="2.4" fill="currentColor" opacity=".85"/><circle cx="14" cy="14.5" r="2.2" fill="currentColor" opacity=".7"/><path d="M14 7.4v5M12.2 12.6L6.4 20.7M15.8 12.6l5.8 8.1" stroke="currentColor" stroke-width="1.3" opacity=".4" stroke-linecap="round"/></svg></div>
+    <div class="brand-mark"><svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><rect x="4.5" y="4.5" width="23" height="23" rx="7" stroke="currentColor" stroke-width="1.5" opacity=".32"/><circle cx="11.5" cy="12" r="2.5" fill="currentColor"/><circle cx="20.5" cy="11" r="2.5" fill="currentColor" opacity=".85"/><circle cx="16" cy="20.5" r="2.5" fill="currentColor" opacity=".62"/><path d="M13 13.6 15.2 18M19.4 13l-2 5M13.8 12h4.4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" opacity=".5"/></svg></div>
     <div><h1>协作分工智能体</h1><p>从项目要求到可执行分工方案</p></div>
   </div>
   <div class="header-tools">
@@ -28,7 +29,7 @@
     <div class="config-card">
       <div class="config-head">
         <div><span class="eyebrow">PROJECT SETUP</span><h2>项目配置</h2></div>
-        <button type="button" id="demoCaseBtn" class="btn btn-ghost">载入演示案例</button>
+        <div class="config-actions"><button type="button" id="demoCaseBtn" class="btn btn-ghost">载入演示案例</button><button type="button" id="importFileBtn" class="btn btn-ghost">导入任务文件</button><input id="importFile" type="file" hidden accept=".csv,.xlsx,.xlsm"></div>
       </div>
       <form id="projectForm" class="config-form">
         <div class="mode-selector">
@@ -56,7 +57,7 @@
             <div id="members" class="member-list"></div>
           </div>
           <div class="config-field span-2 upload-box" id="uploadBox">
-            <input id="files" type="file" multiple hidden accept=".pdf,.docx,.txt,.md,.xlsx,.pptx">
+            <input id="files" type="file" multiple hidden accept=".pdf,.docx,.txt,.md,.xlsx,.pptx,.png,.jpg,.jpeg,.webp,.mp3,.wav,.m4a">
             <button type="button" id="chooseFileBtn" class="btn btn-ghost">上传任务要求文件</button>
             <span class="upload-hint">PDF / Word / TXT / Markdown / Excel / PowerPoint</span>
             <div id="fileList" class="file-list"></div>
@@ -71,7 +72,6 @@
   <section id="draftView" class="view hidden">
     <div id="draftToolbar" class="toolbar-bar"></div>
     <div id="draftSummary" class="summary-card"></div>
-    <div id="largeStageNav" class="large-stage-nav hidden"></div>
     <div id="taskEditor" class="task-editor"></div>
     <div class="sticky-action">
       <div><strong id="draftTotal"></strong><span id="draftHint"></span></div>
@@ -96,12 +96,20 @@
       <button data-tab="timeline">时间线 / 甘特图</button>
       <button data-tab="matrix">分工矩阵</button>
       <button data-tab="workload">工作量</button>
+      <button data-tab="resource">资源日历</button>
+      <button data-tab="org">组织树</button>
+      <button data-tab="participants">参与清单</button>
+      <button data-tab="review">复盘</button>
+      <button data-tab="reminders">提醒</button>
+      <button data-tab="knowledge">知识库</button>
+      <button data-tab="orgreview">组织复盘</button>
       <button data-tab="report">报告</button>
       <button data-tab="interview">评审预演</button>
       <button data-tab="members" id="memberTabBtn">成员管理</button>
     </div>
     <div id="resultContent" class="result-content"></div>
     <div class="sticky-action">
+      <div class="final-export-actions"><button id="exportExcelBtn" class="btn btn-ghost">导出Excel</button><button id="exportCsvBtn" class="btn btn-ghost">导出CSV</button><button id="exportIcsBtn" class="btn btn-ghost">导出ICS</button><button id="shareBtn" class="btn btn-ghost">复制只读链接</button></div>
       <button id="backBoardBtn" class="btn btn-ghost">返回调整</button>
     </div>
   </section>
@@ -113,6 +121,9 @@
   <form id="chatForm" class="chat-form"><textarea id="chatInput" rows="2" placeholder="例如：摄影任务是不是太集中？"></textarea><button>发送</button></form>
 </aside>
 <div id="modal" class="modal-backdrop hidden"><div class="modal"><div class="modal-head"><h3>历史方案</h3><button id="closeModal">×</button></div><input id="planSearch" class="modal-search" placeholder="搜索方案名称…"><div id="planList"></div></div></div>
-<script src="/static/app.js?v=5.17"></script>
+<div id="authModal" class="modal-backdrop hidden"><div class="modal"><div class="modal-head"><h3>需要登录</h3><button id="closeAuthModal">×</button></div><div class="auth-form"><label>用户名<input id="authUsername" type="text" placeholder="输入用户名" value="admin"></label><label>密码<input id="authPassword" type="password" placeholder="输入密码"></label><button id="authLoginBtn" class="btn btn-primary">登录</button></div></div></div>
+<datalist id="participantNames"></datalist>
+<script src="/static/app.js?v=5.34"></script>
+<script src="/static/participants.js?v=5.34"></script>
 </body>
 </html>

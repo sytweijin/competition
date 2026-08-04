@@ -206,7 +206,7 @@ def _register_cjk_font():
             return name
         except Exception:
             continue
-    # ????? reportlab ??? CID ????????????
+    # 本地字体都找不到时，回退用 reportlab 内置 CID 字典注册 STSong-Light
     try:
         from reportlab.pdfbase.cidfonts import UnicodeCIDFont
         pdfmetrics.registerFont(UnicodeCIDFont('STSong-Light'))

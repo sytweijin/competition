@@ -16,6 +16,8 @@ MEMORY_DIR.mkdir(parents=True, exist_ok=True)
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://api.deepseek.com/v1")
 LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-v4-flash")
+APP_VISION_MODEL = os.getenv("APP_VISION_MODEL", "")
+APP_ASR_MODEL = os.getenv("APP_ASR_MODEL", "")
 # 默认3次结构化尝试（parse_error 不重试）
 LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "3"))
 # 单次请求超时（秒）。deepseek-v4-flash 等推理模型思考耗时长、首字延迟高，
@@ -29,6 +31,9 @@ LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "16000"))
 # App
 APP_HOST = os.getenv("APP_HOST", "127.0.0.1")
 APP_PORT = int(os.getenv("APP_PORT", "8000"))
+APP_ADMIN_TOKEN = os.getenv("APP_ADMIN_TOKEN", "")
+APP_USERS_JSON = os.getenv("APP_USERS_JSON", "")
+APP_NOTIFY_WEBHOOK = os.getenv("APP_NOTIFY_WEBHOOK", "")
 
 # 应用时区：部署在 Render(UTC) 时仍按东八区判断“今天”，
 # 避免排期边界（倒推起始日、可用工作日数）整体偏移一天。

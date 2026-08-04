@@ -2,6 +2,7 @@
 FastAPI 路由（A5：简易只读 Web + B2 Memory + B4 动态编辑）
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -10,7 +11,7 @@ from datetime import date, datetime
 from app import config
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
@@ -25,22 +26,88 @@ from app.models.schemas import (
 )
 from app.services.project_service import (
     ProjectServiceError, apply_manual_assignment, confirm_draft as confirm_draft_service,
-    generate_draft, mutate_draft, update_volunteer_pool, workload_snapshot,
+    generate_draft, mutate_draft, record_task_actual, resource_calendar,
+    update_volunteer_pool, update_task_participants, workload_snapshot,
 )
+from app.services.plan_io import (
+    parse_task_file, plan_to_csv, plan_to_excel, plan_to_ics,
+)
+from app.services.audit_store import (
+    list_versions, load_version, rollback_plan, save_version,
+)
+from app.services.auth_store import (
+    accessible_filenames, add_editor, auth_enabled, can_read, can_write,
+    create_session, get_acl, set_acl, verify_login,
+)
+from app.services.collab import (
+    knowledge_search, org_review, reminders, save_experience,
+)
+from app.services.knowledge_agent import ask as agent_ask_service
+from app.services.notifier import notify_reminders
+from app.services.share_store import create_share, get_share_filename
+from app.services.tools import call_tool, list_tools
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+@router.get("/tools")
+async def tools_list():
+    return {"tools": list_tools()}
+
+
+class ToolCallRequest(BaseModel):
+    tool: str
+    args: dict = Field(default_factory=dict)
+    plan: FullPlan | None = None
+
+
+@router.post("/tools/call")
+async def tools_call(request: Request, req: ToolCallRequest):
+    try:
+        username = getattr(request.state, "username", None)
+        return {"ok": True, "result": call_tool(req.tool, req.args, req.plan, username=username)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+class LoginRequest(BaseModel):
+    username: str = "admin"
+    password: str
+
+
+@router.get("/auth/status")
+async def auth_status():
+    return {"enabled": auth_enabled()}
+
+
+@router.post("/auth/login")
+async def auth_login(req: LoginRequest):
+    if not auth_enabled():
+        raise HTTPException(status_code=400, detail="鉴权未启用")
+    if not verify_login(req.username, req.password):
+        raise HTTPException(status_code=401, detail="密码错误")
+    return {"token": create_session(req.username), "username": req.username}
+
+
+@router.get("/auth/me")
+async def auth_me(request: Request):
+    """返回当前登录用户。"""
+    return {"username": getattr(request.state, "username", None)}
+
+
 @router.post("/analyze-files")
 async def analyze_files(files: list[UploadFile] = File(...), background: str = Form("")):
     """提取文件文字后汇总分析；仅记录文件元数据，不落盘、不输出原文日志。"""
-    from app.file_analysis import analyze_locally, extract_text
+    from app.file_analysis import MAX_FILE_SIZE, analyze_locally, extract_text
     texts, metadata, errors = [], [], []
     for upload in files[:8]:
-        raw = await upload.read()
+        raw = await upload.read(MAX_FILE_SIZE + 1)
+        if len(raw) > MAX_FILE_SIZE:
+            errors.append({"name": upload.filename, "error": "文件超过 15MB 限制"})
+            continue
         try:
-            text = extract_text(upload.filename or "upload", raw)
+            text = await asyncio.to_thread(extract_text, upload.filename or "upload", raw)
             texts.append(text)
             metadata.append({"name": upload.filename, "size": len(raw), "status": "ok"})
         except ValueError as exc:
@@ -52,6 +119,20 @@ async def analyze_files(files: list[UploadFile] = File(...), background: str = F
     # 避免“文件分析 LLM + 任务拆解 LLM”串行造成一分钟以上等待。
     analysis = analyze_locally(merged)
     return {"files": metadata, "errors": errors, "analysis": analysis}
+
+
+@router.post("/import/tasks")
+async def import_tasks(
+    file: UploadFile = File(...),
+    project_mode: str = Form("small_group"),
+):
+    """从 CSV/Excel 导入任务草稿。"""
+    content = await file.read()
+    try:
+        plan = parse_task_file(content, file.filename or "", project_mode)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"plan": plan}
 
 
 @router.post("/draft", response_model=DraftResponse)
@@ -94,6 +175,12 @@ def workload(req: FullPlan):
     return workload_snapshot(req)
 
 
+@router.post("/resource-calendar")
+def calendar(req: FullPlan):
+    """Return resource calendar with daily load and conflict warnings."""
+    return resource_calendar(req)
+
+
 class VolunteerPoolRequest(BaseModel):
     plan: FullPlan
     volunteers: list[Volunteer] = Field(default_factory=list)
@@ -104,6 +191,43 @@ def update_volunteers(req: VolunteerPoolRequest):
     """保存大型项目模式的志愿者招募池（整池替换式 upsert）。"""
     try:
         return update_volunteer_pool(req.plan, req.volunteers)
+    except ProjectServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+class TaskActualRequest(BaseModel):
+    plan: FullPlan
+    task_id: str
+    actual_hours: float | None = None
+    actual_end_date: date | None = None
+
+
+@router.post("/task-actual", response_model=FullPlan)
+def task_actual(req: TaskActualRequest):
+    """Record actual hours/end date and persist review feedback."""
+    try:
+        return record_task_actual(
+            req.plan,
+            req.task_id,
+            actual_hours=req.actual_hours,
+            actual_end_date=req.actual_end_date,
+        )
+    except ProjectServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+class TaskParticipantsRequest(BaseModel):
+    plan: FullPlan
+    task_id: str
+    participants: list[dict] = Field(default_factory=list)
+
+
+@router.post("/task-participants", response_model=FullPlan)
+def task_participants(req: TaskParticipantsRequest):
+    """保存任务级参与清单，并同步负责人/协作者/志愿者数量。"""
+    try:
+        return update_task_participants(
+            req.plan, req.task_id, req.participants)
     except ProjectServiceError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -335,30 +459,68 @@ def edit_plan_endpoint(req: EditPlanRequest):
 # ──────────── B2：Memory ────────────
 
 @router.post("/save")
-async def save_plan(plan: FullPlan):
+async def save_plan(
+    request: Request,
+    plan: FullPlan,
+    filename: str = "",
+    base_version: str = "",
+):
     """保存计划到 memory 目录。"""
     MEMORY_DIR.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    # 清洗课程名中的路径分隔符等危险字符，防止路径穿越
-    raw_name = plan.input.course.name or "plan"
-    course_name = re.sub(r'[^\w\u4e00-\u9fff._-]', "_", raw_name).strip("_") or "plan"
-    filename = f"{ts}_{course_name}.json"
-    filepath = MEMORY_DIR / filename
-    # 同名课程同一秒保存时追加计数后缀，避免覆盖历史计划
-    n = 1
-    while filepath.exists():
-        filename = f"{ts}_{course_name}_{n}.json"
+    username = getattr(request.state, "username", None)
+    existing = False
+    if filename:
+        filename = _safe_filepath(filename).name
         filepath = MEMORY_DIR / filename
-        n += 1
+        existing = filepath.exists()
+        if auth_enabled() and existing and not can_write(username, filename):
+            raise HTTPException(status_code=403, detail="无权编辑该方案")
+    else:
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        raw_name = plan.input.course.name or "plan"
+        course_name = re.sub(r'[^\w\u4e00-\u9fff._-]', "_", raw_name).strip("_") or "plan"
+        filename = f"{ts}_{course_name}.json"
+        filepath = MEMORY_DIR / filename
+        n = 1
+        while filepath.exists():
+            filename = f"{ts}_{course_name}_{n}.json"
+            filepath = MEMORY_DIR / filename
+            n += 1
+    if filename and base_version:
+        versions = list_versions(filename)
+        if versions and versions[0]["version_id"] != base_version:
+            raise HTTPException(
+                status_code=409,
+                detail="方案已被其他人更新，请先载入最新版本再保存",
+            )
     filepath.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
+    if username:
+        if existing:
+            add_editor(filename, username)
+        else:
+            set_acl(filename, owner=username)
+    version_id = save_version(
+        json.loads(filepath.read_text(encoding="utf-8")),
+        filename,
+        action="保存",
+        summary="保存方案",
+    )
+    try:
+        save_experience(plan)
+    except Exception:
+        pass
     logger.info("Plan saved to %s", filepath)
-    return {"status": "ok", "filename": filename}
+    return {"status": "ok", "filename": filename, "version_id": version_id}
 
 
 @router.get("/plans")
-async def list_plans(q: str = ""):
+async def list_plans(request: Request, q: str = ""):
     """List saved plans with optional search filter."""
     files = sorted(MEMORY_DIR.glob("*.json"), reverse=True)
+    username = getattr(request.state, "username", None)
+    if auth_enabled() and username != "admin":
+        allowed = accessible_filenames(username)
+        files = [f for f in files if f.name in allowed]
     plans = []
     for f in files:
         if q and q.lower() not in f.name.lower():
@@ -367,13 +529,122 @@ async def list_plans(q: str = ""):
     return {"plans": plans}
 
 
+@router.get("/plan-history/{filename}")
+async def plan_history(request: Request, filename: str):
+    """列出某个方案的版本变更记录。"""
+    filepath = _safe_filepath(filename)
+    if not filepath.exists():
+        raise HTTPException(status_code=404, detail="Plan not found")
+    username = getattr(request.state, "username", None)
+    if auth_enabled() and not can_read(username, filename):
+        raise HTTPException(status_code=403, detail="无权查看该方案")
+    return {"versions": list_versions(filename)}
+
+
+@router.post("/plan-rollback/{filename}/{version_id}")
+async def plan_rollback(request: Request, filename: str, version_id: str):
+    """回滚到指定版本，并生成一个新的方案文件。"""
+    filepath = _safe_filepath(filename)
+    if not filepath.exists():
+        raise HTTPException(status_code=404, detail="Plan not found")
+    username = getattr(request.state, "username", None)
+    if auth_enabled() and not can_write(username, filename):
+        raise HTTPException(status_code=403, detail="无权回滚该方案")
+    try:
+        new_filename, data = rollback_plan(filename, version_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    original_acl = get_acl(filename)
+    set_acl(
+        new_filename,
+        owner=original_acl.get("owner") or username or "admin",
+        editors=original_acl.get("editors") or [],
+        viewers=original_acl.get("viewers") or [],
+    )
+    return {"filename": new_filename, "plan": data}
+
+
+class ShareRequest(BaseModel):
+    filename: str
+
+
+@router.post("/share")
+async def create_share_link(request: Request, req: ShareRequest):
+    """生成方案只读分享链接。"""
+    filepath = _safe_filepath(req.filename)
+    if not filepath.exists():
+        raise HTTPException(status_code=404, detail="Plan not found")
+    username = getattr(request.state, "username", None)
+    if auth_enabled() and not can_write(username, req.filename):
+        raise HTTPException(status_code=403, detail="无权分享该方案")
+    token = create_share(req.filename)
+    return {"token": token}
+
+
+@router.get("/share/{token}")
+async def open_share(token: str):
+    """按只读分享 token 读取方案。"""
+    filename = get_share_filename(token)
+    if not filename:
+        raise HTTPException(status_code=404, detail="Share link invalid")
+    filepath = _safe_filepath(filename)
+    if not filepath.exists():
+        raise HTTPException(status_code=404, detail="Plan not found")
+    return json.loads(filepath.read_text(encoding="utf-8"))
+
+
+class KnowledgeRequest(BaseModel):
+    question: str
+    plan: FullPlan | None = None
+
+
+@router.post("/knowledge")
+async def knowledge(request: Request, req: KnowledgeRequest):
+    """轻量知识库问答：检索当前方案与历史方案。"""
+    username = getattr(request.state, "username", None)
+    return knowledge_search(req.question, req.plan, username=username)
+
+
+class AgentAskRequest(BaseModel):
+    question: str
+    plan: FullPlan | None = None
+
+
+@router.post("/agent/ask")
+async def agent_ask(request: Request, req: AgentAskRequest):
+    """Knowledge Agent：根据问题自主调用工具并合成回答。"""
+    username = getattr(request.state, "username", None)
+    return agent_ask_service(req.question, req.plan, username=username)
+
+
+@router.post("/reminders")
+async def reminders_endpoint(plan: FullPlan):
+    """返回当前方案提醒列表。"""
+    return {"reminders": reminders(plan)}
+
+
+@router.post("/notify")
+def notify_endpoint(plan: FullPlan):
+    """把当前方案提醒推送到外部 Webhook。"""
+    return notify_reminders(plan)
+
+
+@router.post("/org-review")
+async def org_review_endpoint(plan: FullPlan):
+    """返回组织级复盘（成员/角色/模块/建议）。"""
+    return org_review(plan)
+
+
 @router.get("/load/{filename}")
-async def load_plan(filename: str):
+async def load_plan(request: Request, filename: str):
     """加载指定计划。"""
     try:
         filepath = _safe_filepath(filename)
         if not filepath.exists():
             raise HTTPException(status_code=404, detail="Plan not found")
+        username = getattr(request.state, "username", None)
+        if auth_enabled() and not can_read(username, filename):
+            raise HTTPException(status_code=403, detail="无权查看该方案")
         data = json.loads(filepath.read_text(encoding="utf-8"))
         return data
     except HTTPException:
@@ -381,12 +652,15 @@ async def load_plan(filename: str):
 
 
 @router.delete("/plans/{filename}")
-async def delete_plan(filename: str):
+async def delete_plan(request: Request, filename: str):
     """删除指定计划。"""
     try:
         filepath = _safe_filepath(filename)
         if not filepath.exists():
             raise HTTPException(status_code=404, detail="Plan not found")
+        username = getattr(request.state, "username", None)
+        if auth_enabled() and not can_write(username, filename):
+            raise HTTPException(status_code=403, detail="无权删除该方案")
         filepath.unlink()
         return {"status": "ok"}
     except HTTPException:
@@ -412,6 +686,7 @@ class InterviewChatRequest(BaseModel):
     qa_matrix: QAOutput
     user_answer: str = ""
     history: list[dict] = Field(default_factory=list)
+    mode: str = "answer"
     user_requirements: str = ""
 
 
@@ -424,6 +699,7 @@ def interview_chat(req: InterviewChatRequest):
         qa_matrix=req.qa_matrix,
         user_answer=req.user_answer,
         history=req.history,
+        mode=req.mode,
         user_requirements=req.user_requirements,
     )
     return {"reply": reply}
@@ -516,13 +792,50 @@ def export_current_plan(plan: FullPlan):
         headers={"Content-Disposition": 'attachment; filename="plan_report.md"'},
     )
 
-@router.get("/export/{filename}")
-async def export_plan(filename: str, fmt: str = "markdown"):
-    """Export a saved plan as Markdown or plain text."""
+@router.post("/export/excel")
+def export_excel(plan: FullPlan):
+    """Export Excel workbook with tasks/members/matrix/timeline/participants/review."""
+    try:
+        content = plan_to_excel(plan)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="plan_export.xlsx"'},
+    )
+
+
+@router.post("/export/csv")
+def export_csv(plan: FullPlan):
+    """Export task CSV."""
+    return Response(
+        content=plan_to_csv(plan),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="plan_tasks.csv"'},
+    )
+
+
+@router.post("/export/ics")
+def export_ics(plan: FullPlan):
+    """Export ICS calendar."""
+    return Response(
+        content=plan_to_ics(plan),
+        media_type="text/calendar; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="plan_calendar.ics"'},
+    )
+
+
+@router.get("/plans/{filename}/export")
+async def export_plan(request: Request, filename: str, fmt: str = "markdown"):
+    """导出已保存方案为 Markdown 或纯文本；迁移到 /plans/{filename}/export 避免与 POST /api/export/{format} 前缀冲突。"""
     try:
         filepath = _safe_filepath(filename)
         if not filepath.exists():
             raise HTTPException(status_code=404, detail="Plan not found")
+        username = getattr(request.state, "username", None)
+        if auth_enabled() and not can_read(username, filename):
+            raise HTTPException(status_code=403, detail="无权查看该方案")
         data = json.loads(filepath.read_text(encoding="utf-8"))
         md = _plan_to_markdown(data)
         content_type = "text/markdown; charset=utf-8" if fmt == "markdown" else "text/plain; charset=utf-8"
@@ -546,6 +859,14 @@ def _plan_to_markdown(data: dict) -> str:
     if members:
         lines.append(f"**团队成员：** {', '.join(m.get('name','') for m in members)}")
     lines.append("")
+
+    if members:
+        lines.append("## 组织树")
+        for m in members:
+            manager = m.get("manager") or "顶层"
+            lines.append(
+                f"- {m.get('name')}（{m.get('role', '执行成员')}，上级：{manager}）")
+        lines.append("")
 
     plan = data.get("plan", {})
     if plan.get("summary"):
@@ -585,6 +906,37 @@ def _plan_to_markdown(data: dict) -> str:
                 skills = ", ".join(t.get("required_skills", []))
                 lines.append(f"| {t['id']} | {t['name']} | {t.get('estimated_hours',0)}h | {deps} | {skills} |")
         lines.append("")
+
+    with_actual = [t for t in tasks if t.get("actual_hours") is not None]
+    if with_actual:
+        lines.append("## 实际工时复盘")
+        lines.append("| 任务 | 计划工时 | 实际工时 | 偏差 | 实际完成 | 状态 |")
+        lines.append("|---|---|---|---|---|---|")
+        for t in with_actual:
+            est = t.get("estimated_hours", 0) or 0
+            act = t.get("actual_hours", 0) or 0
+            dev = act - est
+            dev_text = f"{dev:+.1f}h" if abs(dev) >= 0.05 else "持平"
+            end_date = t.get("actual_end_date") or "-"
+            status = t.get("status", "")
+            lines.append(
+                f"| {t['name']} | {est}h | {act}h | {dev_text} | {end_date} | {status} |"
+            )
+        lines.append("")
+
+    participant_tasks = [t for t in tasks if t.get("participants")]
+    if participant_tasks:
+        lines.append("## 任务参与清单")
+        for t in participant_tasks:
+            lines.append(f"### {t['id']} {t['name']}")
+            lines.append("| 参与者 | 角色 | 投入工时 | 类型 |")
+            lines.append("|---|---|---|---|")
+            for p in t["participants"]:
+                kind = "志愿者 / 外部协作者" if p.get("is_volunteer") else "内部成员"
+                lines.append(
+                    f"| {p.get('name')} | {p.get('role', '执行成员')} | "
+                    f"{p.get('contribution_hours', 0)}h | {kind} |")
+            lines.append("")
 
     tl = data.get("timeline", {})
     if tl.get("tasks"):
@@ -663,6 +1015,8 @@ class MemberEditRequest(BaseModel):
     plan: FullPlan
     removed_members: list[str] = Field(default_factory=list, description="要移除的成员名")
     updated_members: dict[str, float] = Field(default_factory=dict, description="更新的每日工时 {姓名: 新工时}")
+    member_roles: dict[str, str] = Field(default_factory=dict, description="更新的角色 {姓名: 角色}")
+    member_managers: dict[str, str] = Field(default_factory=dict, description="更新的上级 {姓名: 上级姓名}")
     added_members: list = Field(default_factory=list, description="新加入的成员 [{name, daily_available_hours}, ...]")
 
 
@@ -687,6 +1041,12 @@ def edit_members_endpoint(req: MemberEditRequest):
                     "daily_available_hours": new_daily,
                     "available_hours": max(new_daily, new_daily * remaining),
                 })
+            if m.name in req.member_roles:
+                role = (req.member_roles[m.name] or "执行成员").strip()
+                if role:
+                    m = m.model_copy(update={"role": role})
+            if m.name in req.member_managers:
+                m = m.model_copy(update={"manager": (req.member_managers[m.name] or "").strip()})
             new_members.append(m)
 
         for a in req.added_members:
@@ -698,7 +1058,9 @@ def edit_members_endpoint(req: MemberEditRequest):
             if isinstance(sk, str):
                 sk = [t.strip() for t in sk.split(",") if t.strip()]
             new_m = TeamMember(
-                name=nm, daily_available_hours=dh,
+                name=nm, role=(a.get("role") or "执行成员"),
+                manager=(a.get("manager") or ""),
+                daily_available_hours=dh,
                 available_hours=max(dh, dh * remaining),
                 skill_tags=sk if sk else [],
             )
@@ -751,7 +1113,7 @@ def edit_members_endpoint(req: MemberEditRequest):
             report = fp.report.model_copy(update={})
 
         
-        # ????????????? risk_note??????
+        # 基于实际分工重算详细风险提示
         from app.coordinator import Coordinator
         detailed_risk = Coordinator._build_risk_note(fp.plan, timeline, qa_matrix, new_members, fp.input.deadline)
         return FullPlan(

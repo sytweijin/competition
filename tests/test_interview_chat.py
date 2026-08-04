@@ -60,3 +60,26 @@ def test_interview_chat_sends_user_answer_and_history():
         msg["content"] == "第一个问题：项目目标是什么？"
         for msg in calls[0]
     )
+
+
+def test_interview_chat_adjust_question():
+    agent = InterviewSimAgent()
+    calls = []
+
+    class FakeLLM:
+        def chat_messages(self, system_prompt, messages, temperature):
+            calls.append((system_prompt, messages))
+            return "调整后的问题：你们的视觉物料具体怎么分工？"
+
+    agent.llm = FakeLLM()
+    plan, qa = _plan_and_qa()
+    reply = agent.chat_turn(
+        plan=plan, qa_matrix=qa,
+        user_answer="这个问题不够具体，请结合视觉设计问得更细。",
+        history=[{"role": "assistant", "content": "第一个问题：项目目标是什么？"}],
+        mode="adjust",
+    )
+    assert "调整后的问题" in reply
+    assert "重新调整" in calls[0][1][-1]["content"]
+    assert "视觉设计问得更细" in calls[0][1][-1]["content"]
+    assert "调整" in calls[0][0]

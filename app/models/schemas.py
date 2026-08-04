@@ -37,6 +37,11 @@ class CourseInfo(BaseModel):
 class TeamMember(BaseModel):
     """团队成员信息"""
     name: str
+    role: str = Field(
+        default="执行成员",
+        description="角色：项目负责人 / 骨干 / 执行成员 / 志愿者 / 自定义角色。"
+        "工作量统计按角色折算，小型项目同样适用。",
+    )
     skill_tags: list[str] = Field(default_factory=list,
                                   description="技能标签 e.g. ['前端','Python','PPT']")
     available_hours: float = Field(
@@ -55,6 +60,10 @@ class TeamMember(BaseModel):
     profile_mode: str = Field(
         default="tags",
         description="能力输入模式：'tags'（技能标签）或 'bio'（自然语言简介）。",
+    )
+    manager: str = Field(
+        default="",
+        description="上级成员姓名；空表示顶层节点。用于组织树与工作量汇总。",
     )
     bio: str = Field(
         default="",
@@ -118,6 +127,15 @@ class ProjectModule(BaseModel):
         default=None, description="认领该模块的骨干成员姓名")
 
 
+class TaskParticipant(BaseModel):
+    """任务级参与清单：谁、以什么角色、投入多少工时参与该任务。"""
+    name: str = Field(description="参与者姓名（成员或外部协作者）")
+    role: str = Field(default="执行成员", description="参与角色，如负责人/执行/骨干/志愿者")
+    contribution_hours: float = Field(default=0.0, ge=0, description="该参与者在本任务投入的人时")
+    is_volunteer: bool = Field(default=False, description="是否为外部志愿者/协作者")
+    status: str = Field(default="已确认", description="志愿者状态；内部成员固定为已确认")
+
+
 class SubTask(BaseModel):
     """Planner 输出的一个子任务"""
     id: str = Field(description="唯一标识，如 T1, T2")
@@ -149,6 +167,21 @@ class SubTask(BaseModel):
     extra_helpers_needed: int = Field(
         default=0, ge=0, le=20,
         description="大型项目模式：该任务需额外招募的志愿者/参与者人数（0=骨干可覆盖）。",
+    )
+    participants: list[TaskParticipant] = Field(
+        default_factory=list,
+        description="任务级参与清单；非空时工作量统计优先使用它。",
+    )
+    actual_hours: Optional[float] = Field(
+        default=None, ge=0,
+        description="实际完成工时（复盘用，任务完成后填写）。",
+    )
+    actual_end_date: Optional[date] = Field(
+        default=None, description="实际完成日期（复盘用）。",
+    )
+    actual_feedback_recorded: bool = Field(
+        default=False,
+        description="实际工时是否已沉淀回工时知识库，避免重复记录。",
     )
     order: int = 0
     status: TaskStatus = Field(default=TaskStatus.pending,
@@ -299,7 +332,7 @@ class FullPlan(BaseModel):
         default_factory=list,
         description="大型项目模式：志愿者/参与者招募池，按任务认领。",
     )
-    version: str = "5.15"
+    version: str = "5.34"
 
 
 class DraftRequest(BaseModel):
