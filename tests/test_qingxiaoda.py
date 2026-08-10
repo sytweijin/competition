@@ -133,6 +133,8 @@ def test_stream_completion_emits_role_content_stop_and_done(monkeypatch):
     ]
 
     assert len(role_frames) == 1
+    assert all("reasoning" not in frame["choices"][0]["delta"]
+               for frame in frames)
     assert content_frames
     assert len(stop_frames) == 1
     assert stop_frames[0]["usage"]["completion_tokens"] >= 1
@@ -252,7 +254,16 @@ def test_qwen_normalizes_requirements_before_local_planning(monkeypatch):
         "/v1/chat/completions",
         headers=AUTH,
         json={
-            "messages": [{"role": "user", "content": "帮我们安排这个项目"}],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "项目：千问整理项目；成员：甲(PPT)、乙(文案)、丙(设计)；"
+                        "5天完成PPT和甘特图。"),
+                },
+                {"role": "assistant", "content": "我先生成了初步计划。"},
+                {"role": "user", "content": "请把演练任务增加进去并调整排期。"},
+            ],
             "stream": False,
         },
     )
@@ -260,6 +271,95 @@ def test_qwen_normalizes_requirements_before_local_planning(monkeypatch):
     assert response.status_code == 200
     answer = response.json()["choices"][0]["message"]["content"]
     assert len(calls) == 1
-    assert calls[0]["timeout"] == 12
+    assert calls[0]["timeout"] == 6
     assert "千问整理项目" in answer
-    assert "成员1、成员2、成员3" in answer
+    assert "甲、乙、丙" in answer
+
+
+def test_general_question_is_answered_without_planning(monkeypatch):
+    monkeypatch.setenv("QINGXIAODA_API_KEY", "test-qingxiaoda-key")
+    monkeypatch.setenv("QINGXIAODA_USE_AI", "true")
+    calls = []
+
+    class StubLLM:
+        def chat_messages(self, **kwargs):
+            calls.append(kwargs)
+            return "北京是中国的首都。"
+
+    monkeypatch.setattr(LLMClient, "get_shared", lambda: StubLLM())
+    response = client.post(
+        "/v1/chat/completions",
+        headers=AUTH,
+        json={
+            "messages": [{"role": "user", "content": "北京是中国的首都吗？"}],
+            "stream": False,
+        },
+    )
+
+    answer = response.json()["choices"][0]["message"]["content"]
+    assert answer == "北京是中国的首都。"
+    assert len(calls) == 1
+    assert "任务拆解与智能分工" not in answer
+
+
+def test_concept_question_about_gantt_is_not_planned(monkeypatch):
+    monkeypatch.setenv("QINGXIAODA_API_KEY", "test-qingxiaoda-key")
+    monkeypatch.setenv("QINGXIAODA_USE_AI", "true")
+
+    class StubLLM:
+        def chat_messages(self, **kwargs):
+            return "甘特图是一种用时间条展示任务进度的项目管理图表。"
+
+    monkeypatch.setattr(LLMClient, "get_shared", lambda: StubLLM())
+    response = client.post(
+        "/v1/chat/completions",
+        headers=AUTH,
+        json={"messages": [{"role": "user", "content": "什么是甘特图？"}]},
+    )
+
+    answer = response.json()["choices"][0]["message"]["content"]
+    assert answer.startswith("甘特图是一种")
+    assert "团队成员" not in answer
+
+
+def test_how_to_question_about_project_plan_is_general_qa(monkeypatch):
+    monkeypatch.setenv("QINGXIAODA_API_KEY", "test-qingxiaoda-key")
+
+    class StubLLM:
+        def chat_messages(self, **kwargs):
+            return "制定项目计划通常先明确目标，再拆分里程碑并评估资源。"
+
+    monkeypatch.setattr(LLMClient, "get_shared", lambda: StubLLM())
+    response = client.post(
+        "/v1/chat/completions",
+        headers=AUTH,
+        json={"messages": [{"role": "user", "content": "如何制定项目计划？"}]},
+    )
+
+    answer = response.json()["choices"][0]["message"]["content"]
+    assert answer.startswith("制定项目计划通常")
+    assert "团队成员" not in answer
+
+
+def test_simple_structured_plan_uses_fast_local_path(monkeypatch):
+    monkeypatch.setenv("QINGXIAODA_API_KEY", "test-qingxiaoda-key")
+    monkeypatch.setenv("QINGXIAODA_USE_AI", "true")
+
+    class FailIfCalled:
+        def chat_messages(self, **kwargs):
+            raise AssertionError("简单结构化规划不应等待千问二次整理")
+
+    monkeypatch.setattr(LLMClient, "get_shared", lambda: FailIfCalled())
+    response = client.post(
+        "/v1/chat/completions",
+        headers=AUTH,
+        json={
+            "messages": [{
+                "role": "user",
+                "content": "我们3个人5天完成一个PPT，请生成甘特图",
+            }],
+        },
+    )
+
+    assert response.status_code == 200
+    assert "甘特图（文本版）" in response.json()["choices"][0]["message"]["content"]

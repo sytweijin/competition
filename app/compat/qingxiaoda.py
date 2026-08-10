@@ -93,7 +93,9 @@ def _parse_deadline(text: str) -> date:
 
 def _parse_members(text: str) -> list[TeamMember]:
     match = re.search(
-        r"(?:团队成员|成员|团队)\s*[:：]\s*(.+?)(?:\n|截止|项目要求|补充要求|$)",
+        r"(?:团队成员|成员|团队)\s*[:：]\s*(.+?)"
+        r"(?:\n|截止|项目要求|补充要求|"
+        r"(?:；|;)\s*(?=\d{1,3}\s*(?:天|日|周|星期))|$)",
         text,
         flags=re.IGNORECASE,
     )
@@ -201,14 +203,42 @@ def _build_input(text: str) -> AssignmentInput:
     )
 
 
-def _looks_like_project_request(text: str) -> bool:
-    signals = (
-        "项目", "任务", "分工", "成员", "截止", "计划", "活动", "报告",
-        "开发", "调研", "策划", "交付", "甘特图", "排期", "进度",
-        "PPT", "幻灯片", "演示文稿", "团队", "几个人", "人完成",
+def _is_planning_request(latest_text: str, conversation_text: str) -> bool:
+    """只把明确的执行型规划请求送进分工链路，避免普通问答被误拆解。"""
+    latest = latest_text.lower()
+    conceptual_prefixes = ("什么是", "是什么意思", "为什么", "如何理解", "怎么理解",
+                           "介绍一下", "解释一下", "有什么区别", "优缺点")
+    execution_markers = ("请生成", "请制定", "请安排", "请拆解", "请分工", "请排期",
+                         "帮我", "帮我们", "给我生成", "为我安排", "为我们安排")
+    if any(marker in latest for marker in conceptual_prefixes) \
+            and not any(marker in latest for marker in execution_markers):
+        return False
+    if latest.startswith(("如何", "怎么")) \
+            and not any(marker in latest for marker in execution_markers):
+        return False
+
+    planning_actions = (
+        "任务拆解", "拆解任务", "智能分工", "项目分工", "安排任务", "分配任务",
+        "怎么分工", "如何分工", "生成甘特图", "制作甘特图", "重新排期",
+        "项目排期", "制定项目计划", "生成项目计划", "安排这个项目",
     )
-    lowered = text.lower()
-    return any(signal.lower() in lowered for signal in signals)
+    if any(action in latest for action in planning_actions):
+        return True
+
+    has_people = bool(re.search(r"\d{1,2}\s*(?:个?人|名成员)", conversation_text)) \
+        or bool(re.search(r"(?:成员|团队)\s*[:：]", conversation_text))
+    has_time = bool(re.search(
+        r"(?:20\d{2}[-/.年]\d{1,2}|\d{1,3}\s*(?:天|日|周|星期)|截止)",
+        conversation_text,
+    ))
+    has_deliverable = _has_actionable_scope(conversation_text)
+    if has_people and has_time and has_deliverable:
+        return True
+
+    continuation = ("继续", "调整", "修改", "延长", "缩短", "重新", "增加", "删除")
+    prior_planning = any(action in conversation_text.lower()
+                         for action in planning_actions)
+    return prior_planning and any(word in latest for word in continuation)
 
 
 def _has_actionable_scope(text: str) -> bool:
@@ -241,12 +271,58 @@ def _understand_with_llm(
         ),
         messages=dialogue,
         temperature=0.1,
-        timeout=12,
+        timeout=6,
     )
     if isinstance(result, AgentError) or not result.strip():
         return fallback_text
     # 原始文本附在后面，保证规则解析仍能读取模型可能遗漏的数字和相对期限。
     return f"{result.strip()}\n原始用户需求：\n{fallback_text}"[-8000:]
+
+
+def _needs_ai_normalization(messages: list[ChatMessage], text: str) -> bool:
+    """简单结构化需求走本地快路径；复杂描述和多轮修改交给千问理解。"""
+    user_turns = sum(message.role == "user" for message in messages)
+    change_words = ("调整", "修改", "改成", "改为", "增加", "删除", "延长", "缩短")
+    return len(text) > 260 or (
+        user_turns > 1 and any(word in text for word in change_words)
+    )
+
+
+def _quick_general_answer(text: str) -> str | None:
+    normalized = text.strip().lower().rstrip("！!。？?")
+    if normalized in ("你好", "您好", "hello", "hi", "在吗"):
+        return "你好！你可以问我一般问题，也可以让我帮你做项目拆解、分工和排期。"
+    if normalized in ("谢谢", "感谢", "好的", "明白了"):
+        return "不客气！还有什么想了解或需要安排的吗？"
+    return None
+
+
+def _answer_general(
+    messages: list[ChatMessage], latest_text: str, max_tokens: int | None,
+) -> str:
+    quick = _quick_general_answer(latest_text)
+    if quick:
+        return quick
+    dialogue = [
+        {"role": message.role, "content": message.content}
+        for message in messages[-8:]
+        if message.role in ("user", "assistant")
+    ]
+    result = LLMClient.get_shared().chat_messages(
+        system_prompt=(
+            "你是协作分工智能体，同时也是友好、准确的通用中文助手。"
+            "直接回答用户当前问题，不要把普通问题强行拆成项目任务。"
+            "只有用户明确要求项目拆解、人员分工或排期时，才建议使用规划能力。"
+            "回答简洁清楚；不确定时坦诚说明。"
+        ),
+        messages=dialogue,
+        temperature=0.4,
+        timeout=6,
+    )
+    if isinstance(result, AgentError) or not result.strip():
+        return "这个问题暂时没有回答成功，请稍后再试；项目拆解和分工功能仍可正常使用。"
+    answer = result.strip()
+    return answer[:max_tokens * 4] if max_tokens else answer
 
 
 def _render_text_gantt(full_plan) -> list[str]:
@@ -290,19 +366,20 @@ def _render_plan(
     # 清小搭连通探测会发送 max_tokens:1；必须走毫秒级路径，不能触发模型。
     if max_tokens == 1:
         return "好"
-    if not _looks_like_project_request(conversation_text):
+    if not _is_planning_request(latest_text, conversation_text):
+        return _answer_general(messages, latest_text, max_tokens)
+
+    if not _has_actionable_scope(conversation_text):
         return (
-            "你好！我可以帮你拆任务、分工和排期。请直接告诉我想完成什么、"
-            "有多少人以及多久完成，例如：‘3 个人 5 天完成一个 PPT，并生成甘特图’。"
+            "可以生成甘特图并帮你规划。请再告诉我项目交付物或目标、人数和期限，例如："
+            "‘3 个人 5 天完成一个答辩 PPT，并生成甘特图’。"
         )
 
-    if "甘特图" in latest_text and not _has_actionable_scope(conversation_text):
-        return (
-            "可以生成甘特图。还需要一个项目交付物或目标，例如："
-            "‘3 个人 5 天完成一个答辩 PPT’，我就能立即给出任务、负责人和时间轴。"
-        )
-
-    understood_text = _understand_with_llm(messages, conversation_text)
+    understood_text = (
+        _understand_with_llm(messages, conversation_text)
+        if _needs_ai_normalization(messages, conversation_text)
+        else conversation_text
+    )
     inp = _build_input(understood_text)
     draft = generate_draft(inp, use_ai=False)
     full_plan = confirm_draft(inp, draft, use_ai_reflection=False)
@@ -426,9 +503,9 @@ def chat_completions(
                 payload["usage"] = usage
             return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
-        # 先发送首帧，再执行规划，避免用户长时间看不到任何响应。
-        yield frame({"role": "assistant"})
-        yield frame({"reasoning": "正在拆解任务、匹配成员并计算排期…"})
+        # 严格使用 OpenAI 标准 delta 字段，兼容清小搭移动端。
+        yield ": connected\n\n"
+        yield frame({"role": "assistant", "content": ""})
         answer = _render_plan(
             user_text, conversation_text, request.max_tokens,
             request.messages)
