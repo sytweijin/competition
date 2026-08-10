@@ -20,6 +20,8 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, StrictBool
 
 from app.models.schemas import AssignmentInput, CourseInfo, TeamMember
+from app.models.schemas import AgentError
+from app.llm.client import LLMClient
 from app.services.project_service import confirm_draft, generate_draft
 
 
@@ -62,10 +64,27 @@ def _latest_user_message(messages: list[ChatMessage]) -> str:
     )
 
 
+def _conversation_user_text(messages: list[ChatMessage]) -> str:
+    """合并多轮用户输入，让“继续生成甘特图”等追问继承项目上下文。"""
+    return "\n".join(
+        message.content.strip() for message in messages
+        if message.role == "user" and message.content.strip()
+    )[-8000:]
+
+
 def _parse_deadline(text: str) -> date:
     match = re.search(r"(20\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})日?", text)
     if not match:
-        return date.today() + timedelta(days=14)
+        relative_days = re.search(r"(\d{1,3})\s*(?:天|日)(?:内|后)?", text)
+        if relative_days:
+            # “5 天完成”按包含今天在内的 5 个自然日计算。
+            return date.today() + timedelta(
+                days=max(0, int(relative_days.group(1)) - 1))
+        relative_weeks = re.search(r"(\d{1,2})\s*(?:周|星期)(?:内|后)?", text)
+        if relative_weeks:
+            return date.today() + timedelta(
+                days=max(0, int(relative_weeks.group(1)) * 7 - 1))
+        return date.today() + timedelta(days=13)
     try:
         return date(*(int(value) for value in match.groups()))
     except ValueError:
@@ -79,12 +98,25 @@ def _parse_members(text: str) -> list[TeamMember]:
         flags=re.IGNORECASE,
     )
     if not match:
-        return [TeamMember(
-            name="项目负责人",
-            skill_tags=["项目策划", "沟通协调", "文案撰写"],
-            available_hours=56,
-            daily_available_hours=4,
-        )]
+        member_count = re.search(
+            r"(?:我们|团队)?\s*(\d{1,2})\s*(?:个?人|名成员)", text)
+        count = min(10, max(1, int(member_count.group(1)))) \
+            if member_count else 1
+        skill_sets = (
+            ["项目统筹", "沟通协调"],
+            ["内容策划", "文案撰写", "PPT制作"],
+            ["视觉设计", "数据整理"],
+            ["质量检查", "演示汇报"],
+        )
+        return [
+            TeamMember(
+                name=f"成员{index}",
+                skill_tags=skill_sets[(index - 1) % len(skill_sets)],
+                available_hours=56,
+                daily_available_hours=4,
+            )
+            for index in range(1, count + 1)
+        ]
 
     member_text = match.group(1).strip().rstrip("。")
     # 只在括号外切分成员，保留“小林(文案,统筹)”内部的技能逗号。
@@ -139,6 +171,10 @@ def _parse_project_name(text: str) -> str:
     match = re.search(r"(?:项目名称|项目)\s*[:：]\s*([^\n；;]+)", text)
     if match:
         return match.group(1).strip()[:80]
+    if re.search(r"PPT|幻灯片|演示文稿", text, flags=re.IGNORECASE):
+        return "PPT 制作项目"
+    if "甘特图" in text:
+        return "协作排期项目"
     first_line = next((line.strip() for line in text.splitlines() if line.strip()), "")
     return (first_line[:50] or "协作项目").strip("。；;：:")
 
@@ -168,24 +204,108 @@ def _build_input(text: str) -> AssignmentInput:
 def _looks_like_project_request(text: str) -> bool:
     signals = (
         "项目", "任务", "分工", "成员", "截止", "计划", "活动", "报告",
-        "开发", "调研", "策划", "交付",
+        "开发", "调研", "策划", "交付", "甘特图", "排期", "进度",
+        "PPT", "幻灯片", "演示文稿", "团队", "几个人", "人完成",
     )
-    return len(text) >= 12 and any(signal in text for signal in signals)
+    lowered = text.lower()
+    return any(signal.lower() in lowered for signal in signals)
 
 
-def _render_plan(text: str, max_tokens: int | None) -> str:
-    if not _looks_like_project_request(text):
+def _has_actionable_scope(text: str) -> bool:
+    """区分“能画甘特图吗”与包含交付物/团队/工期的可执行需求。"""
+    scope_signals = (
+        "PPT", "幻灯片", "演示文稿", "报告", "活动", "开发", "调研",
+        "宣传", "答辩", "视频", "论文", "作业", "比赛", "项目：",
+    )
+    return any(signal.lower() in text.lower() for signal in scope_signals)
+
+
+def _understand_with_llm(
+    messages: list[ChatMessage], fallback_text: str,
+) -> str:
+    """让千问把多轮口语需求归一化；失败或超时则立即使用本地解析。"""
+    enabled = os.getenv("QINGXIAODA_USE_AI", "true").lower() \
+        in ("1", "true", "yes")
+    if not enabled:
+        return fallback_text
+    dialogue = [
+        {"role": message.role, "content": message.content}
+        for message in messages[-8:]
+        if message.role in ("user", "assistant")
+    ]
+    result = LLMClient.get_shared().chat_messages(
+        system_prompt=(
+            "你是项目需求理解器。请把多轮对话整理为一段简洁的中文项目需求，"
+            "只输出需求摘要，不回答用户。必须保留项目目标、人数或成员姓名与技能、"
+            "相对或绝对期限、交付物以及用户最新修改；不确定的信息不要编造。"
+        ),
+        messages=dialogue,
+        temperature=0.1,
+        timeout=12,
+    )
+    if isinstance(result, AgentError) or not result.strip():
+        return fallback_text
+    # 原始文本附在后面，保证规则解析仍能读取模型可能遗漏的数字和相对期限。
+    return f"{result.strip()}\n原始用户需求：\n{fallback_text}"[-8000:]
+
+
+def _render_text_gantt(full_plan) -> list[str]:
+    tasks = list(full_plan.timeline.tasks)
+    if not tasks:
+        return ["### 甘特图", "暂时没有可用的排期数据。"]
+    start = min(item.start_date.date() for item in tasks)
+    end = max(item.end_date.date() for item in tasks)
+    span = max(1, (end - start).days + 1)
+    width = min(14, max(5, span))
+    lines = [
+        "### 甘特图（文本版）",
+        "",
+        "| 任务 | 负责人 | 日期 | 时间轴 |",
+        "|---|---|---|---|",
+    ]
+    assignments = {
+        item.task_id: item for item in full_plan.qa_matrix.assignments
+    }
+    for item in tasks:
+        left = round((item.start_date.date() - start).days / span * width)
+        duration = max(1, (item.end_date.date() - item.start_date.date()).days + 1)
+        blocks = max(1, round(duration / span * width))
+        bar = "·" * left + "█" * blocks
+        bar = (bar + "·" * width)[:width]
+        owner = assignments.get(item.task_id)
+        lines.append(
+            f"| {item.name} | {owner.presenter if owner else '待确认'} | "
+            f"{item.start_date.date().isoformat()} → {item.end_date.date().isoformat()} | "
+            f"`{bar}` |"
+        )
+    return lines
+
+
+def _render_plan(
+    latest_text: str,
+    conversation_text: str,
+    max_tokens: int | None,
+    messages: list[ChatMessage],
+) -> str:
+    # 清小搭连通探测会发送 max_tokens:1；必须走毫秒级路径，不能触发模型。
+    if max_tokens == 1:
+        return "好"
+    if not _looks_like_project_request(conversation_text):
         return (
-            "你好，我是协作分工智能体。请告诉我项目名称、目标、团队成员及技能、"
-            "截止日期和交付要求，我会生成任务拆解、智能分工与排期。\n\n"
-            "示例：项目：校园低碳倡议；成员：林悦(调研/数据)、"
-            "陈曦(文案/策划)、周航(PPT/摄影)；截止：2026-08-20；"
-            "要求：完成调研摘要、宣传图文和复盘报告。"
+            "你好！我可以帮你拆任务、分工和排期。请直接告诉我想完成什么、"
+            "有多少人以及多久完成，例如：‘3 个人 5 天完成一个 PPT，并生成甘特图’。"
         )
 
-    inp = _build_input(text)
+    if "甘特图" in latest_text and not _has_actionable_scope(conversation_text):
+        return (
+            "可以生成甘特图。还需要一个项目交付物或目标，例如："
+            "‘3 个人 5 天完成一个答辩 PPT’，我就能立即给出任务、负责人和时间轴。"
+        )
+
+    understood_text = _understand_with_llm(messages, conversation_text)
+    inp = _build_input(understood_text)
     draft = generate_draft(inp, use_ai=False)
-    full_plan = confirm_draft(inp, draft)
+    full_plan = confirm_draft(inp, draft, use_ai_reflection=False)
     assignments = {
         item.task_id: item for item in full_plan.qa_matrix.assignments
     }
@@ -212,11 +332,14 @@ def _render_plan(text: str, max_tokens: int | None) -> str:
             f"{index}. **{task.name}**（{task.estimated_hours:g}h）"
             f" — 负责人：{owner}；排期：{dates}"
         )
+    lines.extend(["", *_render_text_gantt(full_plan)])
     lines.extend([
         "",
         "### 说明",
         "以上方案已综合技能匹配、成员负载、任务依赖和截止日期生成。"
         "你可以继续告诉我需要增删的任务、人员变化或工时限制。",
+        "可视化拖拽调整与导出请打开项目工作台："
+        "https://collaboration-planner-demo.onrender.com/",
     ])
     answer = "\n".join(lines)
     if max_tokens:
@@ -264,12 +387,15 @@ def chat_completions(
     if not user_text:
         raise HTTPException(status_code=400, detail="messages 中缺少 user 内容")
 
-    answer = _render_plan(user_text, request.max_tokens)
+    conversation_text = _conversation_user_text(request.messages)
     completion_id = f"chatcmpl-{uuid.uuid4().hex}"
     created = int(time.time())
-    usage = _usage(request.messages, answer)
 
     if not request.stream:
+        answer = _render_plan(
+            user_text, conversation_text, request.max_tokens,
+            request.messages)
+        usage = _usage(request.messages, answer)
         return JSONResponse({
             "id": completion_id,
             "object": "chat.completion",
@@ -300,8 +426,13 @@ def chat_completions(
                 payload["usage"] = usage
             return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
+        # 先发送首帧，再执行规划，避免用户长时间看不到任何响应。
         yield frame({"role": "assistant"})
         yield frame({"reasoning": "正在拆解任务、匹配成员并计算排期…"})
+        answer = _render_plan(
+            user_text, conversation_text, request.max_tokens,
+            request.messages)
+        usage = _usage(request.messages, answer)
         for chunk in _chunk_text(answer):
             yield frame({"content": chunk})
         yield frame({}, finish_reason="stop", include_usage=True)

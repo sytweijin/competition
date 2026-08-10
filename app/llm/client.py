@@ -553,6 +553,7 @@ class LLMClient:
         system_prompt: str,
         messages: list[dict],
         temperature: float = 0.7,
+        timeout: float | None = None,
     ) -> str | AgentError:
         """多轮对话调用（用于 AI 调整建议等需要记忆的场景）。
 
@@ -567,7 +568,7 @@ class LLMClient:
                 model=self.model,
                 messages=full_messages,
                 temperature=temperature,
-                timeout=LLM_TIMEOUT,
+                timeout=timeout or LLM_TIMEOUT,
             )
             return resp.choices[0].message.content or ""
         except Exception as e:

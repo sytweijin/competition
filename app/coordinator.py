@@ -142,7 +142,13 @@ class Coordinator:
             }))
         return plan.model_copy(update={"tasks": tasks})
 
-    def confirm(self, inp: AssignmentInput, plan: PlanOutput) -> FullPlan:
+    def confirm(
+        self,
+        inp: AssignmentInput,
+        plan: PlanOutput,
+        *,
+        use_ai_reflection: bool = True,
+    ) -> FullPlan:
         """用户确认任务草案后，执行自动分工、排期与报告。
 
         顺序 B：Planner 已在拆任务时给出 assignee_id（基于成员能力），
@@ -182,7 +188,13 @@ class Coordinator:
             final_plan = self._sync_module_owners(final_plan)
         # P1-3: confirm 路径也执行 Reflection 审查（确定性兜底，不阻塞主流程）
         total_capacity = sum(m.available_hours for m in inp.members)
-        reflection = self._step_reflection(final_plan, timeline, qa_matrix, total_capacity)
+        reflection = (
+            self._step_reflection(
+                final_plan, timeline, qa_matrix, total_capacity)
+            if use_ai_reflection
+            else self.reflector._deterministic_reflect(
+                final_plan, timeline, qa_matrix, total_capacity)
+        )
         return FullPlan(input=inp, plan=final_plan,
                         timeline=timeline, qa_matrix=qa_matrix, report=report,
                         reflection=reflection)

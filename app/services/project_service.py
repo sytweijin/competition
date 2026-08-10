@@ -197,14 +197,20 @@ def mutate_draft(plan: PlanOutput, operations: list[DraftOperation]) -> PlanOutp
         raise ProjectServiceError(str(exc)) from exc
 
 
-def confirm_draft(inp: AssignmentInput, plan: PlanOutput) -> FullPlan:
+def confirm_draft(
+    inp: AssignmentInput,
+    plan: PlanOutput,
+    *,
+    use_ai_reflection: bool = True,
+) -> FullPlan:
     if inp.project_mode == "large_project":
         plan = ensure_large_project_structure(plan)
     try:
         checked = validate_plan(plan)
     except PlanValidationError as exc:
         raise ProjectServiceError(str(exc)) from exc
-    return Coordinator().confirm(inp, checked)
+    return Coordinator().confirm(
+        inp, checked, use_ai_reflection=use_ai_reflection)
 
 
 def update_volunteer_pool(plan: FullPlan, volunteers: list[Volunteer]) -> FullPlan:

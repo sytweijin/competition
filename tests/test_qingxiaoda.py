@@ -3,14 +3,23 @@
 from __future__ import annotations
 
 import json
+from datetime import date, timedelta
 
+import pytest
 from fastapi.testclient import TestClient
 
+from app.llm.client import LLMClient
 from app.main import app
 
 
 client = TestClient(app)
 AUTH = {"Authorization": "Bearer test-qingxiaoda-key"}
+
+
+@pytest.fixture(autouse=True)
+def disable_live_qingxiaoda_ai(monkeypatch):
+    """协议回归测试不访问真实千问；生产环境默认开启。"""
+    monkeypatch.setenv("QINGXIAODA_USE_AI", "false")
 
 
 def test_models_requires_configured_key(monkeypatch):
@@ -64,11 +73,9 @@ def test_non_stream_completion_accepts_null_model_and_min_tokens(monkeypatch):
     payload = response.json()
     assert payload["object"] == "chat.completion"
     assert payload["choices"][0]["message"] == {
-        "role": "assistant",
-        "content": "你好，我是协作分工智能体。请告诉我项目名称、目标、团队成员及技能、截止日期和交付要求，我会生成任务拆解、智能分工与排期。\n\n示例：项目：校园低碳倡议；成员：林悦(调研/数据)、陈曦(文案/策划)、周航(PPT/摄影)；截止：2026-08-20；要求：完成调研摘要、宣传图文和复盘报告。",
-    }
+        "role": "assistant", "content": "好"}
     assert payload["choices"][0]["finish_reason"] == "stop"
-    assert payload["usage"]["completion_tokens"] == 36
+    assert payload["usage"]["completion_tokens"] == 1
 
 
 def test_stream_must_be_json_boolean(monkeypatch):
@@ -157,3 +164,102 @@ def test_project_prompt_runs_complete_planning_flow(monkeypatch):
     assert "校园科技节宣传" in answer
     assert "任务拆解与智能分工" in answer
     assert "排期" in answer
+    assert "甘特图（文本版）" in answer
+    assert "项目工作台" in answer
+
+
+def test_relative_deadline_member_count_and_gantt_are_understood(monkeypatch):
+    monkeypatch.setenv("QINGXIAODA_API_KEY", "test-qingxiaoda-key")
+
+    response = client.post(
+        "/v1/chat/completions",
+        headers=AUTH,
+        json={
+            "messages": [{
+                "role": "user",
+                "content": "我们3个人5天要完成一个PPT，生成一个甘特图",
+            }],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    answer = response.json()["choices"][0]["message"]["content"]
+    assert "PPT 制作项目" in answer
+    assert "成员1、成员2、成员3" in answer
+    assert (date.today() + timedelta(days=4)).isoformat() in answer
+    assert "甘特图（文本版）" in answer
+    assert "█" in answer
+
+
+def test_followup_gantt_uses_previous_user_context(monkeypatch):
+    monkeypatch.setenv("QINGXIAODA_API_KEY", "test-qingxiaoda-key")
+
+    response = client.post(
+        "/v1/chat/completions",
+        headers=AUTH,
+        json={
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "项目：迎新展示；成员：小林(PPT)、小陈(文案)、"
+                        "小周(视觉)；7天完成答辩演示。"),
+                },
+                {"role": "assistant", "content": "可以，我先整理计划。"},
+                {"role": "user", "content": "请继续生成甘特图"},
+            ],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    answer = response.json()["choices"][0]["message"]["content"]
+    assert "迎新展示" in answer
+    assert "小林、小陈、小周" in answer
+    assert "甘特图（文本版）" in answer
+
+
+def test_gantt_request_without_scope_asks_one_targeted_question(monkeypatch):
+    monkeypatch.setenv("QINGXIAODA_API_KEY", "test-qingxiaoda-key")
+
+    response = client.post(
+        "/v1/chat/completions",
+        headers=AUTH,
+        json={
+            "messages": [{"role": "user", "content": "能生成甘特图吗？"}],
+            "stream": False,
+        },
+    )
+
+    answer = response.json()["choices"][0]["message"]["content"]
+    assert "可以生成甘特图" in answer
+    assert "项目交付物或目标" in answer
+
+
+def test_qwen_normalizes_requirements_before_local_planning(monkeypatch):
+    monkeypatch.setenv("QINGXIAODA_API_KEY", "test-qingxiaoda-key")
+    monkeypatch.setenv("QINGXIAODA_USE_AI", "true")
+    calls = []
+
+    class StubLLM:
+        def chat_messages(self, **kwargs):
+            calls.append(kwargs)
+            return "项目：千问整理项目；3个人；5天；交付物：PPT和甘特图"
+
+    monkeypatch.setattr(LLMClient, "get_shared", lambda: StubLLM())
+    response = client.post(
+        "/v1/chat/completions",
+        headers=AUTH,
+        json={
+            "messages": [{"role": "user", "content": "帮我们安排这个项目"}],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    answer = response.json()["choices"][0]["message"]["content"]
+    assert len(calls) == 1
+    assert calls[0]["timeout"] == 12
+    assert "千问整理项目" in answer
+    assert "成员1、成员2、成员3" in answer
