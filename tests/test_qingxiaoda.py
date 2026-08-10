@@ -108,6 +108,10 @@ def test_stream_completion_emits_role_content_stop_and_done(monkeypatch):
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
+    first_line = next(line for line in response.text.splitlines() if line)
+    assert first_line.startswith("data: ")
+    first_frame = json.loads(first_line.removeprefix("data: "))
+    assert first_frame["choices"][0]["delta"] == {"role": "assistant"}
     data_lines = [
         line.removeprefix("data: ")
         for line in response.text.splitlines()

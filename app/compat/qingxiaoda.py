@@ -505,9 +505,9 @@ def chat_completions(
                 payload["usage"] = usage
             return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
-        # 严格使用 OpenAI 标准 delta 字段，兼容清小搭移动端。
-        yield ": connected\n\n"
-        yield frame({"role": "assistant", "content": ""})
+        # 清小搭要求第一帧恰好为 role，不能在前面插 SSE 注释或空 content。
+        # 移动端会用该帧建立“用户问题 → 助手回答”的消息关联。
+        yield frame({"role": "assistant"})
         if request.max_tokens != 1 \
                 and not _is_planning_request(user_text, conversation_text):
             quick = _quick_general_answer(user_text)
