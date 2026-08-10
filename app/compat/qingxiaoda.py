@@ -28,6 +28,13 @@ from app.services.project_service import confirm_draft, generate_draft
 router = APIRouter(prefix="/v1", tags=["清小搭兼容协议"])
 MODEL_ID = "collaboration-planner"
 _AUTH_ENV = "QINGXIAODA_API_KEY"
+_GENERAL_SYSTEM_PROMPT = (
+    "你是协作分工智能体，同时也是友好、准确的通用中文助手。"
+    "直接回答用户当前问题，不要把普通问题强行拆成项目任务。"
+    "只有用户明确要求项目拆解、人员分工或排期时，才建议使用规划能力。"
+    "回答简洁清楚；不确定时坦诚说明。"
+)
+_CHAT_TIMEOUT = 18
 
 
 class ChatMessage(BaseModel):
@@ -271,7 +278,7 @@ def _understand_with_llm(
         ),
         messages=dialogue,
         temperature=0.1,
-        timeout=6,
+        timeout=_CHAT_TIMEOUT,
     )
     if isinstance(result, AgentError) or not result.strip():
         return fallback_text
@@ -309,15 +316,10 @@ def _answer_general(
         if message.role in ("user", "assistant")
     ]
     result = LLMClient.get_shared().chat_messages(
-        system_prompt=(
-            "你是协作分工智能体，同时也是友好、准确的通用中文助手。"
-            "直接回答用户当前问题，不要把普通问题强行拆成项目任务。"
-            "只有用户明确要求项目拆解、人员分工或排期时，才建议使用规划能力。"
-            "回答简洁清楚；不确定时坦诚说明。"
-        ),
+        system_prompt=_GENERAL_SYSTEM_PROMPT,
         messages=dialogue,
         temperature=0.4,
-        timeout=6,
+        timeout=_CHAT_TIMEOUT,
     )
     if isinstance(result, AgentError) or not result.strip():
         return "这个问题暂时没有回答成功，请稍后再试；项目拆解和分工功能仍可正常使用。"
@@ -506,6 +508,44 @@ def chat_completions(
         # 严格使用 OpenAI 标准 delta 字段，兼容清小搭移动端。
         yield ": connected\n\n"
         yield frame({"role": "assistant", "content": ""})
+        if request.max_tokens != 1 \
+                and not _is_planning_request(user_text, conversation_text):
+            quick = _quick_general_answer(user_text)
+            if quick:
+                answer = quick
+                yield frame({"content": answer})
+            else:
+                yield frame({"content": "正在回答…\n\n"})
+                dialogue = [
+                    {"role": message.role, "content": message.content}
+                    for message in request.messages[-8:]
+                    if message.role in ("user", "assistant")
+                ]
+                parts: list[str] = []
+                for part in LLMClient.get_shared().stream_messages(
+                    system_prompt=_GENERAL_SYSTEM_PROMPT,
+                    messages=dialogue,
+                    temperature=0.4,
+                    timeout=_CHAT_TIMEOUT,
+                    max_tokens=request.max_tokens,
+                ):
+                    if isinstance(part, AgentError):
+                        fallback = (
+                            "这个问题暂时没有回答成功，请稍后再试；"
+                            "项目拆解和分工功能仍可正常使用。")
+                        parts.append(fallback)
+                        yield frame({"content": fallback})
+                        break
+                    parts.append(part)
+                    yield frame({"content": part})
+                answer = "".join(parts)
+            usage = _usage(request.messages, answer)
+            yield frame({}, finish_reason="stop", include_usage=True)
+            yield "data: [DONE]\n\n"
+            return
+
+        if request.max_tokens != 1:
+            yield frame({"content": "正在生成分工与排期…\n\n"})
         answer = _render_plan(
             user_text, conversation_text, request.max_tokens,
             request.messages)

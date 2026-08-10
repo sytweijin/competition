@@ -580,3 +580,48 @@ class LLMClient:
                 message=str(e),
                 recoverable=(err_type not in ("auth_error",)),
             )
+
+    def stream_messages(
+        self,
+        system_prompt: str,
+        messages: list[dict],
+        temperature: float = 0.7,
+        timeout: float | None = None,
+        max_tokens: int | None = None,
+    ):
+        """按 OpenAI 标准流式返回文本片段，供清小搭降低首字等待。"""
+        if not self._enabled:
+            yield AgentError(
+                agent="LLMClient",
+                error_type="auth_error",
+                message="LLM_API_KEY 未配置，跳过调用",
+                recoverable=False,
+            )
+            return
+        try:
+            kwargs = {
+                "model": self.model,
+                "messages": ([{"role": "system", "content": system_prompt}]
+                             + messages),
+                "temperature": temperature,
+                "timeout": timeout or LLM_TIMEOUT,
+                "stream": True,
+            }
+            if max_tokens:
+                kwargs["max_tokens"] = max_tokens
+            response = self._client.chat.completions.create(**kwargs)
+            for chunk in response:
+                if not chunk.choices:
+                    continue
+                content = getattr(chunk.choices[0].delta, "content", None)
+                if content:
+                    yield content
+        except Exception as exc:
+            error_type = _classify_error(exc)
+            logger.error("LLM stream call failed (%s): %s", error_type, exc)
+            yield AgentError(
+                agent="LLMClient",
+                error_type=error_type,
+                message=str(exc),
+                recoverable=(error_type not in ("auth_error",)),
+            )

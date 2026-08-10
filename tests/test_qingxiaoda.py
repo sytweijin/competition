@@ -271,7 +271,7 @@ def test_qwen_normalizes_requirements_before_local_planning(monkeypatch):
     assert response.status_code == 200
     answer = response.json()["choices"][0]["message"]["content"]
     assert len(calls) == 1
-    assert calls[0]["timeout"] == 6
+    assert calls[0]["timeout"] == 18
     assert "千问整理项目" in answer
     assert "甲、乙、丙" in answer
 
@@ -363,3 +363,30 @@ def test_simple_structured_plan_uses_fast_local_path(monkeypatch):
 
     assert response.status_code == 200
     assert "甘特图（文本版）" in response.json()["choices"][0]["message"]["content"]
+
+
+def test_general_stream_forwards_llm_content(monkeypatch):
+    monkeypatch.setenv("QINGXIAODA_API_KEY", "test-qingxiaoda-key")
+    calls = []
+
+    class StubLLM:
+        def stream_messages(self, **kwargs):
+            calls.append(kwargs)
+            yield "天空呈蓝色，"
+            yield "主要与瑞利散射有关。"
+
+    monkeypatch.setattr(LLMClient, "get_shared", lambda: StubLLM())
+    response = client.post(
+        "/v1/chat/completions",
+        headers=AUTH,
+        json={
+            "messages": [{"role": "user", "content": "天空为什么是蓝色的？"}],
+            "stream": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert "正在回答" in response.text
+    assert "天空呈蓝色" in response.text
+    assert "瑞利散射" in response.text
+    assert calls[0]["timeout"] == 18
