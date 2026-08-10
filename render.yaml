@@ -18,4 +18,4 @@ services:
       - key: LLM_BASE_URL
         sync: false
       - key: LLM_MODEL
-        sync: false
+        value: DeepSeek-V3.2
