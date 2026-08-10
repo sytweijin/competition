@@ -443,6 +443,14 @@ def _chunk_text(text: str, size: int = 18):
         yield text[index:index + size]
 
 
+def _question_echo(text: str) -> str:
+    """移动端不渲染 user 气泡时，在回答顶部保留一份简短问题原文。"""
+    compact = re.sub(r"\s+", " ", text).strip()
+    if len(compact) > 160:
+        compact = compact[:157] + "…"
+    return f"> 你问：{compact}\n\n"
+
+
 @router.get("/models")
 def models(authorization: str | None = Header(default=None)):
     _check_auth(authorization)
@@ -474,6 +482,8 @@ def chat_completions(
         answer = _render_plan(
             user_text, conversation_text, request.max_tokens,
             request.messages)
+        if request.max_tokens != 1:
+            answer = _question_echo(user_text) + answer
         usage = _usage(request.messages, answer)
         return JSONResponse({
             "id": completion_id,
@@ -508,6 +518,8 @@ def chat_completions(
         # 清小搭要求第一帧恰好为 role，不能在前面插 SSE 注释或空 content。
         # 移动端会用该帧建立“用户问题 → 助手回答”的消息关联。
         yield frame({"role": "assistant"})
+        if request.max_tokens != 1:
+            yield frame({"content": _question_echo(user_text)})
         if request.max_tokens != 1 \
                 and not _is_planning_request(user_text, conversation_text):
             quick = _quick_general_answer(user_text)

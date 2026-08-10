@@ -301,7 +301,8 @@ def test_general_question_is_answered_without_planning(monkeypatch):
     )
 
     answer = response.json()["choices"][0]["message"]["content"]
-    assert answer == "北京是中国的首都。"
+    assert "> 你问：北京是中国的首都吗？" in answer
+    assert answer.endswith("北京是中国的首都。")
     assert len(calls) == 1
     assert "任务拆解与智能分工" not in answer
 
@@ -322,7 +323,8 @@ def test_concept_question_about_gantt_is_not_planned(monkeypatch):
     )
 
     answer = response.json()["choices"][0]["message"]["content"]
-    assert answer.startswith("甘特图是一种")
+    assert "> 你问：什么是甘特图？" in answer
+    assert "甘特图是一种" in answer
     assert "团队成员" not in answer
 
 
@@ -341,7 +343,8 @@ def test_how_to_question_about_project_plan_is_general_qa(monkeypatch):
     )
 
     answer = response.json()["choices"][0]["message"]["content"]
-    assert answer.startswith("制定项目计划通常")
+    assert "> 你问：如何制定项目计划？" in answer
+    assert "制定项目计划通常" in answer
     assert "团队成员" not in answer
 
 
@@ -390,7 +393,25 @@ def test_general_stream_forwards_llm_content(monkeypatch):
     )
 
     assert response.status_code == 200
+    assert "你问" in response.text
+    assert "天空为什么是蓝色的" in response.text
     assert "正在回答" in response.text
     assert "天空呈蓝色" in response.text
     assert "瑞利散射" in response.text
     assert calls[0]["timeout"] == 18
+
+
+def test_probe_does_not_echo_question(monkeypatch):
+    monkeypatch.setenv("QINGXIAODA_API_KEY", "test-qingxiaoda-key")
+    response = client.post(
+        "/v1/chat/completions",
+        headers=AUTH,
+        json={
+            "messages": [{"role": "user", "content": "你好"}],
+            "stream": True,
+            "max_tokens": 1,
+        },
+    )
+
+    assert "你问" not in response.text
+    assert "好" in response.text
