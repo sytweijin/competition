@@ -29,6 +29,16 @@ def _large_input(project_mode: str = "large_project") -> AssignmentInput:
     )
 
 
+def test_small_group_does_not_keep_member_hierarchy():
+    data = AssignmentInput(
+        course=CourseInfo(name="Small", description="No hierarchy"),
+        members=[TeamMember(name="Alice", manager="Bob")],
+        deadline=date(2026, 8, 20),
+        project_mode="small_group",
+    )
+    assert data.members[0].manager == ""
+
+
 def test_large_project_fallback_marks_volunteer_demand():
     plan = Coordinator._fallback_large_project_plan(_large_input(), "LLM down")
     assert len(plan.modules) == 4
@@ -116,6 +126,30 @@ def test_apply_manual_assignment_persists_module_assignees():
     assert m1.assignee_id == "Bob"
     assert all(
         task.assignee_id == "Bob"
+        for task in updated.plan.tasks
+        if task.module_id == "M1" and task.status != "completed"
+    )
+
+
+def test_volunteer_role_member_can_claim_large_project_module():
+    fp = _large_full_plan()
+    volunteer = TeamMember(
+        name="Volunteer A", role="志愿者 / 外部协作者",
+        skill_tags=[], daily_available_hours=4,
+    )
+    fp = fp.model_copy(update={
+        "input": fp.input.model_copy(update={
+            "members": [*fp.input.members, volunteer],
+        }),
+    })
+    updated = apply_manual_assignment(ManualAssignmentRequest(
+        plan=fp,
+        module_assignees={"M1": "Volunteer A"},
+    ))
+    module = next(m for m in updated.plan.modules if m.id == "M1")
+    assert module.assignee_id == "Volunteer A"
+    assert all(
+        task.assignee_id == "Volunteer A"
         for task in updated.plan.tasks
         if task.module_id == "M1" and task.status != "completed"
     )

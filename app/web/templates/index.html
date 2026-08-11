@@ -6,7 +6,7 @@
   <title>协作分工智能体 · 项目工作台</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <style>.hidden{display:none!important}</style>
-  <link rel="stylesheet" href="/static/style.css?v=5.34">
+  <link rel="stylesheet" href="/static/style.css?v=5.48">
 </head>
 <body>
 <header class="app-header">
@@ -15,7 +15,7 @@
     <div><h1>协作分工智能体</h1><p>从项目要求到可执行分工方案</p></div>
   </div>
   <div class="header-tools">
-    <button id="historyBtn" class="btn btn-ghost">历史方案</button>
+    <button id="historyBtn" class="btn btn-ghost">版本树</button>
     <button id="saveBtn" class="btn btn-ghost" disabled>保存方案</button>
     <button id="exportMdBtn" class="btn btn-ghost" disabled>导出MD</button>
     <button id="exportDocxBtn" class="btn btn-ghost" disabled>导出Word</button>
@@ -93,19 +93,12 @@
   <section id="finalView" class="view hidden">
     <div class="result-tabs" id="resultTabs">
       <button class="active" data-tab="tasks">任务计划</button>
-      <button data-tab="timeline">时间线 / 甘特图</button>
-      <button data-tab="matrix">分工矩阵</button>
-      <button data-tab="workload">工作量</button>
-      <button data-tab="resource">资源日历</button>
-      <button data-tab="org">组织树</button>
-      <button data-tab="participants">参与清单</button>
-      <button data-tab="review">复盘</button>
-      <button data-tab="reminders">提醒</button>
-      <button data-tab="knowledge">知识库</button>
-      <button data-tab="orgreview">组织复盘</button>
-      <button data-tab="report">报告</button>
-      <button data-tab="interview">评审预演</button>
-      <button data-tab="members" id="memberTabBtn">成员管理</button>
+      <button data-tab="schedule">排期资源</button>
+      <button data-tab="team">团队负载</button>
+      <button data-tab="collaboration" id="memberTabBtn">分工协作</button>
+      <button data-tab="review">执行复盘</button>
+      <button data-tab="report">项目报告</button>
+      <button data-tab="interview" id="defenseTabBtn">答辩模拟</button>
     </div>
     <div id="resultContent" class="result-content"></div>
     <div class="sticky-action">
@@ -120,10 +113,10 @@
   <div id="messages" class="messages"><div class="assistant-msg">你好，我可以分析任务拆解、工时和分工，并给出调整建议。</div></div>
   <form id="chatForm" class="chat-form"><textarea id="chatInput" rows="2" placeholder="例如：摄影任务是不是太集中？"></textarea><button>发送</button></form>
 </aside>
-<div id="modal" class="modal-backdrop hidden"><div class="modal"><div class="modal-head"><h3>历史方案</h3><button id="closeModal">×</button></div><input id="planSearch" class="modal-search" placeholder="搜索方案名称…"><div id="planList"></div></div></div>
+<div id="modal" class="modal-backdrop hidden"><div class="modal"><div class="modal-head"><h3>方案版本</h3><button id="closeModal">×</button></div><input id="planSearch" class="modal-search" placeholder="搜索方案名称…"><div id="planList"></div></div></div>
 <div id="authModal" class="modal-backdrop hidden"><div class="modal"><div class="modal-head"><h3>需要登录</h3><button id="closeAuthModal">×</button></div><div class="auth-form"><label>用户名<input id="authUsername" type="text" placeholder="输入用户名" value="admin"></label><label>密码<input id="authPassword" type="password" placeholder="输入密码"></label><button id="authLoginBtn" class="btn btn-primary">登录</button></div></div></div>
 <datalist id="participantNames"></datalist>
-<script src="/static/app.js?v=5.34"></script>
-<script src="/static/participants.js?v=5.34"></script>
+<script src="/static/app.js?v=5.48"></script>
+<script src="/static/participants.js?v=5.48"></script>
 </body>
 </html>

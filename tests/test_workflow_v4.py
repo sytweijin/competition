@@ -136,6 +136,24 @@ def test_file_analysis_txt():
     assert "发布总结推送" in response.json()["analysis"]["summary"]
 
 
+def test_interview_material_upload_extracts_script_without_persisting():
+    client = TestClient(app)
+    response = client.post(
+        "/api/interview/materials",
+        files={
+            "files": (
+                "答辩稿.txt",
+                "我们的核心结论来自120份有效问卷。".encode(),
+                "text/plain",
+            ),
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["files"][0]["name"] == "答辩稿.txt"
+    assert "120份有效问卷" in data["material_text"]
+
+
 def test_ideology_handbook_extracts_requirements_not_teaching_descriptions():
     text = """
     “思政实践”课程手册

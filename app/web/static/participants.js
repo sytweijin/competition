@@ -78,21 +78,21 @@ async function saveTaskParticipants(taskId){
   });
   try{
     state.plan=await jsonRequest('/api/task-participants',{plan:state.plan,task_id:taskId,participants:rows});
-    renderResultTab('participants');
+    renderResultTab('collaboration');
     showNotice('参与清单已保存','success');
   }catch(e){
     showNotice(e.message,'error');
   }
 }
 
-async function loadResourceCalendarTab(){
-  var target=el('resultContent');
+async function loadResourceCalendarTab(targetId){
+  var target=el(targetId||'resultContent');
   if(!target)return;
   try{
     var data=await jsonRequest('/api/resource-calendar',state.plan);
     target.innerHTML=renderResourceCalendarHtml(data);
   }catch(e){
-    target.innerHTML='<div class="resource-calendar"><div class="risk-note">'+esc(e.message)+'</div></div>';
+    target.innerHTML='<div class="resource-calendar">'+alertPanelHtml('资源日历加载失败',e.message,'error')+'</div>';
   }
 }
 
@@ -103,7 +103,7 @@ function renderResourceCalendarHtml(data){
   var members=data.members||{};
   var vols=data.volunteers||{};
   var warnings=data.warnings&&data.warnings.length
-    ? '<div class="warning-box"><strong>资源冲突</strong><span>'+data.warnings.map(esc).join('；')+'</span></div>'
+    ? alertPanelHtml('资源冲突',data.warnings,'warning')
     : '';
   function dayCells(load,unavailable){
     return data.days.map(function(d){
@@ -179,7 +179,7 @@ async function loadRemindersTab(){
     target.innerHTML='<div class="interview-actions"><button id="notifyBtn" class="btn btn-primary">发送提醒通知</button></div>'+listHtml;
     var notifyBtn=el('notifyBtn');
     if(notifyBtn)notifyBtn.onclick=sendNotify;
-  }catch(e){target.innerHTML='<div class="risk-note">'+esc(e.message)+'</div>'}
+  }catch(e){target.innerHTML=alertPanelHtml('提醒加载失败',e.message,'error')}
 }
 
 async function sendNotify(){
@@ -219,7 +219,7 @@ async function askKnowledge(){
       ? '<div class="knowledge-sources">'+data.sources.map(function(s){return '<span>'+esc(s.name)+'</span>'}).join('')+'</div>'
       : '';
     answer.innerHTML='<div class="assistant-msg">'+esc(data.answer).replace(/\n/g,'<br>')+'</div>'+sources;
-  }catch(e){answer.innerHTML='<div class="risk-note">'+esc(e.message)+'</div>'}
+  }catch(e){answer.innerHTML=alertPanelHtml('查询失败',e.message,'error')}
 }
 
 async function callKnowledgeTool(btn){
@@ -228,7 +228,7 @@ async function callKnowledgeTool(btn){
   try{
     var data=await jsonRequest('/api/tools/call',{tool:btn.dataset.tool,args:{},plan:state.plan});
     answer.innerHTML='<pre class="tool-output">'+esc(JSON.stringify(data.result,null,2))+'</pre>';
-  }catch(e){answer.innerHTML='<div class="risk-note">'+esc(e.message)+'</div>'}
+  }catch(e){answer.innerHTML=alertPanelHtml('工具调用失败',e.message,'error')}
 }
 
 async function askKnowledgeAgent(){
@@ -243,7 +243,7 @@ async function askKnowledgeAgent(){
       ? '<div class="knowledge-sources"><span>调用：'+data.trace.map(esc).join(' → ')+'</span></div>'
       : '';
     answer.innerHTML='<div class="assistant-msg">'+esc(data.answer).replace(/\n/g,'<br>')+'</div>'+trace;
-  }catch(e){answer.innerHTML='<div class="risk-note">'+esc(e.message)+'</div>'}
+  }catch(e){answer.innerHTML=alertPanelHtml('分析失败',e.message,'error')}
 }
 
 async function loadOrgReviewTab(){
@@ -263,5 +263,5 @@ async function loadOrgReviewTab(){
       ? '<div class="review-summary"><div><strong>'+data.suggestions.length+'</strong><span>经验建议</span></div></div><ul class="org-suggestions">'+data.suggestions.map(function(s){return '<li>'+esc(s)+'</li>'}).join('')+'</ul>'
       : '<div class="success-box">暂无经验建议</div>';
     target.innerHTML='<h3 class="cal-vol-title">成员复盘</h3><div class="review-table-wrap"><table><thead><tr><th>成员</th><th>角色</th><th>计划</th><th>实际</th><th>偏差</th></tr></thead><tbody>'+memberRows+'</tbody></table></div><h3 class="cal-vol-title">角色复盘</h3><div class="review-table-wrap"><table><thead><tr><th>角色</th><th>计划</th><th>实际</th><th>偏差</th></tr></thead><tbody>'+roleRows+'</tbody></table></div>'+suggestions;
-  }catch(e){target.innerHTML='<div class="risk-note">'+esc(e.message)+'</div>'}
+  }catch(e){target.innerHTML=alertPanelHtml('组织复盘加载失败',e.message,'error')}
 }

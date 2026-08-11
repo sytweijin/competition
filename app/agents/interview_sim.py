@@ -15,28 +15,35 @@ class InterviewSimAgent(BaseAgent):
     response_model = None  # 使用 chat_text，非结构化输出
 
     def run(self, plan: PlanOutput, qa_matrix: QAOutput,
-            user_requirements: str = "") -> str:
-        """模拟协作评审提问，生成 10-15 道问题。
+            user_requirements: str = "", project_context: str = "",
+            material_text: str = "",
+            material_names: list[str] | None = None) -> str:
+        """根据答辩要求和答辩材料生成 10-15 道现场问题。
 
         Args:
-            plan: 任务计划。
-            qa_matrix: QA 责任矩阵。
-            user_requirements: 用户自定义要求，如评委关注点、重点模块等。
+            plan/qa_matrix: 仅用于旧调用无材料时提供最低限度项目背景。
+            project_context: 项目原始要求中与答辩相关的上下文。
+            material_text: 用户粘贴或上传的答辩稿/PPT文字。
+            material_names: 答辩材料文件名。
         """
-        task_lines = "\n".join(
-            f"- {t.id} {t.name}" for t in plan.tasks)
-        qa_lines = "\n".join(
-            f"- {a.task_name}: {a.presenter}/{a.qa_primary}"
-            for a in qa_matrix.assignments) or "无"
+        names = "、".join(material_names or []) or "粘贴的答辩稿"
+        if material_text.strip():
+            source = material_text.strip()[:50000]
+        else:
+            source = "\n".join(f"- {t.name}: {t.description}" for t in plan.tasks)
         user = (
-            f"以下是团队的项目计划和责任分工：\n\n"
-            f"## 任务计划\n{task_lines}\n\n"
-            f"## 责任分工\n{qa_lines}\n\n"
+            "请模拟正式答辩现场。问题必须围绕答辩者实际提交的内容，"
+            "不要围绕任务完成状态、项目看板或系统分工提问。\n\n"
+            f"## 原始答辩/展示要求\n{project_context.strip() or '未提供额外要求'}\n\n"
+            f"## 答辩材料（{names}）\n{source}\n\n"
         )
         if user_requirements.strip():
-            user += f"## 用户特别要求\n{user_requirements.strip()}\n\n"
-            user += "请优先围绕用户的特别要求生成问题，同时覆盖其他维度。\n\n"
-        user += "请生成10-15道可能的评审提问，并标注优先级。"
+            user += f"## 评委关注点\n{user_requirements.strip()}\n\n"
+        user += (
+            "请生成10-15道可能的答辩提问并标注优先级。重点检查材料中的"
+            "核心主张、证据、数据、方案逻辑、创新点、局限和表达清晰度；"
+            "不得根据项目任务是否完成来提问。"
+        )
 
         result = self.llm.chat_text(
             system_prompt=self.system_prompt,
@@ -71,30 +78,34 @@ class InterviewSimAgent(BaseAgent):
 
     def chat_turn(self, plan: PlanOutput, qa_matrix: QAOutput,
                   user_answer: str, history: list[dict],
-                  mode: str = "answer",
-                  user_requirements: str = "") -> str:
+                  mode: str = "answer", user_requirements: str = "",
+                  project_context: str = "", material_text: str = "",
+                  material_names: list[str] | None = None) -> str:
         """多轮互动模式：根据用户回答给出点评并提出下一个问题。
 
         Args:
-            plan: 任务计划。
-            qa_matrix: QA 责任矩阵。
+            plan/qa_matrix: 仅用于旧调用无材料时提供最低限度项目背景。
             user_answer: 用户对上一轮问题的回答（首轮为空，触发第一个问题）。
             history: 之前的对话历史 [{role, content}]。
-            user_requirements: 用户自定义要求。
+            user_requirements: 评委关注点。
+            project_context: 项目原始要求中与答辩相关的上下文。
+            material_text: 用户提交的答辩稿或 PPT 提取文字。
+            material_names: 答辩材料文件名。
         """
         from app.llm.prompts import INTERVIEW_ADJUST_SYSTEM, INTERVIEW_CHAT_SYSTEM
-        task_lines = "\n".join(f"- {t.id} {t.name}" for t in plan.tasks)
-        qa_lines = "\n".join(
-            f"- {a.task_name}: {a.presenter}" for a in qa_matrix.assignments) or "无"
+        names = "、".join(material_names or []) or "粘贴的答辩稿"
+        source = material_text.strip()[:50000] if material_text.strip() else "\n".join(
+            f"- {t.name}: {t.description}" for t in plan.tasks
+        )
         context = (
-            f"以下是团队的项目计划和责任分工：\n\n"
-            f"## 任务计划\n{task_lines}\n\n"
-            f"## 责任分工\n{qa_lines}\n\n"
+            "这是一次基于答辩稿或PPT内容的模拟答辩，不是项目任务完成情况检查。\n\n"
+            f"## 原始答辩/展示要求\n{project_context.strip() or '未提供额外要求'}\n\n"
+            f"## 答辩材料（{names}）\n{source}\n\n"
         )
         if user_requirements.strip():
-            context += f"## 用户特别要求\n{user_requirements.strip()}\n\n"
+            context += f"## 评委关注点\n{user_requirements.strip()}\n\n"
 
-        messages = [{"role": "user", "content": context + "请开始模拟评审，提第一个问题。"}]
+        messages = [{"role": "user", "content": context + "请开始模拟答辩，针对材料提第一个问题。"}]
         messages.append({"role": "assistant", "content":
             "好的，我已经了解了你们的项目。让我们开始吧。"})
         for msg in history:

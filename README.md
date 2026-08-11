@@ -1,6 +1,8 @@
 ﻿# 协作分工智能体
 
-**版本：v5.40** | 最后更新：2026-08-10（清小搭移动端问题原文展示兜底）
+**版本：v5.48** | 最后更新：2026-08-11（按实际需求展示的材料驱动答辩模拟）
+
+当前工作区的结构拆分、导出与布局、版本树、入口归并、不可用日期、提示信息、角色模型和答辩模拟改动，已连续归档为 v5.41–v5.48；当前统一发布版本为 **v5.48**。
 
 ## 比赛 Demo
 
@@ -102,6 +104,14 @@ Demo 的可视化工作台。
 
 | 版本 | 日期 | 定位 |
 |------|------|------|
+| v5.48 | 2026-08-11 | 仅在项目要求涉及答辩/汇报时展示答辩模拟，并支持答辩稿或 PPT 材料驱动提问 |
+| v5.47 | 2026-08-11 | 小型项目取消人员层级，大型项目志愿者采用极简档案并支持认领 |
+| v5.46 | 2026-08-11 | 长错误与多条警告改为摘要卡片和可展开详情 |
+| v5.45 | 2026-08-11 | 日历式多选不可用日期，并补齐大型项目与成员编辑的数据链 |
+| v5.44 | 2026-08-11 | 最终方案 14 个入口归并为 7 个用户工作区，知识库转为内部能力 |
+| v5.43 | 2026-08-11 | 同一/相似任务版本树、差异对比与一键分支回滚 |
+| v5.42 | 2026-08-11 | Excel 下载后缀修复，统一桌面端与移动端布局 |
+| v5.41 | 2026-08-11 | Web 路由按业务域拆分，保持 API 契约不变 |
 | v5.34 | 2026-08-04 | 深度审查修复：ACL 全链路校验、所有权保护、回滚 ACL、跨用户知识隔离、音频转写、只读一致性 |
 | v5.33 | 2026-08-04 | 图片 OCR / 音频转写：配置视觉/语音模型后自动识别，无模型时保留元数据兜底 |
 | v5.32 | 2026-08-04 | 多用户账号、会话登录、项目级读写权限（ACL） |
@@ -200,8 +210,12 @@ competition/
 |   +-- knowledge/
 |   |   +-- duration_examples.json  # 结构化工时案例库
 |   +-- web/
-|       +-- routes.py          # FastAPI 路由
-|       +-- exporters.py       # Markdown / Word / PDF 导出
+|       +-- routes.py          # FastAPI 路由聚合与规划/协作接口
+|       +-- routers/           # 按业务域拆分的 API 子路由
+|       |   +-- system.py      # 鉴权、工具调用、健康检查
+|       |   +-- exports.py     # Markdown / Word / PDF / Excel 等导出接口
+|       |   +-- members.py     # 成员变动与计划重算
+|       +-- exporters.py       # Word / PDF 文档渲染
 |       +-- templates/index.html  # TailwindCSS + Lucide + Tab 布局
 |       +-- static/style.css   # 补充样式
 +-- tests/                     # 单元与集成测试（175 项）
@@ -225,7 +239,9 @@ competition/
 | POST | `/api/workload` | 统一计算成员负载、占比和分工建议 |
 | POST | `/api/chat` | 基于当前方案实时问答 |
 | POST | `/api/edit` | 应用编辑并重算 |
-| POST | `/api/interview` | AI 答辩模拟（v0.3 新增） |
+| POST | `/api/interview/materials` | 临时提取答辩稿、PPT 等材料文字（不落盘） |
+| POST | `/api/interview` | 根据答辩材料生成首轮模拟问题 |
+| POST | `/api/interview/chat` | 基于同一答辩材料进行多轮追问与点评 |
 | POST | `/api/save` | 保存计划到 memory |
 | POST | `/api/export/markdown` | 导出当前计划为 Markdown |
 | POST | `/api/export/docx` | 导出当前计划为 Word 文档 |
@@ -233,6 +249,9 @@ competition/
 | POST | `/api/recompute` | 状态变更后实时重算排期与分工 |
 | POST | `/api/export/pdf` | 导出当前计划为 PDF 文档 |
 | GET | `/api/plans` | 列出已保存计划 |
+| GET | `/api/plan-history/{filename}` | 获取当前及相似任务的版本树 |
+| GET | `/api/plan-compare` | 比较版本树中的任意两个版本 |
+| POST | `/api/plan-rollback/{filename}/{version_id}` | 回滚并从目标版本创建新分支 |
 | GET | `/api/load/{filename}` | 载入计划 |
 | DELETE | `/api/plans/{filename}` | 删除计划 |
 | GET | `/api/health` | 健康检查 |

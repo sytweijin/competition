@@ -94,6 +94,40 @@ def test_member_hours_change_recomputes():
             assert m["daily_available_hours"] == 8.0
 
 
+def test_member_unavailable_dates_are_updated_and_preserved():
+    """成员编辑必须把多选不可用日期传入重排后的成员模型。"""
+    client = TestClient(app)
+    fp = _make_test_plan()
+    resp = client.post("/api/edit-members", json={
+        "plan": json.loads(fp.model_dump_json()),
+        "member_unavailable_dates": {
+            "Alice": ["2026-08-12", "2026-08-12", "2026-08-13"],
+        },
+    })
+    assert resp.status_code == 200
+    alice = next(m for m in resp.json()["input"]["members"]
+                 if m["name"] == "Alice")
+    assert alice["unavailable_dates"] == ["2026-08-12", "2026-08-13"]
+
+
+def test_added_member_accepts_unavailable_dates():
+    """大型项目阶段新增骨干时也不能丢失不可用日期。"""
+    client = TestClient(app)
+    fp = _make_test_plan()
+    resp = client.post("/api/edit-members", json={
+        "plan": json.loads(fp.model_dump_json()),
+        "added_members": [{
+            "name": "Dave",
+            "daily_available_hours": 4,
+            "unavailable_dates": ["2026-08-14"],
+        }],
+    })
+    assert resp.status_code == 200
+    dave = next(m for m in resp.json()["input"]["members"]
+                if m["name"] == "Dave")
+    assert dave["unavailable_dates"] == ["2026-08-14"]
+
+
 def test_cannot_remove_all_members():
     """不能删除所有成员。"""
     client = TestClient(app)

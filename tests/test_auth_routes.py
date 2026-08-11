@@ -100,8 +100,21 @@ def test_acl_blocks_history_export_share_and_rollback(tmp_path, monkeypatch):
     auth.set_acl(filename, owner="alice", editors=["bob"], viewers=["carol"])
     history = client.get(f"/api/plan-history/{filename}", headers=headers_a).json()
     version_id = history["versions"][0]["version_id"]
+    assert history["nodes"]
+    assert history["current_version_id"] == version_id
+    older_version = history["versions"][-1]["version_id"]
+    compared = client.get("/api/plan-compare", headers=headers_a, params={
+        "left_filename": filename,
+        "left_version": older_version,
+        "right_filename": filename,
+        "right_version": version_id,
+    })
+    assert compared.status_code == 200
+    assert "tasks_changed" in compared.json()["summary"]
     rolled = client.post(
         f"/api/plan-rollback/{filename}/{version_id}", headers=headers_a).json()
+    assert rolled["filename"] == filename
+    assert rolled["version_id"] != version_id
     rolled_acl = auth.get_acl(rolled["filename"])
     assert rolled_acl["owner"] == "alice"
     assert "carol" in rolled_acl.get("viewers", [])

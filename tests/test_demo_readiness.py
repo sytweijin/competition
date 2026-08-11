@@ -27,8 +27,28 @@ def test_demo_ui_has_full_showcase_flow():
     assert "function projectDays()" in js
     assert "daily*30" not in js
     assert "data-delete" in js
+    assert "excel:'xlsx'" in js
+    assert "Content-Disposition" in js
     assert "关键路径" in js and "紧急" in js and "浮动充足" in js
     assert ".gantt-track i.blocked" in css
+    assert html.count('data-tab="') == 7
+    assert 'data-tab="knowledge"' not in html
+    assert 'data-tab="schedule"' in html
+    assert 'data-tab="collaboration"' in html
+    assert "function alertPanelHtml" in js
+    assert "function alertMessages" in js
+    assert "warnings.map(esc).join('；')" not in js
+    assert ".compact-alert" in css
+    assert "small-project-mode" in js
+    assert "is-minimal-volunteer" in js
+    assert "（志愿者）" in js
+    assert ".small-project-mode .member-row .member-manager" in css
+    assert 'id="defenseTabBtn"' in html
+    assert "function shouldShowDefense" in js
+    assert "function renderDefensePanel" in js
+    assert "/api/interview/materials" in js
+    assert "material_text:ivChat.materialText" in js
+    assert ".defense-materials" in css
 
 
 def test_demo_main_flow_and_three_exports():
@@ -78,3 +98,8 @@ def test_demo_main_flow_and_three_exports():
         response = client.post(f"/api/export/{format_name}", json=final_plan)
         assert response.status_code == 200
         assert response.content
+
+    excel_response = client.post("/api/export/excel", json=final_plan)
+    assert excel_response.status_code == 200
+    assert "plan_export.xlsx" in excel_response.headers["content-disposition"]
+    assert excel_response.content.startswith(b"PK")

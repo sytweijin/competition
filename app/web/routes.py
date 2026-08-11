@@ -8,7 +8,6 @@ import logging
 import re
 from collections import defaultdict
 from datetime import date, datetime
-from app import config
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
@@ -30,14 +29,14 @@ from app.services.project_service import (
     update_volunteer_pool, update_task_participants, workload_snapshot,
 )
 from app.services.plan_io import (
-    parse_task_file, plan_to_csv, plan_to_excel, plan_to_ics,
+    parse_task_file,
 )
 from app.services.audit_store import (
-    list_versions, load_version, rollback_plan, save_version,
+    compare_versions, list_version_tree, list_versions, rollback_plan, save_version,
 )
 from app.services.auth_store import (
     accessible_filenames, add_editor, auth_enabled, can_read, can_write,
-    create_session, get_acl, set_acl, verify_login,
+    get_acl, set_acl,
 )
 from app.services.collab import (
     knowledge_search, org_review, reminders, save_experience,
@@ -45,55 +44,17 @@ from app.services.collab import (
 from app.services.knowledge_agent import ask as agent_ask_service
 from app.services.notifier import notify_reminders
 from app.services.share_store import create_share, get_share_filename
-from app.services.tools import call_tool, list_tools
+from app.web.routers.exports import router as export_router
+from app.web.routers.members import router as member_router
+from app.web.routers.system import router as system_router
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-
-@router.get("/tools")
-async def tools_list():
-    return {"tools": list_tools()}
-
-
-class ToolCallRequest(BaseModel):
-    tool: str
-    args: dict = Field(default_factory=dict)
-    plan: FullPlan | None = None
-
-
-@router.post("/tools/call")
-async def tools_call(request: Request, req: ToolCallRequest):
-    try:
-        username = getattr(request.state, "username", None)
-        return {"ok": True, "result": call_tool(req.tool, req.args, req.plan, username=username)}
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-class LoginRequest(BaseModel):
-    username: str = "admin"
-    password: str
-
-
-@router.get("/auth/status")
-async def auth_status():
-    return {"enabled": auth_enabled()}
-
-
-@router.post("/auth/login")
-async def auth_login(req: LoginRequest):
-    if not auth_enabled():
-        raise HTTPException(status_code=400, detail="鉴权未启用")
-    if not verify_login(req.username, req.password):
-        raise HTTPException(status_code=401, detail="密码错误")
-    return {"token": create_session(req.username), "username": req.username}
-
-
-@router.get("/auth/me")
-async def auth_me(request: Request):
-    """返回当前登录用户。"""
-    return {"username": getattr(request.state, "username", None)}
+# 聚合按业务域拆分的子路由；保留本模块作为外部兼容入口。
+router.include_router(system_router)
+router.include_router(export_router)
+router.include_router(member_router)
 
 
 @router.post("/analyze-files")
@@ -119,6 +80,41 @@ async def analyze_files(files: list[UploadFile] = File(...), background: str = F
     # 避免“文件分析 LLM + 任务拆解 LLM”串行造成一分钟以上等待。
     analysis = analyze_locally(merged)
     return {"files": metadata, "errors": errors, "analysis": analysis}
+
+
+@router.post("/interview/materials")
+async def analyze_interview_materials(files: list[UploadFile] = File(...)):
+    """临时提取答辩稿/PPT文字，仅返回本次模拟使用，不写入项目记录。"""
+    from app.file_analysis import MAX_FILE_SIZE, extract_text
+
+    allowed = {".txt", ".md", ".pdf", ".docx", ".pptx"}
+    texts, metadata, errors = [], [], []
+    for upload in files[:4]:
+        filename = upload.filename or "答辩材料"
+        suffix = Path(filename).suffix.lower()
+        if suffix not in allowed:
+            errors.append({"name": filename, "error": "仅支持 PPTX、PDF、Word、TXT、Markdown"})
+            continue
+        raw = await upload.read(MAX_FILE_SIZE + 1)
+        if len(raw) > MAX_FILE_SIZE:
+            errors.append({"name": filename, "error": "文件超过 15MB 限制"})
+            continue
+        try:
+            text = await asyncio.to_thread(extract_text, filename, raw)
+            texts.append(f"【{filename}】\n{text}")
+            metadata.append({"name": filename, "size": len(raw), "status": "ok"})
+        except ValueError as exc:
+            errors.append({"name": filename, "error": str(exc)})
+    if not texts:
+        raise HTTPException(
+            status_code=400,
+            detail=errors[0]["error"] if errors else "没有可分析的答辩材料",
+        )
+    return {
+        "files": metadata,
+        "errors": errors,
+        "material_text": "\n\n".join(texts)[:50000],
+    }
 
 
 @router.post("/import/tasks")
@@ -504,6 +500,8 @@ async def save_plan(
         filename,
         action="保存",
         summary="保存方案",
+        parent_version_id=base_version or None,
+        parent_filename=filename if base_version else None,
     )
     try:
         save_experience(plan)
@@ -531,27 +529,78 @@ async def list_plans(request: Request, q: str = ""):
 
 @router.get("/plan-history/{filename}")
 async def plan_history(request: Request, filename: str):
-    """列出某个方案的版本变更记录。"""
+    """返回某个方案及相似任务方案的版本树。"""
     filepath = _safe_filepath(filename)
     if not filepath.exists():
         raise HTTPException(status_code=404, detail="Plan not found")
     username = getattr(request.state, "username", None)
     if auth_enabled() and not can_read(username, filename):
         raise HTTPException(status_code=403, detail="无权查看该方案")
-    return {"versions": list_versions(filename)}
+    allowed = None
+    if auth_enabled() and username != "admin":
+        allowed = accessible_filenames(username)
+    tree = list_version_tree(filename, allowed_filenames=allowed)
+    # versions 保留旧接口字段，供旧前端和第三方调用继续使用。
+    tree["versions"] = list_versions(filename)
+    return tree
+
+
+@router.get("/plan-compare")
+async def plan_compare(
+    request: Request,
+    left_filename: str,
+    left_version: str,
+    right_filename: str,
+    right_version: str,
+):
+    """比较同一版本树中任意两个版本。"""
+    left_path = _safe_filepath(left_filename)
+    right_path = _safe_filepath(right_filename)
+    if not left_path.exists() or not right_path.exists():
+        raise HTTPException(status_code=404, detail="Plan not found")
+    username = getattr(request.state, "username", None)
+    if auth_enabled() and (
+        not can_read(username, left_filename)
+        or not can_read(username, right_filename)
+    ):
+        raise HTTPException(status_code=403, detail="无权比较该方案")
+    try:
+        return compare_versions(
+            left_filename,
+            left_version,
+            right_filename,
+            right_version,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/plan-rollback/{filename}/{version_id}")
-async def plan_rollback(request: Request, filename: str, version_id: str):
-    """回滚到指定版本，并生成一个新的方案文件。"""
+async def plan_rollback(
+    request: Request,
+    filename: str,
+    version_id: str,
+    source_filename: str = "",
+):
+    """回滚到指定版本，并在当前方案的版本树中创建分支。"""
     filepath = _safe_filepath(filename)
     if not filepath.exists():
         raise HTTPException(status_code=404, detail="Plan not found")
     username = getattr(request.state, "username", None)
     if auth_enabled() and not can_write(username, filename):
         raise HTTPException(status_code=403, detail="无权回滚该方案")
+    source_name = source_filename or filename
+    source_path = _safe_filepath(source_name)
+    if not source_path.exists():
+        raise HTTPException(status_code=404, detail="Source plan not found")
+    if auth_enabled() and not can_read(username, source_name):
+        raise HTTPException(status_code=403, detail="无权读取来源版本")
     try:
-        new_filename, data = rollback_plan(filename, version_id)
+        new_filename, data = rollback_plan(
+            filename,
+            version_id,
+            source_filename=source_name,
+        )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     original_acl = get_acl(filename)
@@ -561,7 +610,12 @@ async def plan_rollback(request: Request, filename: str, version_id: str):
         editors=original_acl.get("editors") or [],
         viewers=original_acl.get("viewers") or [],
     )
-    return {"filename": new_filename, "plan": data}
+    versions = list_versions(new_filename)
+    return {
+        "filename": new_filename,
+        "plan": data,
+        "version_id": versions[0]["version_id"] if versions else None,
+    }
 
 
 class ShareRequest(BaseModel):
@@ -671,14 +725,29 @@ class InterviewRequest(BaseModel):
     plan: PlanOutput
     qa_matrix: QAOutput
     user_requirements: str = ""
+    project_context: str = ""
+    material_text: str = ""
+    material_names: list[str] = Field(default_factory=list)
 
 
 @router.post("/interview")
 def interview_sim(req: InterviewRequest):
-    """B1: 答辩模拟 - 根据计划和QA矩阵生成模拟答辩问题。"""
+    """基于实际答辩要求和用户提交材料生成模拟问题。"""
     agent = InterviewSimAgent()
-    questions = agent.run(plan=req.plan, qa_matrix=req.qa_matrix, user_requirements=req.user_requirements)
-    return {"questions": questions}
+    result = agent.run(
+        plan=req.plan,
+        qa_matrix=req.qa_matrix,
+        user_requirements=req.user_requirements,
+        project_context=req.project_context,
+        material_text=req.material_text,
+        material_names=req.material_names,
+    )
+    questions = [
+        line.strip().lstrip("-• ")
+        for line in str(result or "").splitlines()
+        if line.strip()
+    ]
+    return {"questions": questions or ["请概括这次答辩最希望评委理解的核心观点。"]}
 
 
 class InterviewChatRequest(BaseModel):
@@ -688,6 +757,9 @@ class InterviewChatRequest(BaseModel):
     history: list[dict] = Field(default_factory=list)
     mode: str = "answer"
     user_requirements: str = ""
+    project_context: str = ""
+    material_text: str = ""
+    material_names: list[str] = Field(default_factory=list)
 
 
 @router.post("/interview/chat")
@@ -701,6 +773,9 @@ def interview_chat(req: InterviewChatRequest):
         history=req.history,
         mode=req.mode,
         user_requirements=req.user_requirements,
+        project_context=req.project_context,
+        material_text=req.material_text,
+        material_names=req.material_names,
     )
     return {"reply": reply}
 
@@ -759,72 +834,6 @@ def recompute_plan(req: FullPlan):
         report=report,
         volunteer_pool=req.volunteer_pool,
     )
-
-@router.post("/export/docx")
-def export_docx(plan: FullPlan):
-    """导出当前计划为 Word 文档。"""
-    from app.web.exporters import plan_to_docx
-    data = plan_to_docx(plan)
-    return Response(
-        content=data,
-        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={"Content-Disposition": 'attachment; filename="plan_report.docx"'},
-    )
-
-
-@router.post("/export/pdf")
-def export_pdf(plan: FullPlan):
-    """导出当前计划为 PDF 文档。"""
-    from app.web.exporters import plan_to_pdf
-    data = plan_to_pdf(plan)
-    return Response(
-        content=data, media_type="application/pdf",
-        headers={"Content-Disposition": 'attachment; filename="plan_report.pdf"'},
-    )
-
-
-@router.post("/export/markdown")
-def export_current_plan(plan: FullPlan):
-    """导出当前计划为 Markdown（前端「导出」按钮调用，无需先保存）。"""
-    md = _plan_to_markdown(plan.model_dump())
-    return Response(
-        content=md, media_type="text/markdown; charset=utf-8",
-        headers={"Content-Disposition": 'attachment; filename="plan_report.md"'},
-    )
-
-@router.post("/export/excel")
-def export_excel(plan: FullPlan):
-    """Export Excel workbook with tasks/members/matrix/timeline/participants/review."""
-    try:
-        content = plan_to_excel(plan)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
-    return Response(
-        content=content,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": 'attachment; filename="plan_export.xlsx"'},
-    )
-
-
-@router.post("/export/csv")
-def export_csv(plan: FullPlan):
-    """Export task CSV."""
-    return Response(
-        content=plan_to_csv(plan),
-        media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": 'attachment; filename="plan_tasks.csv"'},
-    )
-
-
-@router.post("/export/ics")
-def export_ics(plan: FullPlan):
-    """Export ICS calendar."""
-    return Response(
-        content=plan_to_ics(plan),
-        media_type="text/calendar; charset=utf-8",
-        headers={"Content-Disposition": 'attachment; filename="plan_calendar.ics"'},
-    )
-
 
 @router.get("/plans/{filename}/export")
 async def export_plan(request: Request, filename: str, fmt: str = "markdown"):
@@ -1008,126 +1017,3 @@ def _plan_to_markdown(data: dict) -> str:
         lines.append("")
 
     return "\n".join(lines)
-
-
-
-class MemberEditRequest(BaseModel):
-    plan: FullPlan
-    removed_members: list[str] = Field(default_factory=list, description="要移除的成员名")
-    updated_members: dict[str, float] = Field(default_factory=dict, description="更新的每日工时 {姓名: 新工时}")
-    member_roles: dict[str, str] = Field(default_factory=dict, description="更新的角色 {姓名: 角色}")
-    member_managers: dict[str, str] = Field(default_factory=dict, description="更新的上级 {姓名: 上级姓名}")
-    added_members: list = Field(default_factory=list, description="新加入的成员 [{name, daily_available_hours}, ...]")
-
-
-@router.post("/edit-members", response_model=FullPlan)
-def edit_members_endpoint(req: MemberEditRequest):
-    """处理成员变动：删除成员、修改每日工时，然后重算 Matcher + Timeline。"""
-    try:
-        from app.agents.scoring import assign_with_balance
-        from app.agents.timeline import TimelineAgent
-
-        fp = req.plan
-        # Update members
-        new_members = []
-        import math
-        remaining = max(1, (fp.input.deadline - config.today()).days)
-        for m in fp.input.members:
-            if m.name in req.removed_members:
-                continue
-            if m.name in req.updated_members:
-                new_daily = max(0.5, req.updated_members[m.name])
-                m = m.model_copy(update={
-                    "daily_available_hours": new_daily,
-                    "available_hours": max(new_daily, new_daily * remaining),
-                })
-            if m.name in req.member_roles:
-                role = (req.member_roles[m.name] or "执行成员").strip()
-                if role:
-                    m = m.model_copy(update={"role": role})
-            if m.name in req.member_managers:
-                m = m.model_copy(update={"manager": (req.member_managers[m.name] or "").strip()})
-            new_members.append(m)
-
-        for a in req.added_members:
-            nm = a.get("name", "").strip()
-            if not nm:
-                continue
-            dh = max(0.5, float(a.get("daily_available_hours", 4)))
-            sk = a.get("skill_tags", [])
-            if isinstance(sk, str):
-                sk = [t.strip() for t in sk.split(",") if t.strip()]
-            new_m = TeamMember(
-                name=nm, role=(a.get("role") or "执行成员"),
-                manager=(a.get("manager") or ""),
-                daily_available_hours=dh,
-                available_hours=max(dh, dh * remaining),
-                skill_tags=sk if sk else [],
-            )
-            new_members.append(new_m)
-        if not new_members:
-            raise HTTPException(status_code=400, detail="不能删除所有成员")
-
-        new_input = fp.input.model_copy(update={"members": new_members})
-
-        # Recompute matcher with new members
-        qa_matrix = assign_with_balance(fp.plan, new_members)
-
-        # 将新的分工结果写回 plan tasks（与 coordinator 同步）
-        by_task = {a.task_id: a for a in qa_matrix.assignments}
-        updated_tasks = [
-            t.model_copy(update={
-                'assignee_id': by_task[t.id].presenter if t.id in by_task else None,
-                'collaborator_ids': (
-                    ([by_task[t.id].qa_primary] if by_task[t.id].qa_primary else [])
-                    + list(by_task[t.id].qa_support or [])
-                ) if t.id in by_task else []
-            }) for t in fp.plan.tasks
-        ]
-        fp = fp.model_copy(update={'plan': fp.plan.model_copy(update={'tasks': updated_tasks})})
-
-        # Recompute timeline
-        assignments = {}
-        for a in qa_matrix.assignments:
-            people = [a.presenter] if a.presenter else []
-            if a.qa_primary and a.qa_primary not in people:
-                people.append(a.qa_primary)
-            for s in (a.qa_support or []):
-                if s not in people:
-                    people.append(s)
-            assignments[a.task_id] = people
-
-        timeline = TimelineAgent().run(
-            plan=fp.plan,
-            deadline=fp.input.deadline.isoformat(),
-            assignments=assignments,
-            members=new_members,
-        )
-
-        # 成员变动后自动重生成报告
-        try:
-            from app.agents.reporter import ReporterAgent
-            report = ReporterAgent().run(plan=fp.plan, timeline=timeline, qa_matrix=qa_matrix)
-        except Exception as exc:
-            logger.exception("reporter rerun failed after member edit")
-            report = fp.report.model_copy(update={})
-
-        
-        # 基于实际分工重算详细风险提示
-        from app.coordinator import Coordinator
-        detailed_risk = Coordinator._build_risk_note(fp.plan, timeline, qa_matrix, new_members, fp.input.deadline)
-        return FullPlan(
-            input=new_input,
-            plan=fp.plan,
-            timeline=timeline,
-            qa_matrix=qa_matrix,
-            report=report.model_copy(update={"risk_note": detailed_risk}),
-            volunteer_pool=fp.volunteer_pool,
-        )
-    except HTTPException:
-        raise
-
-
-@router.get("/health")
-async def health():
-    return {"status": "ok"}

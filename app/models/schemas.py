@@ -110,6 +110,11 @@ class AssignmentInput(BaseModel):
         """小型项目人固定，必须至少 1 名成员；大型项目先拆任务后可再补骨干。"""
         if self.project_mode != "large_project" and not self.members:
             raise ValueError("至少需要 1 名有姓名的团队成员")
+        if self.project_mode != "large_project":
+            self.members = [
+                member.model_copy(update={"manager": ""})
+                for member in self.members
+            ]
         return self
 
 

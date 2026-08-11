@@ -240,6 +240,29 @@ def test_interview_sim_with_requirements():
     assert isinstance(result, str)
 
 
+def test_interview_sim_uses_defense_material_instead_of_task_status():
+    plan = PlanOutput(tasks=[SubTask(id="T1", name="开发")], summary="test")
+    qa = QAOutput(assignments=[])
+    calls = []
+
+    class MaterialLLM(FakeLLMClient):
+        def chat_text(self, system_prompt, user_prompt, temperature=0.7):
+            calls.append(user_prompt)
+            return "【高】样本量为什么足以支撑这个结论？"
+
+    result = InterviewSimAgent(llm=MaterialLLM()).run(
+        plan=plan,
+        qa_matrix=qa,
+        project_context="课程要求进行现场答辩",
+        material_text="第4页：调研覆盖120名学生，满意度为82%。",
+        material_names=["答辩PPT.pptx"],
+    )
+    assert "样本量" in result
+    assert "调研覆盖120名学生" in calls[0]
+    assert "答辩PPT.pptx" in calls[0]
+    assert "任务完成状态" in calls[0]
+
+
 # ──────────── validate_plan ────────────
 
 def test_validate_plan_cycle_detection():
