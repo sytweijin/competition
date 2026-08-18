@@ -133,7 +133,7 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
                     successors[dep].append(t.id)
                     predecessors[t.id].append(dep)
 
-        # 拓扑排序（Kahn）
+        # 拓扑排序（Kahn）：先只按用户任务依赖得到稳定顺序。
         in_degree = {t.id: len(predecessors[t.id]) for t in tasks}
         queue = deque(sorted(tid for tid, d in in_degree.items() if d == 0))
         topo_order: list[str] = []
@@ -155,6 +155,37 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
                 predecessors[tid] = []
                 successors[tid] = []
             topo_order.extend(remaining)
+
+        # 把“分工”转换成排期约束：同一主负责人不能同时执行两项任务。
+        # 资源边严格沿上一轮拓扑顺序添加，因此不会反向制造依赖环；不同负责人
+        # 的独立任务仍可并行。这样甘特图不再只是任务依赖图，而会真正体现人数
+        # 和上一环节确定的负责人。
+        resource_edges = 0
+        last_task_by_owner: dict[str, str] = {}
+        for tid in topo_order:
+            assigned = assignments.get(tid, [])
+            owner = assigned[0] if assigned else (task_map[tid].assignee_id or "")
+            if not owner:
+                continue
+            previous = last_task_by_owner.get(owner)
+            if previous and previous not in predecessors[tid]:
+                successors[previous].append(tid)
+                predecessors[tid].append(previous)
+                resource_edges += 1
+            last_task_by_owner[owner] = tid
+
+        if resource_edges:
+            in_degree = {tid: len(predecessors[tid]) for tid in task_map}
+            queue = deque(sorted(tid for tid, degree in in_degree.items()
+                                 if degree == 0))
+            topo_order = []
+            while queue:
+                tid = queue.popleft()
+                topo_order.append(tid)
+                for successor in sorted(successors[tid]):
+                    in_degree[successor] -= 1
+                    if in_degree[successor] == 0:
+                        queue.append(successor)
 
         # 工时→工期折算：以「半天」为最小粒度（half-day 单位，1 个单位 = 0.5 天）
         # 内部 CPM 全部用 half-day 整数运算，避免浮点误差。
@@ -313,6 +344,8 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
         reasoning = (
             f"使用关键路径法(CPM)计算，以半天为最小排期粒度，跳过周末。"
             f"共 {len(tasks)} 个任务，总工期 {project_days} 工作日。"
+            f"已依据主负责人增加 {resource_edges} 条资源顺序约束，"
+            f"避免同一负责人承担的任务不合理重叠。"
             f"{cap_desc}"
             f"关键路径：{' -> '.join(critical) or '无'}。"
             f"非关键任务有浮动天数，可灵活调整。{risk}"

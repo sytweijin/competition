@@ -11,7 +11,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from app.config import MEMORY_DIR
@@ -43,7 +43,9 @@ from app.services.collab import (
 )
 from app.services.knowledge_agent import ask as agent_ask_service
 from app.services.notifier import notify_reminders
-from app.services.share_store import create_share, get_share_filename
+from app.services.share_store import (
+    create_share, get_share_entry, share_status,
+)
 from app.web.routers.exports import router as export_router
 from app.web.routers.members import router as member_router
 from app.web.routers.system import router as system_router
@@ -57,6 +59,13 @@ router.include_router(export_router)
 router.include_router(member_router)
 
 
+def _file_status(text: str) -> str:
+    """按提取结果给文件一个明确的用户可读状态。"""
+    if text.startswith("[图片文件]") or text.startswith("[音频文件]"):
+        return "needs_confirmation"
+    return "ok"
+
+
 @router.post("/analyze-files")
 async def analyze_files(files: list[UploadFile] = File(...), background: str = Form("")):
     """提取文件文字后汇总分析；仅记录文件元数据，不落盘、不输出原文日志。"""
@@ -65,14 +74,26 @@ async def analyze_files(files: list[UploadFile] = File(...), background: str = F
     for upload in files[:8]:
         raw = await upload.read(MAX_FILE_SIZE + 1)
         if len(raw) > MAX_FILE_SIZE:
-            errors.append({"name": upload.filename, "error": "文件超过 15MB 限制"})
+            errors.append({
+                "name": upload.filename,
+                "status": "too_large",
+                "error": "文件超过 15MB 限制",
+            })
             continue
         try:
             text = await asyncio.to_thread(extract_text, upload.filename or "upload", raw)
             texts.append(text)
-            metadata.append({"name": upload.filename, "size": len(raw), "status": "ok"})
+            metadata.append({
+                "name": upload.filename,
+                "size": len(raw),
+                "status": _file_status(text),
+            })
         except ValueError as exc:
-            errors.append({"name": upload.filename, "error": str(exc)})
+            errors.append({
+                "name": upload.filename,
+                "status": "unreadable",
+                "error": str(exc),
+            })
     if not texts:
         raise HTTPException(status_code=400, detail=errors[0]["error"] if errors else "没有可分析文件")
     merged = (background + "\n" + "\n".join(texts))[:60000]
@@ -93,18 +114,34 @@ async def analyze_interview_materials(files: list[UploadFile] = File(...)):
         filename = upload.filename or "答辩材料"
         suffix = Path(filename).suffix.lower()
         if suffix not in allowed:
-            errors.append({"name": filename, "error": "仅支持 PPTX、PDF、Word、TXT、Markdown"})
+            errors.append({
+                "name": filename,
+                "status": "unreadable",
+                "error": "仅支持 PPTX、PDF、Word、TXT、Markdown",
+            })
             continue
         raw = await upload.read(MAX_FILE_SIZE + 1)
         if len(raw) > MAX_FILE_SIZE:
-            errors.append({"name": filename, "error": "文件超过 15MB 限制"})
+            errors.append({
+                "name": filename,
+                "status": "too_large",
+                "error": "文件超过 15MB 限制",
+            })
             continue
         try:
             text = await asyncio.to_thread(extract_text, filename, raw)
             texts.append(f"【{filename}】\n{text}")
-            metadata.append({"name": filename, "size": len(raw), "status": "ok"})
+            metadata.append({
+                "name": filename,
+                "size": len(raw),
+                "status": _file_status(text),
+            })
         except ValueError as exc:
-            errors.append({"name": filename, "error": str(exc)})
+            errors.append({
+                "name": filename,
+                "status": "unreadable",
+                "error": str(exc),
+            })
     if not texts:
         raise HTTPException(
             status_code=400,
@@ -140,9 +177,10 @@ def create_draft(req: DraftRequest):
 
 @router.post("/confirm-draft", response_model=FullPlan)
 def confirm_draft(req: ConfirmDraftRequest):
-    """确认拆解后才自动分工。"""
+    """确认拆解后使用确定性规则快速完成分工与风险检查。"""
     try:
-        return confirm_draft_service(req.input, req.plan)
+        return confirm_draft_service(
+            req.input, req.plan, use_ai_reflection=False)
     except ProjectServiceError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -632,19 +670,32 @@ async def create_share_link(request: Request, req: ShareRequest):
     if auth_enabled() and not can_write(username, req.filename):
         raise HTTPException(status_code=403, detail="无权分享该方案")
     token = create_share(req.filename)
-    return {"token": token}
+    return {"token": token, "permission": "read", "expires_at": None}
 
 
 @router.get("/share/{token}")
 async def open_share(token: str):
-    """按只读分享 token 读取方案。"""
-    filename = get_share_filename(token)
-    if not filename:
-        raise HTTPException(status_code=404, detail="Share link invalid")
+    """按有效分享 token 读取方案，并通过响应头返回权限和到期时间。"""
+    entry = get_share_entry(token)
+    if not entry:
+        status = share_status(token)
+        if status in ("expired", "revoked"):
+            raise HTTPException(status_code=410, detail="分享链接已过期或已撤销")
+        raise HTTPException(status_code=404, detail="分享链接无效")
+    filename = entry["filename"]
     filepath = _safe_filepath(filename)
     if not filepath.exists():
         raise HTTPException(status_code=404, detail="Plan not found")
-    return json.loads(filepath.read_text(encoding="utf-8"))
+    headers = {
+        "X-Share-Created-At": str(entry["created_at"] or ""),
+        "Cache-Control": "no-store",
+    }
+    if entry["expires_at"] is not None:
+        headers["X-Share-Expires-At"] = str(entry["expires_at"])
+    return JSONResponse(
+        content=json.loads(filepath.read_text(encoding="utf-8")),
+        headers=headers,
+    )
 
 
 class KnowledgeRequest(BaseModel):

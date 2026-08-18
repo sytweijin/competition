@@ -7,10 +7,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app import config
-from app.agents.reporter import ReporterAgent
 from app.agents.scoring import assign_with_balance
 from app.agents.timeline import TimelineAgent
-from app.coordinator import Coordinator
 from app.models.schemas import FullPlan, TeamMember
 
 logger = logging.getLogger(__name__)
@@ -133,28 +131,14 @@ def edit_members_endpoint(req: MemberEditRequest):
         members=new_members,
     )
 
-    try:
-        report = ReporterAgent().run(
-            plan=updated_plan,
-            timeline=timeline,
-            qa_matrix=qa_matrix,
-        )
-    except Exception:
-        logger.exception("reporter rerun failed after member edit")
-        report = fp.report.model_copy(update={})
-
-    detailed_risk = Coordinator._build_risk_note(
-        updated_plan,
-        timeline,
-        qa_matrix,
-        new_members,
-        fp.input.deadline,
-    )
     return FullPlan(
         input=new_input,
         plan=updated_plan,
         timeline=timeline,
         qa_matrix=qa_matrix,
-        report=report.model_copy(update={"risk_note": detailed_risk}),
+        report=fp.report.model_copy(update={
+            "summary": "", "timeline_section": "",
+            "qa_matrix_section": "", "risk_note": "",
+        }),
         volunteer_pool=fp.volunteer_pool,
     )

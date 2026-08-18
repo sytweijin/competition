@@ -131,7 +131,7 @@ def test_apply_manual_assignment_persists_module_assignees():
     )
 
 
-def test_volunteer_role_member_can_claim_large_project_module():
+def test_legacy_volunteer_role_member_is_not_used_as_module_owner():
     fp = _large_full_plan()
     volunteer = TeamMember(
         name="Volunteer A", role="志愿者 / 外部协作者",
@@ -142,17 +142,11 @@ def test_volunteer_role_member_can_claim_large_project_module():
             "members": [*fp.input.members, volunteer],
         }),
     })
-    updated = apply_manual_assignment(ManualAssignmentRequest(
-        plan=fp,
-        module_assignees={"M1": "Volunteer A"},
-    ))
-    module = next(m for m in updated.plan.modules if m.id == "M1")
-    assert module.assignee_id == "Volunteer A"
-    assert all(
-        task.assignee_id == "Volunteer A"
-        for task in updated.plan.tasks
-        if task.module_id == "M1" and task.status != "completed"
-    )
+    with pytest.raises(ProjectServiceError):
+        apply_manual_assignment(ManualAssignmentRequest(
+            plan=fp,
+            module_assignees={"M1": "Volunteer A"},
+        ))
 
 
 def test_apply_manual_assignment_rejects_unknown_module():

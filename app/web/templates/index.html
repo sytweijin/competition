@@ -6,13 +6,13 @@
   <title>协作分工智能体 · 项目工作台</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <style>.hidden{display:none!important}</style>
-  <link rel="stylesheet" href="/static/style.css?v=5.48">
+  <link rel="stylesheet" href="/static/style.css?v=5.76">
 </head>
 <body>
 <header class="app-header">
   <div class="header-brand">
     <div class="brand-mark"><svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><rect x="4.5" y="4.5" width="23" height="23" rx="7" stroke="currentColor" stroke-width="1.5" opacity=".32"/><circle cx="11.5" cy="12" r="2.5" fill="currentColor"/><circle cx="20.5" cy="11" r="2.5" fill="currentColor" opacity=".85"/><circle cx="16" cy="20.5" r="2.5" fill="currentColor" opacity=".62"/><path d="M13 13.6 15.2 18M19.4 13l-2 5M13.8 12h4.4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" opacity=".5"/></svg></div>
-    <div><h1>协作分工智能体</h1><p>从项目要求到可执行分工方案</p></div>
+    <div><h1>协作分工智能体</h1></div>
   </div>
   <div class="header-tools">
     <button id="historyBtn" class="btn btn-ghost">版本树</button>
@@ -20,6 +20,10 @@
     <button id="exportMdBtn" class="btn btn-ghost" disabled>导出MD</button>
     <button id="exportDocxBtn" class="btn btn-ghost" disabled>导出Word</button>
     <button id="exportPdfBtn" class="btn btn-ghost" disabled>导出PDF</button>
+    <button id="exportExcelBtn" class="btn btn-ghost" disabled>导出Excel</button>
+    <button id="exportCsvBtn" class="btn btn-ghost" disabled>导出CSV</button>
+    <button id="exportIcsBtn" class="btn btn-ghost" disabled>导出ICS</button>
+    <button id="shareBtn" class="btn btn-ghost" disabled>复制只读链接</button>
   </div>
 </header>
 <nav class="step-nav" id="stepNav"></nav>
@@ -28,7 +32,7 @@
   <section id="configView" class="view config-view">
     <div class="config-card">
       <div class="config-head">
-        <div><span class="eyebrow">PROJECT SETUP</span><h2>项目配置</h2></div>
+        <div><h2>项目配置</h2></div>
         <div class="config-actions"><button type="button" id="demoCaseBtn" class="btn btn-ghost">载入演示案例</button><button type="button" id="importFileBtn" class="btn btn-ghost">导入任务文件</button><input id="importFile" type="file" hidden accept=".csv,.xlsx,.xlsm"></div>
       </div>
       <form id="projectForm" class="config-form">
@@ -59,13 +63,17 @@
           <div class="config-field span-2 upload-box" id="uploadBox">
             <input id="files" type="file" multiple hidden accept=".pdf,.docx,.txt,.md,.xlsx,.pptx,.png,.jpg,.jpeg,.webp,.mp3,.wav,.m4a">
             <button type="button" id="chooseFileBtn" class="btn btn-ghost">上传任务要求文件</button>
-            <span class="upload-hint">PDF / Word / TXT / Markdown / Excel / PowerPoint</span>
             <div id="fileList" class="file-list"></div>
           </div>
         </div>
-        <button id="generateBtn" class="btn btn-primary btn-lg" type="submit">
-          <span>生成任务拆解</span><small>文件将在后台自动分析</small>
-        </button>
+        <div class="generation-actions">
+          <button id="generateBtn" class="btn btn-primary btn-lg" type="submit">
+            <span>AI 生成任务拆解</span>
+          </button>
+          <button id="quickGenerateBtn" class="btn btn-ghost btn-lg" type="button">
+            <span>快速生成</span>
+          </button>
+        </div>
       </form>
     </div>
   </section>
@@ -91,6 +99,18 @@
     </div>
   </section>
   <section id="finalView" class="view hidden">
+    <div class="audience-switcher" aria-label="选择查看角色">
+      <div><strong>按角色查看</strong><span>同一方案，不同关注重点</span></div>
+      <div class="audience-controls">
+        <div class="audience-role-buttons">
+          <button type="button" class="active" data-audience-role="manager">负责人</button>
+          <button type="button" data-audience-role="member">成员</button>
+          <button type="button" data-audience-role="reviewer">教师 / 评委</button>
+        </div>
+        <select id="audienceMemberPicker" class="hidden" aria-label="选择成员"></select>
+      </div>
+    </div>
+    <section id="audienceSummary" class="audience-summary" aria-live="polite"></section>
     <div class="result-tabs" id="resultTabs">
       <button class="active" data-tab="tasks">任务计划</button>
       <button data-tab="schedule">排期资源</button>
@@ -102,21 +122,21 @@
     </div>
     <div id="resultContent" class="result-content"></div>
     <div class="sticky-action">
-      <div class="final-export-actions"><button id="exportExcelBtn" class="btn btn-ghost">导出Excel</button><button id="exportCsvBtn" class="btn btn-ghost">导出CSV</button><button id="exportIcsBtn" class="btn btn-ghost">导出ICS</button><button id="shareBtn" class="btn btn-ghost">复制只读链接</button></div>
+      <span>导出 / 分享功能已移至顶部工具栏</span>
       <button id="backBoardBtn" class="btn btn-ghost">返回调整</button>
     </div>
   </section>
 </main>
-<button id="assistantBtn" class="assistant-button"><span>✦</span> AI 调整建议</button>
-<aside id="assistantDrawer" class="assistant-drawer hidden">
-  <div class="drawer-head"><div><strong>AI 调整建议</strong><p>询问当前方案，不会自动修改数据</p></div><button id="closeAssistant">×</button></div>
+<button id="assistantBtn" class="assistant-button" type="button" aria-label="打开 AI 调整建议" aria-expanded="false"><span class="assistant-button-icon" aria-hidden="true">✦</span><span class="assistant-button-label">AI 建议</span></button>
+<aside id="assistantDrawer" class="assistant-drawer hidden" role="dialog" aria-label="AI 调整建议">
+  <div class="drawer-head"><div class="drawer-title"><span class="drawer-title-icon" aria-hidden="true">✦</span><div><strong>AI 调整建议</strong><p>分析当前方案，不会自动修改数据</p></div></div><button id="closeAssistant" type="button" aria-label="关闭 AI 调整建议">×</button></div>
   <div id="messages" class="messages"><div class="assistant-msg">你好，我可以分析任务拆解、工时和分工，并给出调整建议。</div></div>
   <form id="chatForm" class="chat-form"><textarea id="chatInput" rows="2" placeholder="例如：摄影任务是不是太集中？"></textarea><button>发送</button></form>
 </aside>
 <div id="modal" class="modal-backdrop hidden"><div class="modal"><div class="modal-head"><h3>方案版本</h3><button id="closeModal">×</button></div><input id="planSearch" class="modal-search" placeholder="搜索方案名称…"><div id="planList"></div></div></div>
 <div id="authModal" class="modal-backdrop hidden"><div class="modal"><div class="modal-head"><h3>需要登录</h3><button id="closeAuthModal">×</button></div><div class="auth-form"><label>用户名<input id="authUsername" type="text" placeholder="输入用户名" value="admin"></label><label>密码<input id="authPassword" type="password" placeholder="输入密码"></label><button id="authLoginBtn" class="btn btn-primary">登录</button></div></div></div>
 <datalist id="participantNames"></datalist>
-<script src="/static/app.js?v=5.48"></script>
-<script src="/static/participants.js?v=5.48"></script>
+<script src="/static/app.js?v=5.76"></script>
+<script src="/static/participants.js?v=5.76"></script>
 </body>
 </html>

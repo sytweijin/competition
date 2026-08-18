@@ -6,6 +6,7 @@ from httpx import AsyncClient, ASGITransport
 import pytest
 
 from app.main import app
+import app.web.routes as web_routes
 
 
 @pytest.fixture
@@ -39,6 +40,84 @@ async def test_health(client):
     resp = await client.get("/api/health")
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
+    assert set(resp.json()["checks"]) == {
+        "storage", "llm_configured", "vision_model_configured",
+        "asr_model_configured",
+    }
+
+
+@pytest.mark.asyncio
+async def test_request_metrics_endpoint_tracks_requests(client):
+    await client.get("/api/health")
+    resp = await client.get("/api/metrics")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] >= 1
+    assert data["errors"] >= 0
+    assert "by_status" in data
+    assert "by_path" in data
+    assert "/api/health" in data["by_path"]
+
+
+@pytest.mark.asyncio
+async def test_analyze_files_returns_per_file_statuses(client, monkeypatch):
+    import app.file_analysis as file_analysis
+
+    monkeypatch.setattr(file_analysis, "MAX_FILE_SIZE", 1024)
+    response = await client.post(
+        "/api/analyze-files",
+        files=[
+            ("files", ("要求.txt", "项目：校园调研报告", "text/plain")),
+            ("files", ("损坏.pdf", b"not-a-pdf", "application/pdf")),
+            ("files", ("超大.txt", b"a" * 2048, "text/plain")),
+            ("files", ("录音.mp3", b"fake-audio", "audio/mpeg")),
+        ],
+        data={"background": ""},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    by_name = {
+        item["name"]: item
+        for item in payload["files"] + payload["errors"]
+    }
+    assert by_name["要求.txt"]["status"] == "ok"
+    assert by_name["损坏.pdf"]["status"] == "unreadable"
+    assert by_name["超大.txt"]["status"] == "too_large"
+    assert by_name["录音.mp3"]["status"] == "needs_confirmation"
+
+
+@pytest.mark.asyncio
+async def test_report_is_generated_only_on_explicit_request(client, monkeypatch):
+    from app.agents.reporter import ReporterAgent
+    from app.models.schemas import ReportOutput
+
+    calls = {"count": 0}
+
+    def fake_report(self, **kwargs):
+        calls["count"] += 1
+        return ReportOutput(summary="按需报告")
+
+    monkeypatch.setattr(ReporterAgent, "run", fake_report)
+    payload = _minimal_full_plan()
+    response = await client.post("/api/report", json=payload)
+    assert response.status_code == 200
+    assert response.json()["report"]["summary"] == "按需报告"
+    assert calls["count"] == 1
+
+    # 已生成报告再次请求时直接复用，不重复调用模型。
+    response2 = await client.post("/api/report", json=response.json())
+    assert response2.status_code == 200
+    assert calls["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_llm_performance_endpoint_has_no_sensitive_payload(client):
+    response = await client.get("/api/performance/llm")
+    assert response.status_code == 200
+    data = response.json()
+    assert "stages" in data
+    assert "prompt" not in str(data).lower()
 
 
 def _full_plan_payload():
@@ -170,8 +249,13 @@ async def test_draft_fast_mode_returns_plan(client):
 
 
 @pytest.mark.asyncio
-async def test_draft_ai_mode_without_key_still_returns_plan(client):
+async def test_draft_ai_mode_without_key_still_returns_plan(client, monkeypatch):
     """use_ai=true 但无 API key 时自动降级为兜底，不抛 500。"""
+    import app.llm.client as llm_client
+
+    monkeypatch.setattr(llm_client, "LLM_API_KEY", "")
+    monkeypatch.setattr(
+        llm_client.LLMClient, "get_shared", lambda: llm_client.LLMClient())
     payload = {"input": _sample_course_input(), "use_ai": True}
     resp = await client.post("/api/draft", json=payload)
     assert resp.status_code == 200
@@ -246,6 +330,25 @@ async def test_confirm_draft_assigns_members(client):
     assert "qa_matrix" in data
     assert "timeline" in data
     assert "report" in data
+
+
+@pytest.mark.asyncio
+async def test_confirm_draft_skips_second_ai_reflection(client, monkeypatch):
+    """交互式确认分工不应再等待第二次 AI 复盘。"""
+    captured = {}
+
+    def fake_confirm(inp, plan, *, use_ai_reflection=True):
+        captured["use_ai_reflection"] = use_ai_reflection
+        raise web_routes.ProjectServiceError("captured")
+
+    monkeypatch.setattr(web_routes, "confirm_draft_service", fake_confirm)
+    draft_resp = await client.post(
+        "/api/draft", json={"input": _sample_course_input(), "use_ai": False})
+    resp = await client.post("/api/confirm-draft", json={
+        "input": _sample_course_input(), "plan": draft_resp.json()["plan"]})
+
+    assert resp.status_code == 400
+    assert captured["use_ai_reflection"] is False
 
 
 # ──────────── Workload ────────────

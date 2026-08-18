@@ -1,6 +1,6 @@
 """
 Coordinator 总调度
-负责：编排 Planner -> Matcher -> Timeline -> Reporter -> Reflection 主链路
+负责：编排 Planner -> Matcher -> Timeline 核心主链路
 同时负责：输出校验 + 重试 + 日志
 """
 
@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import logging
 import re
-
 from app.models.schemas import (
     AgentError, AssignmentInput, FullPlan, PlanOutput,
     QAOutput, TimelineOutput, ReportOutput, ReflectionOutput, SubTask, TaskStatus,
@@ -26,8 +25,56 @@ from app.file_analysis import _classify_requirement_unit, _strip_dangling_bracke
 from app.services.duration_estimator import (
     build_duration_context, calibrate_plan_estimates,
 )
+from app.performance import PerformanceTrace, request_trace, stage
 
 logger = logging.getLogger(__name__)
+
+
+def should_reflect(
+    plan: PlanOutput,
+    timeline: TimelineOutput,
+    qa_matrix: QAOutput,
+    total_capacity: float = 0.0,
+    deadline=None,
+) -> tuple[bool, list[str]]:
+    """确定性 Reflection 风险门；返回是否调用 LLM 及触发原因。"""
+    reasons: list[str] = []
+    task_ids = {task.id for task in plan.tasks}
+    assignments = {item.task_id: item for item in qa_matrix.assignments}
+
+    if any(task.id not in assignments or not assignments[task.id].presenter
+           for task in plan.tasks if task.status != TaskStatus.completed):
+        reasons.append("unassigned_task")
+
+    scores = [item.score for item in qa_matrix.assignments
+              if item.task_id in task_ids and item.score > 0]
+    if scores and min(scores) < 0.35:
+        reasons.append("low_skill_match")
+
+    workload = [value for value in (qa_matrix.workload or {}).values()
+                if value > 0]
+    if len(workload) >= 2:
+        avg = sum(workload) / len(workload)
+        if max(workload) > max(avg * 1.6, avg + 4):
+            reasons.append("workload_imbalance")
+
+    total_hours = sum(task.estimated_hours for task in plan.tasks)
+    if total_capacity > 0 and total_hours > total_capacity * 1.1:
+        reasons.append("capacity_overload")
+
+    if len(timeline.critical_path) > 5:
+        reasons.append("long_critical_path")
+
+    if "依赖环" in (timeline.note or "") or "检测到依赖环" in (timeline.reasoning or ""):
+        reasons.append("dependency_cycle")
+
+    if deadline is not None and timeline.total_days > 0:
+        from app.config import today as _today
+        remaining = max(0, (deadline - _today()).days)
+        if timeline.total_days > remaining:
+            reasons.append("deadline_risk")
+
+    return bool(reasons), list(dict.fromkeys(reasons))
 
 
 class Coordinator:
@@ -44,20 +91,32 @@ class Coordinator:
         """执行完整主链路。"""
         logger.info("Coordinator started: %s", inp.course.name)
 
+        trace = PerformanceTrace(task_count=0, member_count=len(inp.members))
+        with request_trace(trace):
+            result = self._run_traced(inp, trace)
+        return result.model_copy(update={"performance": trace.finish()})
+
+    def _run_traced(self, inp: AssignmentInput,
+                    trace: PerformanceTrace) -> FullPlan:
+        """带请求级埋点的完整主链路。"""
+
         # Step 1: Planner
-        plan = self._step_planner(inp)
-        if isinstance(plan, AgentError):
-            logger.warning("Planner LLM failed, use deterministic fallback: %s",
-                           plan.message)
-            plan = (self._fallback_large_project_plan(inp, plan.message)
-                    if inp.project_mode == "large_project"
-                    else self._fallback_plan(inp, plan.message))
-        plan = calibrate_plan_estimates(plan)
-        if inp.project_mode == "large_project":
-            plan = ensure_large_project_structure(plan)
+        with stage("Planner"):
+            plan = self._step_planner(inp)
+            if isinstance(plan, AgentError):
+                logger.warning("Planner LLM failed, use deterministic fallback: %s",
+                               plan.message)
+                plan = (self._fallback_large_project_plan(inp, plan.message)
+                        if inp.project_mode == "large_project"
+                        else self._fallback_plan(inp, plan.message))
+            plan = calibrate_plan_estimates(plan)
+            if inp.project_mode == "large_project":
+                plan = ensure_large_project_structure(plan)
+        trace.task_count = len(plan.tasks)
 
         # Step 2: Matcher（B3：LLM + 确定性评分兜底）
-        qa_matrix = self._step_matcher(plan, inp.members)
+        with stage("Matcher"):
+            qa_matrix = self._step_matcher(plan, inp.members)
 
         # 回填负责人到 plan tasks（与 confirm 路径一致），让风险分析、
         # 前端任务列表和导出文档都能正确显示负责人
@@ -75,7 +134,9 @@ class Coordinator:
             plan = self._sync_module_owners(plan)
 
         # Step 3: Timeline（回填 QA 矩阵的负责人，传入成员信息）
-        timeline = self._step_timeline(plan, inp.deadline.isoformat(), qa_matrix, inp.members)
+        with stage("Timeline"):
+            timeline = self._step_timeline(
+                plan, inp.deadline.isoformat(), qa_matrix, inp.members)
         if isinstance(timeline, AgentError):
             logger.warning("Timeline failed, skip timeline: %s",
                            timeline.message)
@@ -83,25 +144,15 @@ class Coordinator:
                                       total_days=0,
                                       note="Timeline failed: " + timeline.message)
 
-        # Step 4: Reporter — LLM 生成报告正文，风险提示统一用确定性分析
-        # （与 confirm 路径一致，保证两条主链路的风险质量对齐）
-        report = self._step_reporter(plan, timeline, qa_matrix)
-        risk_note = self._build_risk_note(
-            plan, timeline, qa_matrix, inp.members, inp.deadline)
-        if isinstance(report, AgentError):
-            report = ReportOutput(
-                summary=plan.summary,
-                timeline_section=f"共 {len(timeline.tasks)} 项排期，总工期 {timeline.total_days} 天。",
-                qa_matrix_section="\n".join(
-                    f"{a.task_name}：{a.presenter}" for a in qa_matrix.assignments),
-                risk_note=risk_note,
-            )
-        else:
-            report = report.model_copy(update={"risk_note": risk_note})
+        trace.mark_first_useful_result()
 
-        # Step 5: Reflection（C4）
-        total_capacity = sum(m.available_hours for m in inp.members)
-        reflection = self._step_reflection(plan, timeline, qa_matrix, total_capacity)
+        # 核心结果优先：Reporter 仅在用户打开报告页或导出报告时调用；
+        # Reflection 也不再占用首次响应关键路径。保留稳定的 FullPlan schema，
+        # 用空报告明确表示“尚未生成”，而不是伪装成已生成报告。
+        trace.reflection_executed = False
+        trace.reflection_reasons = []
+        trace.reporter_blocks_response = False
+        report = ReportOutput(summary="")
 
         logger.info("Coordinator completed")
         return FullPlan(
@@ -110,7 +161,7 @@ class Coordinator:
             timeline=timeline,
             qa_matrix=qa_matrix,
             report=report,
-            reflection=reflection,
+            reflection=None,
         )
 
     def draft(self, inp: AssignmentInput) -> PlanOutput:
@@ -155,24 +206,40 @@ class Coordinator:
         confirm 阶段用 assign_with_balance 做负载均衡微调——
         保留 Planner 的初始分配，只在负载严重不均时搬运负责人。
         """
+        trace = PerformanceTrace(
+            task_count=len(plan.tasks), member_count=len(inp.members))
+        with request_trace(trace):
+            result = self._confirm_traced(
+                inp, plan, use_ai_reflection=use_ai_reflection, trace=trace)
+        return result.model_copy(update={"performance": trace.finish()})
+
+    def _confirm_traced(self, inp: AssignmentInput, plan: PlanOutput, *,
+                        use_ai_reflection: bool,
+                        trace: PerformanceTrace) -> FullPlan:
         if inp.project_mode == "large_project":
             plan = ensure_large_project_structure(plan)
-        qa_matrix = (
-            QAOutput(assignments=[], note="B3确定性兜底：暂无骨干成员")
-            if not inp.members
-            else assign_with_balance(plan, inp.members)
-        )
-        timeline = self._step_timeline(plan, inp.deadline.isoformat(), qa_matrix, inp.members)
+        with stage("Matcher"):
+            qa_matrix = (
+                QAOutput(assignments=[], note="B3确定性兜底：暂无骨干成员")
+                if not inp.members
+                else assign_with_balance(plan, inp.members)
+            )
+        with stage("Timeline"):
+            timeline = self._step_timeline(
+                plan, inp.deadline.isoformat(), qa_matrix, inp.members)
         if isinstance(timeline, AgentError):
             timeline = TimelineOutput(tasks=[], critical_path=[], total_days=0, note=timeline.message)
-        report = ReportOutput(
-            summary=plan.summary,
-            timeline_section=f"共 {len(timeline.tasks)} 项排期，总工期 {timeline.total_days} 天。",
-            qa_matrix_section="\n".join(
-                f"{a.task_name}：{a.presenter}（{a.reasoning}）"
-                for a in qa_matrix.assignments),
-            risk_note=self._build_risk_note(plan, timeline, qa_matrix, inp.members, inp.deadline),
-        )
+        trace.mark_first_useful_result()
+        with stage("Reporter"):
+            report = ReportOutput(
+                summary=plan.summary,
+                timeline_section=f"共 {len(timeline.tasks)} 项排期，总工期 {timeline.total_days} 天。",
+                qa_matrix_section="\n".join(
+                    f"{a.task_name}：{a.presenter}（{a.reasoning}）"
+                    for a in qa_matrix.assignments),
+                risk_note=self._build_risk_note(
+                    plan, timeline, qa_matrix, inp.members, inp.deadline),
+            )
         by_task = {a.task_id: a for a in qa_matrix.assignments}
         assigned_tasks = [
             t.model_copy(update={
@@ -188,13 +255,18 @@ class Coordinator:
             final_plan = self._sync_module_owners(final_plan)
         # P1-3: confirm 路径也执行 Reflection 审查（确定性兜底，不阻塞主流程）
         total_capacity = sum(m.available_hours for m in inp.members)
-        reflection = (
-            self._step_reflection(
-                final_plan, timeline, qa_matrix, total_capacity)
-            if use_ai_reflection
-            else self.reflector._deterministic_reflect(
-                final_plan, timeline, qa_matrix, total_capacity)
-        )
+        reflect, reasons = should_reflect(
+            final_plan, timeline, qa_matrix, total_capacity, inp.deadline)
+        trace.reflection_executed = bool(use_ai_reflection and reflect)
+        trace.reflection_reasons = reasons
+        with stage("Reflection"):
+            reflection = (
+                self._step_reflection(
+                    final_plan, timeline, qa_matrix, total_capacity)
+                if use_ai_reflection and reflect
+                else self.reflector._deterministic_reflect(
+                    final_plan, timeline, qa_matrix, total_capacity)
+            )
         return FullPlan(input=inp, plan=final_plan,
                         timeline=timeline, qa_matrix=qa_matrix, report=report,
                         reflection=reflection)

@@ -110,6 +110,24 @@ def test_manual_assignment_and_workload_share_business_rules():
     assert not any("尚未分配任务" in w for w in snapshot["warnings"])
 
 
+def test_manual_assignment_timeline_includes_all_collaborators():
+    plan = _full_plan().model_copy(update={
+        "input": _full_plan().input.model_copy(update={
+            "members": [
+                *_full_plan().input.members,
+                TeamMember(name="小美", skill_tags=["排版"]),
+            ],
+        }),
+    })
+    result = apply_manual_assignment(ManualAssignmentRequest(
+        plan=plan,
+        assignees={"T1": "小文", "T2": "小文"},
+        collaborators={"T2": ["小摄", "小美"]},
+    ))
+    t2 = next(item for item in result.timeline.tasks if item.task_id == "T2")
+    assert t2.assigned_to == ["小文", "小摄", "小美"]
+
+
 def test_workload_counts_roles_volunteers_and_conflicts():
     plan = FullPlan(
         input=AssignmentInput(

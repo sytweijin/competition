@@ -15,7 +15,7 @@ class _FakeDate:
     @staticmethod
     def fromisoformat(s):
         return _dt.date.fromisoformat(s)
-from app.models.schemas import PlanOutput, SubTask
+from app.models.schemas import PlanOutput, SubTask, TeamMember
 
 
 def _plan(tasks):
@@ -78,6 +78,33 @@ def test_parallel_task_has_float():
     assert short.float_days > 0
 
 
+def test_parallel_paths_have_one_explicit_critical_path():
+    """两条并行路径汇合时，较长分支及汇合点构成关键路径。"""
+    plan = _plan([
+        SubTask(id="T1", name="长分支一", estimated_hours=8),
+        SubTask(id="T2", name="长分支二", estimated_hours=8,
+                dependencies=["T1"]),
+        SubTask(id="T3", name="短分支", estimated_hours=4),
+        SubTask(id="T4", name="汇合", estimated_hours=4,
+                dependencies=["T2", "T3"]),
+    ])
+    out = TimelineAgent().run(plan, "2026-08-20")
+    assert out.critical_path == ["T1", "T2", "T4"]
+    assert next(t for t in out.tasks if t.task_id == "T3").float_days > 0
+
+
+def test_independent_equal_tasks_are_all_critical():
+    """无依赖且等长的任务都决定项目最短工期。"""
+    plan = _plan([
+        SubTask(id="T1", name="A", estimated_hours=4),
+        SubTask(id="T2", name="B", estimated_hours=4),
+        SubTask(id="T3", name="C", estimated_hours=4),
+    ])
+    out = TimelineAgent().run(plan, "2026-08-20")
+    assert out.critical_path == ["T1", "T2", "T3"]
+    assert all(task.float_days == 0 for task in out.tasks)
+
+
 def test_cycle_is_tolerated():
     """依赖环不应崩溃，应断环继续排期。"""
     plan = _plan([
@@ -88,6 +115,7 @@ def test_cycle_is_tolerated():
     # 两个任务都被排出（断环）
     assert len(out.tasks) == 2
     assert "环" in out.note or "环" in out.reasoning
+    assert len({task.task_id for task in out.tasks}) == 2
 
 
 def test_daily_capacity_affects_duration():
@@ -111,3 +139,26 @@ def test_assignments_backfill():
         plan, "2026-07-20", assignments={"T1": ["张三", "李四"]}
     )
     assert out.tasks[0].assigned_to == ["张三", "李四"]
+
+
+def test_same_owner_tasks_are_serialized_but_different_owners_can_parallel():
+    """甘特图必须体现分工资源：同一负责人串行，不同负责人仍可并行。"""
+    plan = _plan([
+        SubTask(id="T1", name="资料整理", estimated_hours=4),
+        SubTask(id="T2", name="文案撰写", estimated_hours=4),
+        SubTask(id="T3", name="视觉设计", estimated_hours=4),
+    ])
+    out = TimelineAgent().run(
+        plan,
+        "2026-08-20",
+        assignments={"T1": ["小林"], "T2": ["小林"], "T3": ["小陈"]},
+        members=[
+            TeamMember(name="小林", daily_available_hours=4),
+            TeamMember(name="小陈", daily_available_hours=4),
+        ],
+    )
+    by_id = {task.task_id: task for task in out.tasks}
+
+    assert by_id["T2"].start_date > by_id["T1"].end_date
+    assert by_id["T3"].start_date == by_id["T1"].start_date
+    assert "资源顺序约束" in out.reasoning

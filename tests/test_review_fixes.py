@@ -97,6 +97,43 @@ def test_parse_error_skips_structured_retry():
     assert calls["create"] == 1, "应回退到 plain create 一次"
 
 
+def test_timeout_retries_once_without_plain_amplification():
+    calls = {"parse": 0, "create": 0}
+
+    def parse_fn(**kw):
+        calls["parse"] += 1
+        raise TimeoutError("slow")
+
+    def create_fn(**kw):
+        calls["create"] += 1
+        return _resp(content=_plan_json())
+
+    client = _client_with(parse_fn=parse_fn, create_fn=create_fn)
+    out = client.chat_structured("sys", "usr", PlanOutput, max_retries=3)
+    assert out.error_type == "timeout"
+    assert calls == {"parse": 2, "create": 0}
+
+
+def test_rate_limit_does_not_retry_or_plain_fallback():
+    import openai
+
+    calls = {"parse": 0, "create": 0}
+
+    def parse_fn(**kw):
+        calls["parse"] += 1
+        exc = openai.RateLimitError.__new__(openai.RateLimitError)
+        Exception.__init__(exc, "limited")
+        raise exc
+
+    client = _client_with(
+        parse_fn=parse_fn,
+        create_fn=lambda **kw: calls.__setitem__("create", calls["create"] + 1),
+    )
+    out = client.chat_structured("sys", "usr", PlanOutput, max_retries=3)
+    assert out.error_type == "rate_limit"
+    assert calls == {"parse": 1, "create": 0}
+
+
 def test_plain_response_locally_repairs_plan_fields_and_constraint_task():
     """AI JSON 可读但字段不规范时，本地修复而不是整份退回规则草案。"""
     raw = """{
@@ -134,6 +171,14 @@ def test_classify_error_basic_types():
     except ValidationError as ve:
         assert _classify_error(ve) == "parse_error"
     assert _classify_error(Exception("random noise")) == "unknown"
+
+
+def test_api_connection_error_is_not_mislabeled_as_timeout():
+    import openai
+
+    exc = openai.APIConnectionError.__new__(openai.APIConnectionError)
+    Exception.__init__(exc, "remote disconnected")
+    assert _classify_error(exc) == "connection_error"
 
 
 # ──────────── P1-2: assign_with_balance 保证全员参与 ────────────

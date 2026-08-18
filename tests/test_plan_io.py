@@ -73,3 +73,6 @@ def test_plan_to_excel():
     assert "任务" in wb.sheetnames
     assert "成员" in wb.sheetnames
     assert "复盘" in wb.sheetnames
+    assert wb["任务"].freeze_panes == "A2"
+    assert wb["任务"].auto_filter.ref == wb["任务"].dimensions
+    assert wb["任务"]["A1"].fill.fill_type == "solid"

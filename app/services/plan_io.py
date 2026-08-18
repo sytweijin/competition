@@ -6,6 +6,7 @@ import csv
 import io
 import re
 import zipfile
+import unicodedata
 from datetime import date, timedelta
 from xml.sax.saxutils import escape
 
@@ -239,7 +240,40 @@ def plan_to_excel(plan: FullPlan) -> bytes:
         ])
     sheets.append(("复盘", review_rows))
 
-    return _xlsx_bytes(sheets)
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Alignment, Font, PatternFill
+        from openpyxl.utils import get_column_letter
+    except ImportError as exc:
+        raise RuntimeError("缺少 openpyxl，无法生成标准 Excel 工作簿") from exc
+
+    workbook = Workbook()
+    workbook.remove(workbook.active)
+    header_fill = PatternFill("solid", fgColor="4F46E5")
+    header_font = Font(color="FFFFFF", bold=True)
+    for sheet_name, rows in sheets:
+        worksheet = workbook.create_sheet(title=sheet_name[:31])
+        for row in rows:
+            worksheet.append(row)
+        worksheet.freeze_panes = "A2"
+        worksheet.auto_filter.ref = worksheet.dimensions
+        for cell in worksheet[1]:
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+        for column_index, column in enumerate(worksheet.columns, start=1):
+            width = max(sum(
+                2 if unicodedata.east_asian_width(char) in {"W", "F", "A"} else 1
+                for char in str(cell.value or "")
+            ) for cell in column)
+            worksheet.column_dimensions[get_column_letter(column_index)].width = min(
+                max(width + 3, 10), 42
+            )
+        worksheet.sheet_view.showGridLines = False
+
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
 
 
 def parse_task_file(content: bytes, filename: str, project_mode: str = "small_group") -> PlanOutput:

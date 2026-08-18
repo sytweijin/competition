@@ -19,9 +19,13 @@ from pydantic import BaseModel, ValidationError
 
 from app.config import (
     LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, LLM_MAX_RETRIES, LLM_TIMEOUT,
-    LLM_PREFER_PLAIN, LLM_MAX_TOKENS,
+    LLM_PREFER_PLAIN, LLM_MAX_TOKENS, LLM_DISABLE_THINKING,
 )
 from app.models.schemas import AgentError
+from app.performance import (
+    current_llm_observation, observe_logical_llm_call,
+    physical_llm_call, record_logical_llm_call,
+)
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
@@ -44,7 +48,7 @@ def _classify_error(e: Exception) -> str:
     if isinstance(e, _t("RateLimitError")):
         return "rate_limit"
     if isinstance(e, _t("APIConnectionError")):
-        return "timeout"
+        return "connection_error"
     if isinstance(e, (ValidationError, ValueError)):
         return "parse_error"
     if isinstance(e, _t("BadRequestError")):
@@ -77,10 +81,19 @@ class LLMClient:
         self._enabled = bool(LLM_API_KEY)
         self._prefer_plain = LLM_PREFER_PLAIN
         # 禁用 SDK 隐式重试；否则应用层 12s 超时会被默认 2 次重试放大到 30s+。
-        self._client = OpenAI(
-            api_key=LLM_API_KEY, base_url=LLM_BASE_URL,
-            max_retries=0,
+        self._client = (
+            OpenAI(
+                api_key=LLM_API_KEY, base_url=LLM_BASE_URL,
+                max_retries=0,
+            )
+            if self._enabled else None
         )
+
+    def _vendor_options(self) -> dict:
+        """仅为 DeepSeek V4 结构化业务调用补充厂商参数。"""
+        if LLM_DISABLE_THINKING and self.model.lower().startswith("deepseek-v4"):
+            return {"extra_body": {"thinking": {"type": "disabled"}}}
+        return {}
 
     def chat_structured(
         self,
@@ -90,24 +103,48 @@ class LLMClient:
         temperature: float = 0.3,
         max_retries: int = LLM_MAX_RETRIES,
     ) -> T | AgentError:
+        """记录一次完整逻辑调用，并执行分类重试策略。"""
+        if not self._enabled and self._client is None:
+            return AgentError(agent="LLMClient", error_type="auth_error",
+                              message="LLM_API_KEY 未配置，跳过 LLM 调用",
+                              recoverable=False)
+        record_logical_llm_call()
+        with observe_logical_llm_call() as observation:
+            result = self._chat_structured_impl(
+                system_prompt, user_prompt, response_model,
+                temperature, max_retries)
+            observation.success = not isinstance(result, AgentError)
+            observation.first_attempt_success = (
+                observation.success and observation.attempts == 1)
+            return result
+
+    def _chat_structured_impl(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        response_model: type[T],
+        temperature: float,
+        max_retries: int,
+    ) -> T | AgentError:
         """调用 LLM 并返回结构化输出。
 
         策略：先尝试 structured output（response_format），失败后回退到
         普通 create + 手动 JSON 提取 + model_validate_json。
         """
-        if not self._enabled:
-            return AgentError(agent="LLMClient", error_type="auth_error",
-                              message="LLM_API_KEY 未配置，跳过 LLM 调用",
-                              recoverable=False)
+        observation = current_llm_observation()
         if self._prefer_plain:
             try:
                 return self._try_plain_validate(
                     system_prompt, user_prompt, response_model, temperature)
             except Exception as exc:
+                if observation is not None and _classify_error(exc) == "timeout":
+                    observation.timeout_seen = True
                 return AgentError(
                     agent="LLMClient", error_type=_classify_error(exc),
                     message=f"LLM JSON 调用失败：{exc}", recoverable=True)
-        retries = max(1, max_retries)
+        # 核心 Agent 最多一次网络型重试；格式错误不重复 structured，
+        # 限流/鉴权也不立即重试，避免固定三次造成尾延迟与限流放大。
+        retries = min(2, max(1, max_retries))
         last_error_type = "unknown"
         last_error: Exception | None = None
         for attempt in range(retries):
@@ -117,6 +154,8 @@ class LLMClient:
             except Exception as e:
                 err_type = _classify_error(e)
                 last_error_type, last_error = err_type, e
+                if observation is not None and err_type == "timeout":
+                    observation.timeout_seen = True
                 logger.warning("LLM structured attempt %d/%d (%s): %s",
                                attempt + 1, retries, err_type, e)
                 if err_type == "auth_error":
@@ -125,27 +164,23 @@ class LLMClient:
                                      recoverable=False)
                 if err_type == "parse_error":
                     break  # 结构化重试无意义，直接回退 plain create
-                # rate_limit / timeout / unknown：可重试，最后一次落到 fallback
-        # timeout/rate_limit 时也尝试一次 plain 回退（救回偶发冷启动/网络抖动）。
-        # 原逻辑直接返回错误走兜底，但首次请求常因连接建立慢而超时，
-        # 此时连接可能已建立，plain 回退成功率较高，值得多等一个超时周期。
-        if last_error_type in ("timeout", "rate_limit", "unknown"):
-            try:
-                logger.info("LLM %s, trying plain fallback before giving up",
-                            last_error_type)
-                return self._try_plain_validate(
-                    system_prompt, user_prompt,
-                    response_model, temperature)
-            except Exception as e2:
-                return AgentError(
-                    agent="LLMClient",
-                    error_type=last_error_type,
-                    message=(f"LLM 调用失败（已尝试 {retries} "
-                             f"次结构化 + 1 次 plain 回退）：{e2}"),
-                    recoverable=True,
-                )
+                if err_type in ("rate_limit", "connection_error"):
+                    break
+                if attempt + 1 < retries and observation is not None:
+                    observation.retries += 1
+        # 网络错误不切换 plain 再等待一个完整超时周期；plain 只解决格式兼容，
+        # 无法解决超时/限流。直接交给 Agent 的确定性兜底。
+        if last_error_type in ("timeout", "rate_limit", "connection_error", "unknown"):
+            return AgentError(
+                agent="LLMClient",
+                error_type=last_error_type,
+                message=f"LLM 调用失败（已尝试至多 {retries} 次）：{last_error}",
+                recoverable=True,
+            )
         try:
             logger.info("Falling back to plain create + validate")
+            if observation is not None:
+                observation.plain_fallback = True
             return self._try_plain_validate(
                 system_prompt, user_prompt,
                 response_model, temperature)
@@ -161,26 +196,28 @@ class LLMClient:
     def _try_structured(self, system_prompt, user_prompt,
                         response_model, temperature) -> T:
         """尝试使用 beta structured output API。"""
-        resp = self._client.beta.chat.completions.parse(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            response_format=response_model,
-            temperature=temperature,
-            timeout=LLM_TIMEOUT,
-        )
-        msg = resp.choices[0].message
-        parsed = getattr(msg, "parsed", None)
-        if parsed is not None:
-            if isinstance(parsed, response_model):
-                return parsed
-            return response_model.model_validate(parsed)
-        raw = getattr(msg, "content", None)
-        if not raw:
-            raise ValueError("Empty response from LLM")
-        return response_model.model_validate_json(raw)
+        with physical_llm_call():
+            resp = self._client.beta.chat.completions.parse(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                response_format=response_model,
+                temperature=temperature,
+                timeout=LLM_TIMEOUT,
+                **self._vendor_options(),
+            )
+            msg = resp.choices[0].message
+            parsed = getattr(msg, "parsed", None)
+            if parsed is not None:
+                if isinstance(parsed, response_model):
+                    return parsed
+                return response_model.model_validate(parsed)
+            raw = getattr(msg, "content", None)
+            if not raw:
+                raise ValueError("Empty response from LLM")
+            return response_model.model_validate_json(raw)
 
     def _try_plain_validate(self, system_prompt, user_prompt,
                             response_model, temperature) -> T:
@@ -197,7 +234,8 @@ class LLMClient:
         ]
         budget = LLM_MAX_TOKENS
         for _ in range(2):  # 首次 + 截断后重试一次
-            resp = self._call_with_timeout_retry(messages, budget, temperature)
+            resp = self._call_with_timeout_retry(
+                messages, budget, temperature, max_retries=0)
             msg = resp.choices[0].message
             raw = msg.content or ""
             # 推理模型正文为空但思考含 JSON 时回退抽取（避免把思考当正文误用）。
@@ -232,9 +270,13 @@ class LLMClient:
                 logger.debug("Full extracted JSON for debugging:\n%s", extracted)
                 # 若确属截断且还能加预算，重试一次；否则放弃。
                 if finish == "length" and budget < 32000:
+                    observation = current_llm_observation()
+                    if observation is not None:
+                        observation.retries += 1
                     budget = min(32000, budget * 2)
                     logger.warning("Response truncated (length); retrying with budget=%d", budget)
                     continue
+                break
         # 两次都失败（含一次截断重试）；抛出以走上层兜底。
         raise ValueError("LLM 返回的 JSON 经校验与本地修复均不可用（可能仍未完整）")
 
@@ -244,13 +286,15 @@ class LLMClient:
         last_exc: Exception | None = None
         for i in range(max_retries + 1):
             try:
-                return self._client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=budget,
-                    timeout=LLM_TIMEOUT,
-                )
+                with physical_llm_call():
+                    return self._client.chat.completions.create(
+                        model=self.model,
+                        messages=messages,
+                        temperature=temperature,
+                        max_tokens=budget,
+                        timeout=LLM_TIMEOUT,
+                        **self._vendor_options(),
+                    )
             except Exception as e:  # noqa: BLE001
                 if _classify_error(e) == "timeout" and i < max_retries:
                     logger.warning("LLM 请求超时，第 %d/%d 次重试", i + 1, max_retries)
@@ -525,18 +569,20 @@ class LLMClient:
         temperature: float = 0.7,
     ) -> str | AgentError:
         """自由文本调用（用于 B1 答辩模拟等无需严格结构化的场景）"""
-        if not self._enabled:
+        if not self._enabled and self._client is None:
             return AgentError(agent="LLMClient", error_type="auth_error", message="LLM_API_KEY 未配置，跳过调用", recoverable=False)
+        record_logical_llm_call()
         try:
-            resp = self._client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=temperature,
-                timeout=LLM_TIMEOUT,
-            )
+            with physical_llm_call():
+                resp = self._client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    temperature=temperature,
+                    timeout=LLM_TIMEOUT,
+                )
             return resp.choices[0].message.content or ""
         except Exception as e:
             err_type = _classify_error(e)
@@ -554,22 +600,31 @@ class LLMClient:
         messages: list[dict],
         temperature: float = 0.7,
         timeout: float | None = None,
+        max_tokens: int | None = None,
     ) -> str | AgentError:
         """多轮对话调用（用于 AI 调整建议等需要记忆的场景）。
 
         messages 为 [{role:'user'|'assistant', content:'...'}] 列表，
         方法内部自动在头部插入 system prompt。
         """
-        if not self._enabled:
+        if not self._enabled and self._client is None:
             return AgentError(agent="LLMClient", error_type="auth_error", message="LLM_API_KEY 未配置，跳过调用", recoverable=False)
+        record_logical_llm_call()
         try:
             full_messages = [{"role": "system", "content": system_prompt}] + messages
-            resp = self._client.chat.completions.create(
-                model=self.model,
-                messages=full_messages,
-                temperature=temperature,
-                timeout=timeout or LLM_TIMEOUT,
-            )
+            kwargs = {
+                "model": self.model,
+                "messages": full_messages,
+                "temperature": temperature,
+                "timeout": timeout or LLM_TIMEOUT,
+                **self._vendor_options(),
+            }
+            if max_tokens:
+                kwargs["max_tokens"] = max_tokens
+            with physical_llm_call():
+                resp = self._client.chat.completions.create(
+                    **kwargs,
+                )
             return resp.choices[0].message.content or ""
         except Exception as e:
             err_type = _classify_error(e)
@@ -589,7 +644,7 @@ class LLMClient:
         timeout: float | None = None,
         max_tokens: int | None = None,
     ):
-        """按 OpenAI 标准流式返回文本片段，供清小搭降低首字等待。"""
+        """按 OpenAI 标准流式返回文本片段，降低首字等待。"""
         if not self._enabled:
             yield AgentError(
                 agent="LLMClient",
@@ -606,6 +661,7 @@ class LLMClient:
                 "temperature": temperature,
                 "timeout": timeout or LLM_TIMEOUT,
                 "stream": True,
+                **self._vendor_options(),
             }
             if max_tokens:
                 kwargs["max_tokens"] = max_tokens

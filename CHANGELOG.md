@@ -5,6 +5,114 @@
 > 按时间倒序排列（最新在最上面），随项目同步更新。
 
 ---
+## v5.76 —— 基础原版整合 v5.49–v5.76 通用能力与导出区上移（2026-08-18）
+
+**定位：** 把清小搭分支中与平台接入无关的通用提升（A 组前端/工作台 + B 组后端能力/稳定性）整体移植到基础原版，并应用导出/分享按钮上移与响应式头部修复，让其他比赛直接复用最新工作台能力。
+
+**审查/修改背景：** 基础原版停留在 v5.48（2026-08-11），缺少角色化工作台、AI 助手稳定交互、扫描版 PDF OCR、健康检查/监控、对象存储同步、Agent 稳定性等通用能力；用户参加多个比赛，需要一份具备全部通用能力、且不含清小搭接入的独立版本。本次从清小搭分支搬运 `app/` 通用代码与前端文件，并彻底移除清小搭接入残留：`app/compat/`（/v1 协议层）、`app/services/qingxiaoda_io.py`、`QINGXIAODA_*` 配置、来源/返回入口 UI、限时编辑令牌机制及其测试。
+
+---
+
+### 关键缺陷（P0）
+
+#### 1. 角色视图乱码修复随搬运落地（`[object Object]` / `NaN%`）
+
+1. **问题：** 清小搭 v5.76 修复的「任务数组被当计数渲染」问题，在本次把角色化工作台搬入基础版时必须采用修复后实现，否则评委/负责人视图会显示 `[object Object]` 与 `NaN%`。
+2. **修改前：** 基础原版没有角色视图；若直接搬 v5.68 的旧实现会引入 `audiencePlanStats()` 返回 `tasks` 数组、统计处当数字用的问题：
+   ```js
+   return{tasks:tasks,assigned:assigned,blocked:blocked,...};   // tasks 是对象数组
+   '<strong>'+stats.tasks+' 项任务 · '+stats.totalHours+'h</strong>'  // 数组拼串 → [object Object]
+   var coverage=stats.tasks?Math.round(stats.assigned/stats.tasks*100):0;  // 数组除法 → NaN
+   ```
+3. **修改后：** 搬运 v5.76 修复后实现，`audiencePlanStats()` 新增 `taskCount` 数字字段，统计一律用数字：
+   ```js
+   return{tasks:tasks,taskCount:tasks.length,assigned:assigned,blocked:blocked,...};
+   '<strong>'+stats.taskCount+' 项任务 · '+stats.totalHours+'h</strong>'
+   var coverage=stats.taskCount?Math.round(stats.assigned/stats.taskCount*100):0;
+   ```
+4. **为什么这样改：** 直接取清小搭当前已修复的前端文件，避免把历史 bug 一并搬入；`tasks` 数组保留给成员视图按负责人/协作者过滤。
+5. **收益：** 基础版一引入角色视图就是正确数字，无需二次返工。
+
+### 体验优化（P2）
+
+#### 2. 角色化工作台（负责人 / 成员 / 教师评委）
+
+1. **问题：** 基础版最终方案页只有单一视图，负责人、执行成员和评委看到的信息完全一样，无法按角色收敛信息与操作。
+2. **修改前：** 基础版 `index.html` 无角色切换入口，`app.js` 无 `audiencePlanStats` / `renderAudienceSummary` / `renderEvaluationView` / `renderMemberTasks`。
+3. **修改后：** 搬运 v5.68 角色化工作台：顶部「负责人 / 成员 / 教师·评委」切换、成员选择器、评委四维指标卡（交付边界/分工完整度/平均匹配度/排期证据）与风险清单；数据全部来自 `state.plan` 的 `tasks` / `qa_matrix.assignments` / `timeline.critical_path`，基础版 schema（`app/models/schemas.py` 的 `QAOutput.assignments`、`critical_path`）本就具备。
+4. **为什么这样改：** 同一份计划按角色收敛是工作台通用能力，与清小搭平台无关；评委证据评审比主观总分更可追溯。
+5. **收益：** 评审/答辩场景可直接演示角色化视图；不依赖清小搭任何接口。
+
+#### 3. 导出/分享按钮上移顶部工具栏 + 响应式头部
+
+1. **问题：** 基础版底部 sticky 栏把导出 Excel/CSV/ICS、复制只读链接和返回调整堆在一起，窄屏换行成多行，占据整块底部空白。
+2. **修改前：** 底部 `final-export-actions` 四个按钮 + `backBoardBtn`：
+   ```html
+   <div class="final-export-actions"><button id="exportExcelBtn">导出Excel</button>…</div>
+   <button id="backBoardBtn">返回调整</button>
+   ```
+3. **修改后：** 四个按钮移到顶部 `.header-tools`，与导出 MD/Word/PDF 并列，并随方案可用性启用/禁用（确认分工、载入方案后启用，切换模式置灰）；底部只留提示与返回调整。响应式：桌面 1440px 一行 9 按钮、平板 1000px 3×3、移动端 480px 5×2。
+4. **为什么这样改：** 导出是全局动作，统一放顶部工具栏；底部只保留流程导航（返回调整），避免窄屏撑出大片空白。
+5. **收益：** 底部不再有大块空白；三档视口布局完整；方案未生成时按钮置灰。
+
+### 健壮性提升（P1）
+
+#### 4. AI 助手稳定交互与工作台视觉统一
+
+1. **问题：** 基础版 AI 助手按钮拖动与抽屉易互相遮挡、变形，窄屏下布局不稳。
+2. **修改后：** 搬运 v5.49/v5.50/v5.52：Pointer Events 区分拖动与点击、固定几何尺寸、按按钮四周可用面积自动避让、视口边界钳制、统一配色层级与人员身份框视觉。
+3. **为什么这样改：** 交互稳定性与视觉统一是通用体验问题，不依赖任何平台。
+4. **收益：** 拖动不误触、不遮挡、不变形；桌面/移动端均稳定。
+
+#### 5. 后端监控、健康检查、冷启动预热与性能埋点
+
+1. **问题：** 基础版无法观测请求量/错误率/响应时间，健康检查只有 ok，冷启动首请求慢，且完整链路每次都等 Reporter/Reflection。
+2. **修改后：** 搬运 `app/metrics.py`、`app/performance.py`、`/api/metrics`、`/api/performance/llm`、健康检查细化、lifespan 预热共享 LLM 客户端、`/api/report` 按需生成（用户打开报告页或导出时才调用 Reporter）。
+3. **为什么这样改：** 可观测性与冷启动预热是通用运维能力，与清小搭无关。
+4. **收益：** 现场可先看健康检查与指标；报告不再占用首次响应关键路径。
+
+#### 6. 扫描版 PDF OCR、逐文件状态与对象存储同步
+
+1. **问题：** 基础版扫描版 PDF 没有文本层直接失败，方案/附件只写本地 `memory/`，重启会丢。
+2. **修改后：** 搬运 v5.74：无文本 PDF 逐页渲染 PNG 交视觉模型 OCR（新增 `pymupdf` 依赖）；`app/services/storage.py` 提供 S3 兼容对象存储同步层（`share_store` 已接入，分享令牌重启不丢）；前端 `renderFileList`/`fileMeta` 逐文件状态展示。另将清小搭分支的远程文件 SSRF/重定向/大小上限保护提取为通用模块 `app/services/remote_io.py`（`download_remote_file`/`cleanup_artifacts`），与具体平台解耦。
+3. **为什么这样改：** OCR 与持久化是通用能力，与清小搭平台无关。
+4. **收益：** 扫描件可进入分析链路；配置 `STORAGE_BACKEND=s3` 后分享令牌可同步到对象存储并自动恢复；远程拉取自带内网/白名单/重定向防护。
+
+#### 7. Agent 稳定性：报告延迟生成、错误分类重试与 thinking 兼容
+
+1. **问题：** 基础版每次完整跑链路都等待 Reporter/Reflection，DeepSeek V4 默认 thinking 易超时断连，无 Key 时也会构造必然失败的客户端。
+2. **修改后：** 搬运 v5.54/v5.55/v5.58：Reporter/Reflection 移出核心响应路径、Planner/Matcher 错误分类重试、`LLM_DISABLE_THINKING` 只对 DeepSeek 发送厂商私有参数、无 Key 不构造客户端。
+3. **为什么这样改：** 核心链路越快越稳是所有比赛演示的共同诉求，与接入平台无关。
+4. **收益：** 首次响应更快、超时断连减少；导出/报告按需生成。
+
+### 体验优化（P2）
+
+#### 9. 成员日期选择器说明、删除按钮重叠与页面留白（与清小搭分支同步修复）
+
+1. **问题：** 成员添加/成员管理里的日期框没有任何说明，用户不知道它是「不可用日期」；小项目隐藏「上级姓名」后，成员行自动排布错位，日期框右缘盖住删除叉；版本树长文件名/操作名会挤到右侧按钮；顶部/底部工具条文字贴边、底部按钮贴底，观感局促。
+2. **修改前：** 日期选择器无标签；`.member-row`/`.member-edit-row` 隐藏 `member-manager`/`edit-member-manager` 后自动排布错位，`.unavailable-picker`（`min-width:190px`）落入 82px/90px 窄列向右溢出盖住删除按钮；平板/移动端规则还把 `grid-column` 写在了隐藏输入框 `.member-unavailable` 上（选择器失效）：
+   ```html
+   <div class="unavailable-picker"><input type="hidden" class="unavailable-value member-unavailable" …>…</div>
+   ```
+   ```css
+   .member-row .member-unavailable { grid-column: 4; }  /* 目标是隐藏输入框，容器未定位 */
+   ```
+3. **修改后：** 日期框内新增小标签「不可用日期」（`title` 提示「选择该成员不能参与的日期，排期会自动避开」）；给成员行/成员管理行显式指定 `grid-column`（日期框 7/6、删除按钮 8/7），并把平板/移动端错选的 `.member-unavailable` 选择器改为 `.unavailable-picker`；行内日期框允许收缩（`min-width:0` + `max-width:100%` + `justify-self:start`）避免任何列宽下溢出；版本树标题 `strong` 支持省略号截断、摘要/元数据 `display:block` 防溢出、节点间距 `gap` 10→14px；顶部工具条（`.toolbar-bar`）与底部操作栏（`.sticky-action`）增加左右/下方留白。
+4. **为什么这样改：** 根因是隐藏字段导致 CSS Grid 自动排布错位，且平板/移动端选择器指向了隐藏输入框而非日期容器；显式列定位 + 修正选择器让日期框/删除按钮各归其位，收缩兜底保证任何列宽都不溢出，留白让文字不再贴边。
+5. **收益：** 用户一眼看懂日期框含义；删除叉不再被日期框盖住；版本树文字不再挤压右侧按钮；页面上下左右留白更舒展。
+
+### 打磨（P3）
+
+#### 8. 依赖、部署配置、测试与文档同步
+
+1. **修改后：** `requirements.txt` 锁定版本并新增 `pymupdf`/`boto3`；`.env.example`/`render.yaml` 补充视觉/ASR/存储/监控变量并移除 `QINGXIAODA_*`；测试新增 role_views、storage、media_formats、deployment_readiness、agent_benchmark、fault_drills、eval 等，`test_share_tokens.py` 重写为只读分享测试，`test_qingxiaoda.py` 与编辑令牌测试随清小搭接入一并移除；脚本与 `eval/cases.json` 一并搬运。
+2. **为什么这样改：** 新环境可复现、评审/部署文档一致，且基础版已完全移除清小搭接入层，后续可独立演进。
+3. **收益：** 全量 244 项测试通过；部署文档可复查。
+
+**涉及文件：** `app/` 下通用后端与前端文件（删除 `app/compat/` 清小搭协议层与 `tests/test_qingxiaoda.py`；新增 `app/services/remote_io.py`；重写 `app/services/share_store.py` 为只读令牌）、`tests/`（重写 `test_share_tokens.py`/`test_storage.py`/`test_fault_drills.py` 走通用路径）、`scripts/`、`eval/cases.json`、`docs/`（演示与部署文档）、`requirements.txt`、`.env.example`、`render.yaml`、`README.md`、`CHANGELOG.md`。
+
+---
+
 ## v5.48 —— 需求驱动的材料答辩模拟（2026-08-11）
 
 **定位：** 答辩模拟不再是所有项目的固定入口，也不再围绕任务完成情况提问；只有实际需求包含答辩、汇报、路演或成果展示时才出现，并以用户提交的答辩稿或 PPT 为提问依据。
@@ -7112,4 +7220,5 @@ LLM 负责"创造性"：拆任务、分配角色、写报告
 | **v5.46** | **错误与警告信息分层展示** | **已完成** |
 | **v5.47** | **项目规模角色模型简化** | **已完成** |
 | **v5.48** | **需求驱动的材料答辩模拟** | **已完成** |
+| **v5.76** | **基础版整合 v5.49–v5.76 通用能力、移除清小搭接入残留与导出区上移** | **已完成** |
 | v6.x | 正式发布与功能扩展 | 规划中 |

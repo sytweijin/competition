@@ -337,7 +337,11 @@ class FullPlan(BaseModel):
         default_factory=list,
         description="大型项目模式：志愿者/参与者招募池，按任务认领。",
     )
-    version: str = "5.34"
+    performance: dict = Field(
+        default_factory=dict,
+        description="请求级性能摘要；仅含耗时、数量和执行路径，不含 Prompt 或密钥。",
+    )
+    version: str = "5.76"
 
 
 class DraftRequest(BaseModel):

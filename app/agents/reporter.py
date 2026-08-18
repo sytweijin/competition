@@ -35,7 +35,8 @@ class ReporterAgent(BaseAgent[ReportOutput]):
             f"## 时间线（总工期 {timeline.total_days} 天）\n{tl_lines}\n\n"
             f"## 责任分工\n{qa_lines}"
         )
-        result = self._call_llm(user, temperature=0.5)
+        # 报告有完整确定性兜底，不在非核心阶段重复等待多个超时周期。
+        result = self._call_llm(user, temperature=0.5, max_retries=1)
 
         # LLM 失败时用纯文本兜底
         if isinstance(result, AgentError):

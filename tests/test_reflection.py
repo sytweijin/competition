@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 
 from app.agents.reflection import ReflectionAgent
+from app.coordinator import should_reflect
 from datetime import datetime, timedelta
 
 from app.models.schemas import (
@@ -70,6 +71,15 @@ def _make_qa(assignments: list | None = None) -> QAOutput:
 
 
 agent = ReflectionAgent()
+_ORIGINAL_REFLECTION_RUN = ReflectionAgent.__dict__["run"]
+
+
+@pytest.fixture(autouse=True)
+def _restore_original_run():
+    """防止 conftest 的链路 stub 在完整测试顺序中污染本模块。"""
+    ReflectionAgent.run = _ORIGINAL_REFLECTION_RUN
+    yield
+    ReflectionAgent.run = _ORIGINAL_REFLECTION_RUN
 
 
 # ──────────── 确定性兜底 基础功能 ────────────
@@ -243,6 +253,30 @@ class TestRunFallback:
         )
         assert result.overall_score == 9.0
         assert result.passed is True
+
+
+class TestReflectionRiskGate:
+
+    def test_normal_simple_plan_skips_llm_reflection(self):
+        reflect, reasons = should_reflect(
+            _make_plan(), _make_timeline(5, ["T1", "T2", "T3"]),
+            _make_qa(), total_capacity=40.0,
+        )
+        assert reflect is False
+        assert reasons == []
+
+    def test_obvious_risk_triggers_reflection(self):
+        qa = QAOutput(assignments=[
+            QAAssignment(task_id="T1", task_name="需求分析",
+                         presenter="张三", qa_primary="李四", score=0.1),
+        ], workload={"张三": 30, "李四": 2})
+        reflect, reasons = should_reflect(
+            _make_plan(), _make_timeline(), qa, total_capacity=10.0,
+        )
+        assert reflect is True
+        assert "low_skill_match" in reasons
+        assert "unassigned_task" in reasons
+        assert "capacity_overload" in reasons
 
 
 # ──────────── improvement_priority ────────────

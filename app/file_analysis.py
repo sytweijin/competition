@@ -11,20 +11,25 @@ MAX_FILE_SIZE = 15 * 1024 * 1024
 MAX_TEXT_CHARS = 60000
 SUPPORTED = {
     ".txt", ".md", ".pdf", ".docx", ".xlsx", ".pptx",
-    ".png", ".jpg", ".jpeg", ".webp", ".mp3", ".wav", ".m4a",
+    ".png", ".jpg", ".jpeg", ".webp", ".mp3", ".wav", ".m4a", ".webm",
 }
 
 
 def extract_text(filename: str, content: bytes) -> str:
     suffix = Path(filename).suffix.lower()
-    from app.services.media_analysis import analyze_audio, analyze_image
+    from app.services.media_analysis import (
+        analyze_audio, analyze_image, ocr_scanned_pdf,
+    )
     if len(content) > MAX_FILE_SIZE:
         raise ValueError("文件超过 15MB 限制")
     if suffix not in SUPPORTED:
-        raise ValueError("暂不支持该格式；支持 PDF、Word、TXT、Markdown、Excel、PowerPoint")
+        raise ValueError(
+            "暂不支持该格式；支持 PDF、Word、TXT、Markdown、Excel、PowerPoint、"
+            "PNG/JPG/WebP 图片及 MP3/WAV/M4A/WebM 音频"
+        )
     if suffix in {".png", ".jpg", ".jpeg", ".webp"}:
         return analyze_image(filename, content)
-    if suffix in {".mp3", ".wav", ".m4a"}:
+    if suffix in {".mp3", ".wav", ".m4a", ".webm"}:
         return analyze_audio(filename, content)
     try:
         if suffix in {".txt", ".md"}:
@@ -49,8 +54,10 @@ def extract_text(filename: str, content: bytes) -> str:
     except Exception as exc:
         raise ValueError(f"文件解析失败：{type(exc).__name__}") from exc
     cleaned = _normalize_document_text(text)
+    if not cleaned and suffix == ".pdf":
+        cleaned = _normalize_document_text(ocr_scanned_pdf(filename, content))
     if not cleaned:
-        raise ValueError("文件中未提取到可分析文字（扫描版 PDF/图片暂不支持 OCR）")
+        raise ValueError("文件中未提取到可分析文字")
     return cleaned[:MAX_TEXT_CHARS]
 
 

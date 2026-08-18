@@ -3,6 +3,11 @@
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from app.config import (
+    APP_ASR_API_KEY, APP_ASR_MODEL, APP_VISION_API_KEY, APP_VISION_MODEL,
+    LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, MEMORY_DIR,
+)
+from app.metrics import request_metrics
 from app.models.schemas import FullPlan
 from app.services.auth_store import (
     auth_enabled,
@@ -10,8 +15,28 @@ from app.services.auth_store import (
     verify_login,
 )
 from app.services.tools import call_tool, list_tools
+from app.services.report_service import generate_report
+from app.performance import llm_metrics
 
 router = APIRouter()
+
+
+@router.post("/report", response_model=FullPlan)
+def report_generate(plan: FullPlan):
+    """用户明确打开/生成报告时才调用 Reporter。"""
+    return generate_report(plan)
+
+
+@router.get("/performance/llm")
+def performance_llm():
+    """返回进程生命周期内按阶段聚合的非敏感 LLM 指标。"""
+    return {"stages": llm_metrics.snapshot()}
+
+
+@router.get("/metrics")
+def request_metrics_endpoint():
+    """返回请求量、错误率、响应时间分桶和路径聚合指标。"""
+    return request_metrics.snapshot()
 
 
 @router.get("/tools")
@@ -62,5 +87,15 @@ async def auth_me(request: Request):
 
 @router.get("/health")
 async def health():
-    return {"status": "ok"}
-
+    return {
+        "status": "ok",
+        "checks": {
+            "storage": MEMORY_DIR.exists(),
+            "llm_configured": bool(
+                LLM_API_KEY and LLM_BASE_URL and LLM_MODEL),
+            "vision_model_configured": bool(
+                APP_VISION_MODEL and APP_VISION_API_KEY),
+            "asr_model_configured": bool(
+                APP_ASR_MODEL and APP_ASR_API_KEY),
+        },
+    }

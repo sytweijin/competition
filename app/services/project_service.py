@@ -1,6 +1,6 @@
 """项目协作核心业务。
 
-本模块不依赖 FastAPI、页面状态或清小搭协议。任何界面/协议适配层都应调用
+本模块不依赖 FastAPI 或页面状态。任何界面/协议适配层都应调用
 这里，而不是复制任务编辑、分工或负载计算逻辑。
 """
 
@@ -347,7 +347,10 @@ def apply_manual_assignment(req: ManualAssignmentRequest) -> FullPlan:
     from app.agents.timeline import TimelineAgent
 
     fp = req.plan
-    member_map = {member.name: member for member in fp.input.members}
+    member_map = {
+        member.name: member for member in fp.input.members
+        if "志愿者" not in member.role and "外部协作者" not in member.role
+    }
     module_map = {module.id: module for module in fp.plan.modules}
     module_assignees = req.module_assignees or {}
     for module_id, owner in module_assignees.items():
@@ -399,10 +402,15 @@ def apply_manual_assignment(req: ManualAssignmentRequest) -> FullPlan:
     hours = {task.id: task.estimated_hours for task in updated_tasks}
     workload = _work_from(assignments, hours, fp.input.members)
     qa = QAOutput(assignments=assignments, workload=workload, note="用户确认的手动分工")
-    assignment_map = {
-        item.task_id: [item.presenter] + ([item.qa_primary] if item.qa_primary else [])
-        for item in assignments
-    }
+    assignment_map: dict[str, list[str]] = {}
+    for item in assignments:
+        people = [item.presenter] if item.presenter else []
+        if item.qa_primary and item.qa_primary not in people:
+            people.append(item.qa_primary)
+        for supporter in item.qa_support or []:
+            if supporter and supporter not in people:
+                people.append(supporter)
+        assignment_map[item.task_id] = people
     plan = fp.plan.model_copy(
         update={"tasks": updated_tasks, "modules": updated_modules})
     timeline = TimelineAgent().run(

@@ -43,7 +43,9 @@ class ReflectionAgent(BaseAgent[ReflectionOutput]):
             total_capacity: 团队总产能（小时），用于负载评估
         """
         user_prompt = self._build_prompt(plan, timeline, qa_matrix, total_capacity)
-        result = self._call_llm(user_prompt, temperature=0.3)
+        # Reflection 有规则兜底；一次结构化尝试后即可降级，避免放大尾延迟。
+        result = self._call_llm(
+            user_prompt, temperature=0.3, max_retries=1)
 
         if isinstance(result, AgentError):
             logger.warning("ReflectionAgent LLM failed, using deterministic fallback: %s",

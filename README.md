@@ -1,8 +1,8 @@
 ﻿# 协作分工智能体
 
-**版本：v5.48** | 最后更新：2026-08-11（按实际需求展示的材料驱动答辩模拟）
+**版本：v5.76** | 最后更新：2026-08-18（基础版整合 v5.49–v5.76 通用能力与导出区上移）
 
-当前工作区的结构拆分、导出与布局、版本树、入口归并、不可用日期、提示信息、角色模型和答辩模拟改动，已连续归档为 v5.41–v5.48；当前统一发布版本为 **v5.48**。
+当前工作区的结构拆分、导出与布局、版本树、入口归并、不可用日期、提示信息、角色模型和答辩模拟改动，已连续归档为 v5.41–v5.48；本次整合清小搭分支 v5.49–v5.76 的全部通用能力（角色化工作台、AI 助手稳定交互、OCR、监控、存储同步、Agent 稳定性等），并彻底移除清小搭接入残留，作为面向其他比赛的独立通用版本，当前统一发布版本为 **v5.76**。
 
 ## 比赛 Demo
 
@@ -44,12 +44,10 @@
 
 ### 分层边界
 
-核心业务逻辑集中在 app/services/project_service.py，Web 页面和清小搭适配层都通过它完成任务拆解、分工和排期，不复制业务规则。
+核心业务逻辑集中在 app/services/project_service.py，Web 页面通过它完成任务拆解、分工和排期，不复制业务规则。
 
 ```text
-网页工作台 ----+
-               +--> Project Service --> Planner / Scoring / Timeline / Reflection
-清小搭适配层 --+    (/v1/models 与 /v1/chat/completions)
+网页工作台 --> Project Service --> Planner / Scoring / Timeline / Reflection
 ```
 
 | Agent | 职责 | 实现 | LLM 失败兜底 |
@@ -62,41 +60,13 @@
 
 **设计原则**：LLM 负责创造性拆解，确定性算法负责正确性保证（关键路径、技能评分、负载均衡、依赖校验）。每个 Agent 失败都有兜底，主链路永不中断。
 
-## 清小搭接入
-
-服务已提供清小搭所需的 OpenAI 兼容协议，包括 Bearer 鉴权、模型列表、
-普通对话和 SSE 流式对话。接入前先在部署环境配置独立密钥：
-
-```bash
-QINGXIAODA_API_KEY=请替换为足够长的随机密钥
-```
-
-在清小搭的模型服务配置中填写：
-
-- Base URL：`https://你的公网域名/v1`
-- API Key：与 `QINGXIAODA_API_KEY` 完全一致
-- Model：`collaboration-planner`（若平台允许留空，也可由接口自动返回）
-
-连通性验证：
-
-```bash
-curl https://你的公网域名/v1/models \
-  -H "Authorization: Bearer 你的密钥"
-```
-
-对话接口会接受项目名称、成员技能、截止日期及交付要求，并返回可直接展示的
-任务拆解、负责人和排期。网页端的“人工调整、甘特图、导出”仍保留为比赛
-Demo 的可视化工作台。
-
 ### Render 一键部署
 
-仓库根目录的 `render.yaml` 已配置 Python 运行环境、启动命令、健康检查和
-清小搭入站密钥。登录 Render 后通过以下入口创建 Blueprint：
+仓库根目录的 `render.yaml` 已配置 Python 运行环境、启动命令和健康检查。登录 Render 后通过以下入口创建 Blueprint：
 
 [Deploy to Render](https://render.com/deploy?repo=https://github.com/sytweijin/competition)
 
-创建时填写 `QINGXIAODA_API_KEY`，并将已有千问服务的 `LLM_API_KEY`、
-`LLM_BASE_URL` 和 `LLM_MODEL` 一并作为私密环境变量填入。免费实例适合
+创建时将 `LLM_API_KEY`、`LLM_BASE_URL` 和 `LLM_MODEL` 作为私密环境变量填入。免费实例适合
 接入验证和比赛预演，但闲置后会休眠且本地保存记录不会永久保留；正式展示
 前请提前访问一次服务完成预热。
 
@@ -104,6 +74,7 @@ Demo 的可视化工作台。
 
 | 版本 | 日期 | 定位 |
 |------|------|------|
+| v5.76 | 2026-08-18 | 基础版整合 v5.49–v5.76 通用能力（角色视图、AI 助手、OCR、监控、存储、导出区上移） |
 | v5.48 | 2026-08-11 | 仅在项目要求涉及答辩/汇报时展示答辩模拟，并支持答辩稿或 PPT 材料驱动提问 |
 | v5.47 | 2026-08-11 | 小型项目取消人员层级，大型项目志愿者采用极简档案并支持认领 |
 | v5.46 | 2026-08-11 | 长错误与多条警告改为摘要卡片和可展开详情 |
@@ -205,8 +176,6 @@ competition/
 |   +-- llm/
 |   |   +-- client.py          # LLM 调用封装（超时重试 + 截断恢复）
 |   |   +-- prompts.py         # Prompt 模板集中管理
-|   +-- compat/
-|   |   +-- qingxiaoda.py      # 清小搭 OpenAI 兼容适配层
 |   +-- knowledge/
 |   |   +-- duration_examples.json  # 结构化工时案例库
 |   +-- web/
@@ -218,7 +187,7 @@ competition/
 |       +-- exporters.py       # Word / PDF 文档渲染
 |       +-- templates/index.html  # TailwindCSS + Lucide + Tab 布局
 |       +-- static/style.css   # 补充样式
-+-- tests/                     # 单元与集成测试（175 项）
++-- tests/                     # 单元与集成测试（244 项）
 +-- memory/                    # 计划持久化
 +-- docs/                      # 项目文档
 +-- requirements.txt
@@ -228,8 +197,6 @@ competition/
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/v1/models` | 清小搭模型发现接口（Bearer 鉴权） |
-| POST | `/v1/chat/completions` | 清小搭普通/流式对话接口 |
 | POST | `/api/run` | 生成完整计划（成员级每日工时） |
 | POST | `/api/analyze-files` | 上传并分析任务要求文件 |
 | POST | `/api/draft` | 仅生成任务拆解草案，不分工 |

@@ -6,8 +6,20 @@
 因为它们绕过这里 patch 的入口。
 """
 import pytest
+from pathlib import Path
 
 from app.models.schemas import ReflectionOutput, ReportOutput
+
+
+@pytest.fixture(autouse=True)
+def _disable_real_media_calls(monkeypatch):
+    """所有测试默认禁用真实视觉/语音 API，避免 .env 密钥导致外呼。"""
+    import app.services.media_analysis as media
+
+    monkeypatch.setattr(media, "APP_VISION_API_KEY", "")
+    monkeypatch.setattr(media, "APP_VISION_MODEL", "")
+    monkeypatch.setattr(media, "APP_ASR_API_KEY", "")
+    monkeypatch.setattr(media, "APP_ASR_MODEL", "")
 
 
 @pytest.fixture(autouse=True)
@@ -16,7 +28,9 @@ def _stub_reporter_for_recompute(request):
 
     仅当测试不是 test_agents（那里直接测 ReporterAgent 本体）时生效。
     """
-    if "test_agents" in request.node.fspath.basename:
+    if Path(str(request.node.fspath)).name in {
+        "test_agents.py", "test_agent_benchmark.py",
+    }:
         yield
         return
     from app.agents.reporter import ReporterAgent
@@ -41,7 +55,7 @@ def _stub_reflection_for_recompute(request):
 
     仅当测试不是 test_reflection（那里直接测 ReflectionAgent 本体）时生效。
     """
-    if "test_reflection" in request.node.fspath.basename:
+    if Path(str(request.node.fspath)).name == "test_reflection.py":
         yield
         return
     from app.agents.reflection import ReflectionAgent

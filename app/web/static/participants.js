@@ -27,7 +27,8 @@ function participantRowHtml(p){
   p=p||{};
   var isVol=!!p.is_volunteer;
   var hours=p.contribution_hours!=null?p.contribution_hours:0;
-  return '<div class="participant-row"><input class="participant-name" list="participantNames" value="'+esc(p.name||'')+'" placeholder="姓名"><select class="participant-role">'+roleOptionsHtml(p.role||(isVol?'志愿者 / 外部协作者':'执行成员'))+'</select><input class="participant-hours" type="number" min="0" step="0.5" value="'+hours+'"><label class="participant-vol"><input type="checkbox" class="participant-volunteer" '+(isVol?'checked':'')+'>志愿者</label><button type="button" class="participant-remove icon-danger">×</button></div>';
+  var roleControl=isVol?'<input class="participant-role" value="志愿者" readonly>':'<select class="participant-role">'+roleOptionsHtml(p.role||'执行成员')+'</select>';
+  return '<div class="participant-row"><input class="participant-name" list="participantNames" value="'+esc(p.name||'')+'" placeholder="姓名">'+roleControl+'<input class="participant-hours" type="number" min="0" step="0.5" value="'+hours+'"><label class="participant-vol"><input type="checkbox" class="participant-volunteer" '+(isVol?'checked':'')+'>志愿者</label><button type="button" class="participant-remove icon-danger">×</button></div>';
 }
 
 function memberRole(name){
@@ -156,10 +157,11 @@ async function applyShareQuery(){
     state.input=d.input;
     state.draft=d.plan;
     state.automatic=JSON.parse(JSON.stringify(d));
-    state.readOnly=true;document.body.classList.add('readonly');
-    ['saveBtn','exportMdBtn','exportDocxBtn','exportPdfBtn','exportExcelBtn','exportCsvBtn','exportIcsBtn','shareBtn','confirmDraftBtn','confirmAssignmentBtn'].forEach(function(id){
-      var b=el(id);if(b)b.disabled=true;
-    });
+    state.shareToken=token;state.readOnly=true;
+    document.body.classList.add('readonly');
+    enableAuthFetch();
+    var controls=['saveBtn','exportMdBtn','exportDocxBtn','exportPdfBtn','exportExcelBtn','exportCsvBtn','exportIcsBtn','shareBtn','confirmDraftBtn','confirmAssignmentBtn'];
+    controls.forEach(function(id){var b=el(id);if(b)b.disabled=true});
     renderFinal();
     setView('final',isLargeProject()?5:3);
     resetChatMemory();
@@ -186,7 +188,12 @@ async function sendNotify(){
   try{
     var data=await jsonRequest('/api/notify',state.plan);
     if(!data.enabled){
-      showNotice('未配置 APP_NOTIFY_WEBHOOK，通知未发送','info');
+      var browserResult=await sendBrowserNotifications(data.reminders||[]);
+      if(browserResult.sent){
+        showNotice('已发送 '+browserResult.count+' 条系统通知','success');
+      }else{
+        showNotice(browserResult.message,'info');
+      }
       return;
     }
     if(data.sent){
@@ -195,6 +202,21 @@ async function sendNotify(){
       showNotice('推送失败：'+(data.error||'未知错误'),'error');
     }
   }catch(e){showNotice(e.message,'error')}
+}
+
+async function sendBrowserNotifications(items){
+  if(!items.length)return{sent:false,count:0,message:'当前没有需要发送的提醒'};
+  if(!('Notification' in window))return{sent:false,count:0,message:'当前浏览器不支持系统通知，请配置外部通知地址'};
+  var permission=Notification.permission;
+  if(permission==='default')permission=await Notification.requestPermission();
+  if(permission!=='granted')return{sent:false,count:0,message:'浏览器通知权限未开启，无法发送系统通知'};
+  items.forEach(function(item){
+    new Notification(item.title||'项目提醒',{
+      body:item.detail||state.plan.input.course.name,
+      tag:'workbuddy-'+(item.type||'reminder')+'-'+(item.title||''),
+    });
+  });
+  return{sent:true,count:items.length,message:''};
 }
 
 function bindKnowledgeControls(){

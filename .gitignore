@@ -22,6 +22,7 @@ env/
 
 # Config & secrets
 .env
+benchmark_results/
 .env.local
 config_local.py
 *.key

@@ -35,9 +35,23 @@ def test_demo_ui_has_full_showcase_flow():
     assert 'data-tab="knowledge"' not in html
     assert 'data-tab="schedule"' in html
     assert 'data-tab="collaboration"' in html
+    assert 'aria-label="打开 AI 调整建议"' in html
+    assert 'aria-label="关闭 AI 调整建议"' in html
+    assert 'class="assistant-button-label">AI 建议</span>' in html
+    assert "function positionAssistantDrawer" in js
+    assert "requestAnimationFrame(function()" in js
+    assert "function fileStatusLabel" in js
+    assert "function renderFileList" in js
+    assert ".file-status.is-too_large" in css
+    assert "var builtins=['项目负责人','骨干 / 模块负责人','执行成员']" in js
+    assert "'志愿者 / 外部协作者'" not in js.split('function roleOptionsHtml', 1)[1].split('function isVolunteerRole', 1)[0]
+    assert "查看全部 '+items.length+' 条信息" in js
+    assert "setDefaultDates()" in js
     assert "function alertPanelHtml" in js
     assert "function alertMessages" in js
     assert "warnings.map(esc).join('；')" not in js
+    assert "查看全部 '+items.length+' 条信息" in js
+    assert "items.slice(1)" not in js
     assert ".compact-alert" in css
     assert "small-project-mode" in js
     assert "is-minimal-volunteer" in js
@@ -103,3 +117,17 @@ def test_demo_main_flow_and_three_exports():
     assert excel_response.status_code == 200
     assert "plan_export.xlsx" in excel_response.headers["content-disposition"]
     assert excel_response.content.startswith(b"PK")
+
+
+def test_golden_demo_and_three_runbooks_exist():
+    root = Path(__file__).resolve().parents[1]
+    golden = (root / "docs" / "比赛Demo演示流程.md").read_text(
+        encoding="utf-8")
+    assert "读文件" in golden
+    assert "做决策" in golden
+    assert "发现风险" in golden
+    assert "应对变化" in golden
+    assert "交付成果" in golden
+    for name in ("网页端", "移动端", "故障兜底"):
+        path = root / "docs" / f"演示流程-{name}.md"
+        assert path.exists()

@@ -1,0 +1,301 @@
+[
+  {
+    "id": "E001",
+    "name": "校园低碳生活倡议发布",
+    "source": "课程作业演示案例",
+    "input": {
+      "course": {
+        "name": "校园低碳生活倡议发布",
+        "description": "面向全校同学策划低碳生活倡议活动，完成调研、内容策划、视觉物料、线上传播和效果复盘。"
+      },
+      "members": [
+        {"name": "林悦", "skill_tags": ["调研", "数据分析", "访谈", "报告撰写"]},
+        {"name": "陈曦", "skill_tags": ["文案写作", "报告撰写", "活动策划"]},
+        {"name": "周航", "skill_tags": ["视觉设计", "PPT", "摄影", "文案编辑"]}
+      ],
+      "deadline": "2026-09-10",
+      "requirements": "两周内完成；需要调研摘要、宣传图文、线下倡议活动和复盘报告。",
+      "default_start_date": "2026-08-25"
+    },
+    "hard_requirements": ["调研摘要", "宣传图文", "线下倡议活动", "复盘报告"],
+    "human_reference": {
+      "task_count": 8,
+      "total_hours": 36,
+      "expected_task_names": ["调研", "内容策划", "视觉物料", "活动执行", "复盘"]
+    }
+  },
+  {
+    "id": "E002",
+    "name": "小组合作智能体课程大作业",
+    "source": "课程作业 MVP 拆解方案",
+    "input": {
+      "course": {
+        "name": "小组合作智能体课程大作业",
+        "description": "实现多智能体协作规划系统，要求跑通任务拆解、智能分工、倒排时间线和报告输出。"
+      },
+      "members": [
+        {"name": "B", "skill_tags": ["软件工程", "FastAPI", "集成"]},
+        {"name": "A", "skill_tags": ["Agent设计", "Prompt", "任务拆解"]},
+        {"name": "C", "skill_tags": ["时间线", "分工匹配", "报告"]}
+      ],
+      "deadline": "2026-09-05",
+      "requirements": "A类全做；端到端可演示；提交可运行系统、PPT 和代码仓库。",
+      "default_start_date": "2026-08-20"
+    },
+    "hard_requirements": ["可运行系统", "任务拆解", "智能分工", "时间线", "报告", "PPT"],
+    "human_reference": {
+      "task_count": 10,
+      "total_hours": 70,
+      "expected_task_names": ["数据模型", "LLM封装", "主链路", "Web界面", "联调", "PPT"]
+    }
+  },
+  {
+    "id": "E003",
+    "name": "大学生创新创业大赛商业计划书",
+    "source": "真实学生竞赛场景（脱敏）",
+    "input": {
+      "course": {
+        "name": "大学生创新创业大赛商业计划书",
+        "description": "围绕校园二手交易小程序撰写商业计划书，需要市场调研、商业模式、财务预测和路演PPT。"
+      },
+      "members": [
+        {"name": "王静", "skill_tags": ["市场调研", "数据分析"]},
+        {"name": "刘洋", "skill_tags": ["商业模式", "文案"]},
+        {"name": "赵敏", "skill_tags": ["财务预测", "PPT"]}
+      ],
+      "deadline": "2026-09-15",
+      "requirements": "完成商业计划书、财务表格和 10 页路演 PPT，提交前进行两次内部彩排。",
+      "default_start_date": "2026-08-28"
+    },
+    "hard_requirements": ["市场调研", "商业模式", "财务预测", "路演PPT", "内部彩排"],
+    "human_reference": {
+      "task_count": 9,
+      "total_hours": 48,
+      "expected_task_names": ["调研", "商业模式", "财务", "PPT", "彩排"]
+    }
+  },
+  {
+    "id": "E004",
+    "name": "毕业设计答辩材料准备",
+    "source": "真实学生场景（脱敏）",
+    "input": {
+      "course": {
+        "name": "毕业设计答辩材料准备",
+        "description": "完成毕业设计论文修改、答辩PPT、演示视频和问答准备。"
+      },
+      "members": [
+        {"name": "陈同学", "skill_tags": ["论文撰写", "实验"]},
+        {"name": "李同学", "skill_tags": ["PPT", "视频剪辑"]}
+      ],
+      "deadline": "2026-09-20",
+      "requirements": "论文按模板修改并查重，PPT 不超过 15 页，演示视频不超过 5 分钟，准备 20 个答辩问题。",
+      "default_start_date": "2026-09-01"
+    },
+    "hard_requirements": ["论文", "查重", "答辩PPT", "演示视频", "答辩问题"],
+    "human_reference": {
+      "task_count": 7,
+      "total_hours": 40,
+      "expected_task_names": ["论文修改", "查重", "PPT", "视频", "问答准备"]
+    }
+  },
+  {
+    "id": "E005",
+    "name": "校运会志愿者组织",
+    "source": "真实学生活动场景（脱敏）",
+    "input": {
+      "course": {
+        "name": "校运会志愿者组织",
+        "description": "组织 30 名志愿者完成校运会两天的签到、引导、物资和摄影工作。"
+      },
+      "members": [
+        {"name": "张队长", "skill_tags": ["统筹", "沟通"]},
+        {"name": "孙排班", "skill_tags": ["排班", "Excel"]},
+        {"name": "吴物资", "skill_tags": ["物资采购", "仓库"]}
+      ],
+      "deadline": "2026-09-25",
+      "requirements": "完成志愿者招募、岗位排班、物资清单和应急预案，活动当天有负责人值班表。",
+      "default_start_date": "2026-09-08"
+    },
+    "hard_requirements": ["志愿者招募", "岗位排班", "物资清单", "应急预案", "值班表"],
+    "human_reference": {
+      "task_count": 8,
+      "total_hours": 44,
+      "expected_task_names": ["招募", "排班", "物资", "预案", "值班"]
+    }
+  },
+  {
+    "id": "E006",
+    "name": "软件工程小组项目",
+    "source": "真实课程场景（脱敏）",
+    "input": {
+      "course": {
+        "name": "软件工程小组项目",
+        "description": "开发一个课堂签到 Web 系统，包含前后端、数据库和部署。"
+      },
+      "members": [
+        {"name": "小何", "skill_tags": ["后端", "Python", "数据库"]},
+        {"name": "小徐", "skill_tags": ["前端", "Vue"]},
+        {"name": "小许", "skill_tags": ["测试", "部署", "文档"]}
+      ],
+      "deadline": "2026-10-01",
+      "requirements": "支持教师创建签到、学生扫码签到、统计导出，并提供部署文档和测试报告。",
+      "default_start_date": "2026-09-10"
+    },
+    "hard_requirements": ["签到", "扫码", "统计导出", "部署文档", "测试报告"],
+    "human_reference": {
+      "task_count": 10,
+      "total_hours": 80,
+      "expected_task_names": ["需求", "数据库", "后端接口", "前端", "测试", "部署"]
+    }
+  },
+  {
+    "id": "E007",
+    "name": "微信公众号推送制作",
+    "source": "真实学生新媒体任务（脱敏）",
+    "input": {
+      "course": {
+        "name": "微信公众号推送制作",
+        "description": "为一篇校园活动制作公众号推送，包含文案、配图、排版和预览修改。"
+      },
+      "members": [
+        {"name": "小夏", "skill_tags": ["文案写作"]},
+        {"name": "小何", "skill_tags": ["摄影", "图片处理"]},
+        {"name": "小周", "skill_tags": ["秀米排版", "公众号"]}
+      ],
+      "deadline": "2026-09-12",
+      "requirements": "文案 800 字，配图 6 张，使用秀米排版，提交前需要老师预览修改一轮。",
+      "default_start_date": "2026-09-05"
+    },
+    "hard_requirements": ["文案", "配图", "秀米", "预览修改"],
+    "human_reference": {
+      "task_count": 5,
+      "total_hours": 14,
+      "expected_task_names": ["文案", "摄影", "修图", "排版", "修改"]
+    }
+  },
+  {
+    "id": "E008",
+    "name": "校园短视频比赛作品",
+    "source": "真实学生创作场景（脱敏）",
+    "input": {
+      "course": {
+        "name": "校园短视频比赛作品",
+        "description": "制作一个 90 秒校园文化主题短视频，需要脚本、拍摄、剪辑、字幕和封面。"
+      },
+      "members": [
+        {"name": "小杨", "skill_tags": ["编剧", "脚本"]},
+        {"name": "小许", "skill_tags": ["摄影", "灯光"]},
+        {"name": "小陈", "skill_tags": ["剪辑", "调色", "字幕"]}
+      ],
+      "deadline": "2026-09-18",
+      "requirements": "90 秒成片，竖屏 1080P，包含字幕、片头和封面，提交前至少内部评审一次。",
+      "default_start_date": "2026-09-08"
+    },
+    "hard_requirements": ["脚本", "拍摄", "剪辑", "字幕", "封面", "内部评审"],
+    "human_reference": {
+      "task_count": 7,
+      "total_hours": 36,
+      "expected_task_names": ["脚本", "拍摄", "剪辑", "字幕", "封面", "评审"]
+    }
+  },
+  {
+    "id": "E009",
+    "name": "数学建模竞赛论文排版",
+    "source": "真实竞赛场景（脱敏）",
+    "input": {
+      "course": {
+        "name": "数学建模竞赛论文排版",
+        "description": "完成建模论文写作、图表绘制、LaTeX 排版和摘要翻译。"
+      },
+      "members": [
+        {"name": "小王", "skill_tags": ["建模", "Matlab"]},
+        {"name": "小周", "skill_tags": ["论文写作"]},
+        {"name": "小吴", "skill_tags": ["LaTeX", "图表"]}
+      ],
+      "deadline": "2026-09-22",
+      "requirements": "论文不超过 30 页，包含摘要、模型假设、求解和灵敏度分析，全部图表矢量。",
+      "default_start_date": "2026-09-12"
+    },
+    "hard_requirements": ["摘要", "模型假设", "求解", "灵敏度分析", "矢量图表", "LaTeX"],
+    "human_reference": {
+      "task_count": 8,
+      "total_hours": 52,
+      "expected_task_names": ["建模", "求解", "论文", "图表", "排版", "翻译"]
+    }
+  },
+  {
+    "id": "E010",
+    "name": "校园晚会活动执行",
+    "source": "真实学生活动场景（脱敏）",
+    "input": {
+      "course": {
+        "name": "校园晚会活动执行",
+        "description": "组织一场校园迎新晚会，需要节目征集、场地灯光音响、宣传物料和现场执行。"
+      },
+      "members": [
+        {"name": "李导", "skill_tags": ["统筹", "节目策划"]},
+        {"name": "陈技", "skill_tags": ["灯光", "音响"]},
+        {"name": "赵宣", "skill_tags": ["海报", "公众号", "宣传"]}
+      ],
+      "deadline": "2026-09-30",
+      "requirements": "晚会时长 90 分钟，至少 12 个节目，完成场地确认、设备调试、海报和现场分工表。",
+      "default_start_date": "2026-09-10"
+    },
+    "hard_requirements": ["节目征集", "场地确认", "灯光音响", "海报", "现场分工"],
+    "human_reference": {
+      "task_count": 10,
+      "total_hours": 60,
+      "expected_task_names": ["节目", "场地", "设备", "宣传", "现场执行"]
+    }
+  },
+  {
+    "id": "E011",
+    "name": "产品原型设计作业",
+    "source": "真实课程场景（脱敏）",
+    "input": {
+      "course": {
+        "name": "产品原型设计作业",
+        "description": "为校园跑腿小程序设计高保真原型，需要用户调研、信息架构、页面原型和可用性测试。"
+      },
+      "members": [
+        {"name": "小刘", "skill_tags": ["用户调研", "需求分析"]},
+        {"name": "小郑", "skill_tags": ["Axure", "原型设计"]},
+        {"name": "小冯", "skill_tags": ["可用性测试", "报告"]}
+      ],
+      "deadline": "2026-10-08",
+      "requirements": "完成 20 页高保真原型、用户调研报告和 5 名用户可用性测试记录。",
+      "default_start_date": "2026-09-15"
+    },
+    "hard_requirements": ["用户调研", "信息架构", "高保真原型", "可用性测试", "测试记录"],
+    "human_reference": {
+      "task_count": 9,
+      "total_hours": 56,
+      "expected_task_names": ["调研", "架构", "原型", "测试", "报告"]
+    }
+  },
+  {
+    "id": "E012",
+    "name": "数据可视化分析报告",
+    "source": "真实课程场景（脱敏）",
+    "input": {
+      "course": {
+        "name": "数据可视化分析报告",
+        "description": "基于公开校园能耗数据完成清洗、分析和可视化报告。"
+      },
+      "members": [
+        {"name": "小唐", "skill_tags": ["Python", "数据清洗"]},
+        {"name": "小宋", "skill_tags": ["统计分析", "建模"]},
+        {"name": "小郭", "skill_tags": ["可视化", "报告"]}
+      ],
+      "deadline": "2026-09-28",
+      "requirements": "清洗至少 3 个数据表，完成趋势分析、相关性分析和 8 张图表，报告附代码。",
+      "default_start_date": "2026-09-14"
+    },
+    "hard_requirements": ["数据清洗", "趋势分析", "相关性分析", "8张图表", "代码"],
+    "human_reference": {
+      "task_count": 8,
+      "total_hours": 42,
+      "expected_task_names": ["数据获取", "清洗", "分析", "可视化", "报告", "代码"]
+    }
+  }
+]
