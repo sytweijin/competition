@@ -109,7 +109,7 @@
 2. **为什么这样改：** 新环境可复现、评审/部署文档一致，且基础版已完全移除清小搭接入层，后续可独立演进。
 3. **收益：** 全量 244 项测试通过；部署文档可复查。
 
-**涉及文件：** `app/` 下通用后端与前端文件（删除 `app/compat/` 清小搭协议层与 `tests/test_qingxiaoda.py`；新增 `app/services/remote_io.py`；重写 `app/services/share_store.py` 为只读令牌）、`tests/`（重写 `test_share_tokens.py`/`test_storage.py`/`test_fault_drills.py` 走通用路径）、`scripts/`、`eval/cases.json`、`docs/`（演示与部署文档）、`requirements.txt`、`.env.example`、`render.yaml`、`README.md`、`CHANGELOG.md`。
+**涉及文件：** `app/` 下通用后端与前端文件（删除 `app/compat/` 清小搭协议层与 `tests/test_qingxiaoda.py`；新增 `app/services/remote_io.py`；重写 `app/services/share_store.py` 为只读令牌）、`tests/`（重写 `test_share_tokens.py`/`test_storage.py`/`test_fault_drills.py` 走通用路径）、`scripts/`、`eval/cases.json`、`docs/`（演示、部署与使用说明书）、`requirements.txt`、`.env.example`、`render.yaml`、`README.md`、`CHANGELOG.md`。
 
 ---
 
