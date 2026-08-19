@@ -3152,6 +3152,7 @@ th {
   line-height: 1.75;
   overflow: hidden;
   max-width: 100%;
+  padding: 2px 18px 6px;
 }
 
 .report-box h3 {
