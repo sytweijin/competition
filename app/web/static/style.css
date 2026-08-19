@@ -3155,10 +3155,25 @@ th {
   padding: 2px 18px 6px;
 }
 
+.report-box h1 {
+  font-size: 21px;
+  margin: 28px 0 16px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.report-box h2 {
+  font-size: 18px;
+  margin: 26px 0 14px;
+  font-weight: 700;
+  color: var(--text);
+}
+
 .report-box h3 {
   font-size: 17px;
-  margin: 20px 0 8px;
+  margin: 24px 0 12px;
   font-weight: 700;
+  color: var(--text);
 }
 
 .report-box h4 {
@@ -3177,7 +3192,7 @@ th {
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
-  margin: 8px 0;
+  margin: 18px 0;
 }
 
 .report-box .md-table th,
