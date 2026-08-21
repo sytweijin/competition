@@ -83,6 +83,62 @@ def _count_work_days(start: date, end: date, skip_dates: set[date] | None = None
     return count
 
 
+def _normalize_workday(d: date, skip_dates: set[date]) -> date:
+    """把日期推进到最近的可用工作日（跳过周末与 skip_dates 中的不可用日）。
+
+    旧版 _add_work_days 只在“从起点推进 N 天”时跳过不可用日，若起点本身
+    就是不可用日（典型如倒推得到的起始日正好撞上成员请假日），会被原样
+    当作可排日期，任务直接压在不可用日上。这里对起点做同样的校验。
+    """
+    while _is_weekend(d) or d in skip_dates:
+        d += timedelta(days=1)
+    return d
+
+
+def _end_from_workdays(start: date, workdays: int,
+                       skip_dates: set[date]) -> date:
+    """从 start 起按可用工作日推进 workdays 天，返回最后一个可用工作日。
+
+    任务窗口内的不可用日与周末算作“空档”跳过，只累计真正可用的工作日。
+    这样多日任务不会把负责人/协作者的不可用日包进窗口中间——窗口长度会
+    自动拉长到覆盖这些空档，资源日历在该日不再产生负载。
+    """
+    if workdays <= 0:
+        return start
+    cur = start
+    remaining = workdays
+    while remaining > 0:
+        if not _is_weekend(cur) and cur not in skip_dates:
+            remaining -= 1
+            if remaining == 0:
+                return cur
+        cur += timedelta(days=1)
+    return cur
+
+
+def sync_task_dates(plan, timeline):
+    """把 Timeline 算出的每项任务起止日期回填到 plan.tasks。
+
+    旧流程在草案阶段给所有任务填了默认的“整个项目窗口”起止日期，而时间线
+    算出真正排期后从不写回，导致资源日历优先读取任务自身日期时，把整个项目
+    窗口都当作任务排期，成员不可用日因此被误报为“仍有任务”。时间线才是
+    排期的事实来源，这里统一回填，保证甘特图、任务列表与资源日历一致。
+    """
+    if not timeline or not timeline.tasks:
+        return plan
+    by_id = {t.task_id: t for t in timeline.tasks}
+    tasks = [
+        t.model_copy(update={
+            "start_date": by_id[t.id].start_date.date()
+            if t.id in by_id else t.start_date,
+            "end_date": by_id[t.id].end_date.date()
+            if t.id in by_id else t.end_date,
+        })
+        for t in plan.tasks
+    ]
+    return plan.model_copy(update={"tasks": tasks})
+
+
 class TimelineAgent(BaseAgent[TimelineOutput]):
     """CPM 关键路径 Agent（纯算法，不实例化 LLM）。"""
 
@@ -274,10 +330,16 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
             # 不使用 round：Python 的银行家舍入会把 0.5 舍到 0、1.5 舍到 2，
             # 造成半天任务忽前忽后。日期取所在工作日，精确位置另行输出给甘特图。
             work_offset = es[tid] // 2
-            s_date = datetime.combine(_add_work_days(start_base, work_offset, task_skip_dates), datetime.min.time())
-            end_offset = work_offset if durations[tid] == 0 else (ef[tid] - 1) // 2
+            raw_start = _add_work_days(start_base, work_offset, task_skip_dates)
+            s_date = datetime.combine(
+                _normalize_workday(raw_start, task_skip_dates),
+                datetime.min.time(),
+            )
+            # 任务工期按“可用工作日”累计：窗口内的不可用日/周末被跳过，
+            # end 是累计够 workdays 个工作日的最后一天。
+            work_span = math.ceil(durations[tid] / 2)
             e_date = datetime.combine(
-                _add_work_days(start_base, end_offset, task_skip_dates),
+                _end_from_workdays(s_date.date(), work_span, task_skip_dates),
                 datetime.min.time(),
             )
             timeline_tasks.append(TimelineTask(

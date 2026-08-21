@@ -110,6 +110,47 @@ def test_member_unavailable_dates_are_updated_and_preserved():
     assert alice["unavailable_dates"] == ["2026-08-12", "2026-08-13"]
 
 
+def test_member_edit_recalculates_and_avoids_unavailable_dates():
+    """成员不可用日期变动后，重算的时间线必须避开新日期，并回填到任务日期。"""
+    client = TestClient(app)
+    fp = _make_test_plan()
+    # 给 Alice 设置整个排期窗口内都不可用：重算后 T1 应避开这些日期
+    resp = client.post("/api/edit-members", json={
+        "plan": json.loads(fp.model_dump_json()),
+        "removed_members": [],
+        "updated_members": {},
+        "member_unavailable_dates": {
+            "Alice": [
+                "2026-07-28", "2026-07-29", "2026-07-30",
+                "2026-07-31", "2026-08-01",
+            ],
+        },
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    alice_unavailable = {
+        tuple(m["unavailable_dates"]) for m in data["input"]["members"]
+        if m["name"] == "Alice"
+    }
+    assert any("2026-07-28" in d for d in alice_unavailable)
+    # 时间线任务日期已回填到任务自身，且不与 Alice 不可用日重叠
+    t1 = next(t for t in data["plan"]["tasks"] if t["id"] == "T1")
+    assert t1["start_date"] is not None and t1["end_date"] is not None
+    from datetime import date as _date
+    start = _date.fromisoformat(t1["start_date"])
+    end = _date.fromisoformat(t1["end_date"])
+    alice_dates = next(
+        (m["unavailable_dates"] for m in data["input"]["members"]
+         if m["name"] == "Alice"),
+        [],
+    )
+    for d in alice_dates:
+        day = _date.fromisoformat(d)
+        assert not (start <= day <= end), (
+            f"T1 排期 {start}~{end} 与 Alice 不可用日 {day} 重叠"
+        )
+
+
 def test_added_member_accepts_unavailable_dates():
     """大型项目阶段新增骨干时也不能丢失不可用日期。"""
     client = TestClient(app)

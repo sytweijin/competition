@@ -5,6 +5,84 @@
 > 按时间倒序排列（最新在最上面），随项目同步更新。
 
 ---
+## v5.77 —— 不可用日期硬约束：时间线避开、日期回填与资源日历负载修复（2026-08-21）
+
+**定位：** 让成员的不可用日期成为排期的硬约束——时间线不再把任务压在不可用日上，排期结果回填到任务自身，资源日历只把负载摊到真正可用的工作日。
+
+**审查/修改背景：** 用户反馈负载均衡后成员仍会在明确标记的不可用日期上被派任务。排查发现三层根因：`assign_with_balance` 只按技能/负载/工时打分，从不读 `unavailable_dates`；时间线的 `_add_work_days` 只在“从起点推进 N 天”时跳过不可用日，起点本身撞上不可用日会被原样接受，多日任务窗口中间也不校验；草案阶段给所有任务填了默认项目窗口日期，时间线算出真实排期后从不回填，资源日历优先读任务自身日期，于是把整个窗口（含不可用日）都显示成有任务。
+
+---
+
+### 关键缺陷（P0）
+
+#### 1. 时间线把任务排在成员不可用日期上
+
+1. **问题：** 截止日紧凑时，倒推得到的起始日正好是成员不可用日，任务被原样压在该日期上；多日任务窗口中间的不可用日也被当作可排日期包进窗口，资源日历随后在该日产生负载并告警。
+2. **修改前：** `_add_work_days` 推进时跳过不可用日，但零偏移任务的起点不校验；任务起止只映射两个边界日，窗口中间不检查：
+   ```python
+   work_offset = es[tid] // 2
+   s_date = datetime.combine(_add_work_days(start_base, work_offset, task_skip_dates), datetime.min.time())
+   end_offset = work_offset if durations[tid] == 0 else (ef[tid] - 1) // 2
+   e_date = datetime.combine(_add_work_days(start_base, end_offset, task_skip_dates), datetime.min.time())
+   ```
+3. **修改后：** 新增 `_normalize_workday`（起点撞上周末/不可用日时后移）与 `_end_from_workdays`（按可用工作日累计工期，窗口内不可用日/周末算空档并拉长窗口）：
+   ```python
+   raw_start = _add_work_days(start_base, work_offset, task_skip_dates)
+   s_date = datetime.combine(_normalize_workday(raw_start, task_skip_dates), datetime.min.time())
+   work_span = math.ceil(durations[tid] / 2)
+   e_date = datetime.combine(_end_from_workdays(s_date.date(), work_span, task_skip_dates), datetime.min.time())
+   ```
+4. **为什么这样改：** 排期起点和窗口中间都必须按“该成员当天是否可用”判定，不可用日不参与可用工作日计数；窗口自动拉长后，成员在空档日不再有任务。
+5. **收益：** 起始日撞上不可用日时任务自动后移；多日任务不再把成员不可用日包进窗口；截止日仍然过紧时任务延后并照常触发延期警告，而不是悄悄占用不可用日。
+
+### 健壮性提升（P1）
+
+#### 2. 时间线排期结果回填任务自身日期
+
+1. **问题：** 草案阶段把所有任务的 `start_date/end_date` 填成默认项目窗口，确认与成员调整后时间线算出真实排期却从不写回，资源日历优先读任务自身日期，导致整段窗口（含成员不可用日）都被显示为有任务。
+2. **修改前：** coordinator / `edit-members` / 手动分工 / editor 重算时间线后只回填负责人与协作者，任务日期保持草案默认窗口：
+   ```python
+   plan = plan.model_copy(update={"tasks": [
+       t.model_copy(update={"assignee_id": ..., "collaborator_ids": ...})
+       for t in plan.tasks
+   ]})
+   ```
+3. **修改后：** `timeline.py` 新增 `sync_task_dates()`，时间线跑完后把每项任务的真实起止日期回填到任务：
+   ```python
+   plan = sync_task_dates(plan, timeline)
+   # by_id 中同 id 的 TimelineTask 起止日期写回 plan.tasks
+   ```
+   并在 coordinator 主流程/confirm、`/api/edit-members`、手动分工、editor 四处统一调用。
+4. **为什么这样改：** 时间线是排期的事实来源，任务自身日期应与甘特图一致；资源日历、任务列表、导出文档全部基于同一份日期，消除“时间线避开但日历仍显示冲突”的数据断链。
+5. **收益：** 资源日历与甘特图一致；成员调整后新不可用日期真实生效、旧日期重新可用；旧存档即使任务日期过期，日历也优先采用时间线日期。
+
+#### 3. 资源日历只把负载摊到可用工作日
+
+1. **问题：** 资源日历把任务工时除以整个日历跨度（含周末与成员不可用日），导致即使时间线窗口已拉长避开不可用日，成员在不可用日当天仍显示负载并告警。
+2. **修改前：** 按 `calendar_span` 平均分摊，循环不区分周末/不可用日：
+   ```python
+   span = max(1, (end - start).days + 1)
+   daily = hours / span
+   for i in range(span):
+       member_load[name][key] += daily
+   ```
+3. **修改后：** 先算每个参与者可用的工作日集合（剔除周末与本人不可用日），负载只在可用工作日上分摊，空档日负载为 0：
+   ```python
+   workday_keys = [key for i in range(calendar_span)
+                   if not _is_weekend(day) and day not in unavailable]
+   daily = hours / len(workday_keys) if workday_keys else 0.0
+   # 循环中 member 的周末/不可用日直接 continue，不累加负载
+   ```
+4. **为什么这样改：** 成员在不可用日不工作，其每日负载就不该有值；把工时分摊到其余可用工作日也反映了真实的工作强度，超载告警因此更准确。
+5. **收益：** 不可用日与周末不再显示负载；不可用日冲突告警不再误报；真实产能不足会以“每日负载超上限”的形式暴露，引导用户拆分任务或调整人手。
+
+**同步修改：**
+- `app/services/project_service.py`：资源日历优先采用时间线日期，任务自身日期仅在时间线缺失时兜底；新增模块级 `_is_weekend`。
+- `tests/test_timeline.py`：新增起始日不可用、多日任务窗口跳不可用日、日期回填 3 个用例。
+- `tests/test_project_service.py`：资源日历负载口径更新 + 时间线日期优先用例。
+- `tests/test_member_edit.py`：成员编辑重算后避开不可用日并回填日期的回归用例。
+
+---
 ## v5.76 —— 基础原版整合 v5.49–v5.76 通用能力与导出区上移（2026-08-18）
 
 **定位：** 把清小搭分支中与平台接入无关的通用提升（A 组前端/工作台 + B 组后端能力/稳定性）整体移植到基础原版，并应用导出/分享按钮上移与响应式头部修复，让其他比赛直接复用最新工作台能力。
@@ -7270,4 +7348,5 @@ LLM 负责"创造性"：拆任务、分配角色、写报告
 | **v5.47** | **项目规模角色模型简化** | **已完成** |
 | **v5.48** | **需求驱动的材料答辩模拟** | **已完成** |
 | **v5.76** | **基础版整合 v5.49–v5.76 通用能力、移除清小搭接入残留与导出区上移** | **已完成** |
+| **v5.77** | **不可用日期硬约束：时间线避开、日期回填与资源日历负载修复** | **已完成** |
 | v6.x | 正式发布与功能扩展 | 规划中 |

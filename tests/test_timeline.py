@@ -191,3 +191,74 @@ def test_half_day_offsets_are_monotonic_and_exported(mock_today):
     assert [task.duration_days for task in out.tasks] == [.5, .5, .5]
     assert out.tasks[0].start_date == out.tasks[1].start_date
     assert out.tasks[2].start_date > out.tasks[1].start_date
+
+
+@patch('app.config.today', return_value=_dt.date(2026, 8, 10))
+def test_start_date_never_lands_on_unavailable_day(mock_today):
+    """起始日本身不可用时，任务必须后移到下一个可用工作日，而不是压在不可用日上。"""
+    plan = _plan([SubTask(id="T1", name="交付", estimated_hours=8)])
+    out = TimelineAgent().run(
+        plan,
+        "2026-08-14",
+        assignments={"T1": ["小文"]},
+        members=[TeamMember(
+            name="小文", daily_available_hours=4,
+            unavailable_dates=[
+                _dt.date(2026, 8, 11), _dt.date(2026, 8, 12),
+                _dt.date(2026, 8, 13), _dt.date(2026, 8, 14),
+            ],
+        )],
+    )
+    s, e = out.tasks[0].start_date.date(), out.tasks[0].end_date.date()
+    # 8-11~8-14 全部不可用，任务应整体后移（8-17~8-18，跳过周末）
+    assert s == _dt.date(2026, 8, 17)
+    assert e == _dt.date(2026, 8, 18)
+    assert all(
+        d not in {_dt.date(2026, 8, 11), _dt.date(2026, 8, 12),
+                  _dt.date(2026, 8, 13), _dt.date(2026, 8, 14)}
+        for d in [s, e]
+    )
+
+
+@patch('app.config.today', return_value=_dt.date(2026, 8, 10))
+def test_multi_day_task_skips_mid_span_unavailable_day(mock_today):
+    """多日任务窗口中间的不可用日应被跳过并拉长窗口，而不是包进排期。"""
+    plan = _plan([SubTask(id="T1", name="长任务", estimated_hours=32)])
+    out = TimelineAgent().run(
+        plan,
+        "2026-08-25",
+        assignments={"T1": ["小文"]},
+        members=[TeamMember(
+            name="小文", daily_available_hours=4,
+            unavailable_dates=[_dt.date(2026, 8, 13)],
+        )],
+    )
+    s, e = out.tasks[0].start_date.date(), out.tasks[0].end_date.date()
+    # 32h / 4h/天 = 8 个工作日；从 8-14 起排（8-16/8-17 周末不计），
+    # 8 个工作日依次为 14、15、18、19、20、21、22、25
+    assert s == _dt.date(2026, 8, 14)
+    assert e == _dt.date(2026, 8, 25)
+
+
+def test_sync_task_dates_backfills_timeline_dates():
+    """时间线日期必须回填到任务自身，否则资源日历会读到草案默认窗口。"""
+    from app.agents.timeline import sync_task_dates
+    from app.models.schemas import TimelineOutput, TimelineTask
+    plan = _plan([SubTask(
+        id="T1", name="A", estimated_hours=8,
+        start_date=_dt.date(2026, 8, 1), end_date=_dt.date(2026, 8, 10),
+    )])
+    timeline = TimelineOutput(
+        tasks=[TimelineTask(
+            task_id="T1", name="A",
+            start_date=datetime(2026, 8, 17, 0, 0),
+            end_date=datetime(2026, 8, 18, 0, 0),
+            start_offset_days=0.0, duration_days=1.0,
+            is_critical=True, float_days=0.0,
+            assigned_to=["小文"], status="pending",
+        )],
+        critical_path=["T1"], total_days=1,
+    )
+    synced = sync_task_dates(plan, timeline)
+    assert synced.tasks[0].start_date == _dt.date(2026, 8, 17)
+    assert synced.tasks[0].end_date == _dt.date(2026, 8, 18)

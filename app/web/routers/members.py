@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 from app import config
 from app.agents.scoring import assign_with_balance
-from app.agents.timeline import TimelineAgent
+from app.agents.timeline import TimelineAgent, sync_task_dates
 from app.models.schemas import FullPlan, TeamMember
 
 logger = logging.getLogger(__name__)
@@ -130,6 +130,7 @@ def edit_members_endpoint(req: MemberEditRequest):
         assignments=timeline_assignments,
         members=new_members,
     )
+    updated_plan = sync_task_dates(updated_plan, timeline)
 
     return FullPlan(
         input=new_input,

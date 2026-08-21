@@ -17,7 +17,7 @@ from app.agents.scoring import format_skills_for_prompt
 from app.agents.planner import PlannerAgent
 from app.agents.matcher import MatcherAgent
 from app.agents.scoring import assign_with_balance, enhance
-from app.agents.timeline import TimelineAgent
+from app.agents.timeline import TimelineAgent, sync_task_dates
 from app.agents.reporter import ReporterAgent
 from app.agents.reflection import ReflectionAgent
 from app.agents.validation import ensure_large_project_structure
@@ -143,6 +143,11 @@ class Coordinator:
             timeline = TimelineOutput(tasks=[], critical_path=[],
                                       total_days=0,
                                       note="Timeline failed: " + timeline.message)
+        else:
+            # 时间线是排期事实来源：把每项任务的起止日期回填到 plan.tasks，
+            # 否则草案阶段的默认项目窗口日期会覆盖真实排期，
+            # 资源日历会把整个窗口（含成员不可用日）都算成有任务。
+            plan = sync_task_dates(plan, timeline)
 
         trace.mark_first_useful_result()
 
@@ -229,6 +234,8 @@ class Coordinator:
                 plan, inp.deadline.isoformat(), qa_matrix, inp.members)
         if isinstance(timeline, AgentError):
             timeline = TimelineOutput(tasks=[], critical_path=[], total_days=0, note=timeline.message)
+        else:
+            plan = sync_task_dates(plan, timeline)
         trace.mark_first_useful_result()
         with stage("Reporter"):
             report = ReportOutput(

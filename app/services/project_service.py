@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import date, timedelta
 
+from app.agents.timeline import sync_task_dates
 from app.agents.validation import (
     PlanValidationError, ensure_large_project_structure, validate_plan,
 )
@@ -21,6 +22,11 @@ from app.models.schemas import (
 from app.services.duration_estimator import (
     calibrate_plan_estimates, record_duration_feedback,
 )
+
+
+def _is_weekend(day: date) -> bool:
+    """周六(5)或周日(6)。资源日历分摊负载时把周末视为空档。"""
+    return day.weekday() >= 5
 
 
 class ProjectServiceError(ValueError):
@@ -415,6 +421,7 @@ def apply_manual_assignment(req: ManualAssignmentRequest) -> FullPlan:
         update={"tasks": updated_tasks, "modules": updated_modules})
     timeline = TimelineAgent().run(
         plan, fp.input.deadline.isoformat(), assignment_map, fp.input.members)
+    plan = sync_task_dates(plan, timeline)
     # 基于实际负载和工期计算真实风险，而不是把 note 当作 risk_note
     risk_note = _build_manual_risk_note(plan, timeline, workload, fp.input.members)
     report = fp.report.model_copy(update={
@@ -651,14 +658,15 @@ def resource_calendar(plan: FullPlan) -> dict:
             timeline_map[tl.task_id] = tl
     dated = []
     for task in active_tasks:
-        start = task.start_date
-        end = task.end_date
         tl = timeline_map.get(task.id)
-        if tl:
-            if start is None:
-                start = getattr(tl, "start_date", None)
-            if end is None:
-                end = getattr(tl, "end_date", None)
+        # 时间线是排期的事实来源：优先使用时间线日期，任务自身日期仅在
+        # 时间线缺失时兜底（如旧存档或手动指定排期的场景）。
+        if tl is not None:
+            start = getattr(tl, "start_date", None)
+            end = getattr(tl, "end_date", None)
+        else:
+            start = task.start_date
+            end = task.end_date
         if start and end:
             dated.append(task.model_copy(update={
                 "start_date": as_date(start),
@@ -725,12 +733,26 @@ def resource_calendar(plan: FullPlan) -> dict:
     for task in dated:
         start = as_date(task.start_date)
         end = as_date(task.end_date)
-        span = max(1, (end - start).days + 1)
+        calendar_span = max(1, (end - start).days + 1)
         for name, hours, is_vol in participants_for(task):
-            daily = hours / span
-            for i in range(span):
+            # 每个参与者只在“真正可用的工作日”上分摊工时：周末与其本人
+            # 不可用日算作空档，不产生负载。日历窗口可能因这些空档被拉长，
+            # 但成员当天不应显示任何任务，否则就会出现“不可用日仍有任务”。
+            if is_vol or name not in member_map:
+                member = None
+            else:
+                member = member_map.get(name)
+            unavailable = set(member.unavailable_dates or []) if member else set()
+            workday_keys = [
+                (start + timedelta(days=i)).isoformat()
+                for i in range(calendar_span)
+                if not _is_weekend(start + timedelta(days=i))
+                and (start + timedelta(days=i)) not in unavailable
+            ]
+            daily = hours / len(workday_keys) if workday_keys else 0.0
+            for i in range(calendar_span):
                 key = (start + timedelta(days=i)).isoformat()
-                if key not in day_keys:
+                if key not in day_keys or key not in workday_keys:
                     continue
                 if is_vol or name not in member_map:
                     volunteer_load.setdefault(name, {k: 0.0 for k in day_keys})

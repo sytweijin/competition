@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 
 from app.agents.scoring import assign_with_balance
-from app.agents.timeline import TimelineAgent
+from app.agents.timeline import TimelineAgent, sync_task_dates
 from app.agents.validation import (
     PlanValidationError, ensure_large_project_structure, validate_plan,
 )
@@ -110,6 +110,7 @@ def edit_plan(req: EditPlanRequest) -> FullPlan:
             assignments=assignments,
             members=original.input.members,
         )
+        new_plan = sync_task_dates(new_plan, timeline)
 
     # 核心数据变化后使旧报告失效；用户下次打开或导出报告时再生成。
     report = ReportOutput(summary="")

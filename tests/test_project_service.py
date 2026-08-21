@@ -1,13 +1,13 @@
 """共享项目业务服务测试：Web 与未来协议适配层都依赖这里。"""
 
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 
 from app.models.schemas import (
     AssignmentInput, CourseInfo, DraftOperation, FullPlan, ManualAssignmentRequest,
     PlanOutput, ProjectModule, QAOutput, ReportOutput, SubTask, TeamMember,
-    TimelineOutput, Volunteer,
+    TimelineOutput, TimelineTask, Volunteer,
 )
 from app.services.project_service import (
     ProjectServiceError, apply_manual_assignment, mutate_draft,
@@ -256,6 +256,65 @@ def test_resource_calendar_detects_daily_overload_and_unavailable():
     )
     cal = resource_calendar(plan)
     assert cal["days"] == ["2026-08-05", "2026-08-06", "2026-08-07"]
-    assert cal["members"]["小文"]["daily_load"]["2026-08-05"] == 3.0
-    assert any("不可用日期" in w for w in cal["warnings"])
+    # 不可用日与周末不计负载：9h 只摊到 8-05 与 8-07 两个可用工作日上
+    assert cal["members"]["小文"]["daily_load"]["2026-08-05"] == 4.5
+    assert cal["members"]["小文"]["daily_load"]["2026-08-06"] == 0.0
+    assert cal["members"]["小文"]["daily_load"]["2026-08-07"] == 4.5
     assert any("超过可用" in w for w in cal["warnings"])
+    assert not any("不可用日期" in w for w in cal["warnings"])
+
+
+def test_resource_calendar_prefers_timeline_dates():
+    """资源日历应优先采用时间线排期日期，而不是草案默认的项目窗口日期。"""
+    plan = FullPlan(
+        input=AssignmentInput(
+            course=CourseInfo(name="日历测试", description=""),
+            members=[
+                TeamMember(
+                    name="小文", role="执行成员",
+                    daily_available_hours=4,
+                    unavailable_dates=[date(2026, 8, 6)],
+                ),
+            ],
+            deadline=date(2026, 8, 20),
+        ),
+        plan=PlanOutput(
+            tasks=[
+                SubTask(
+                    id="T1", name="任务1", estimated_hours=8,
+                    assignee_id="小文",
+                    # 草案阶段的默认窗口覆盖了不可用日
+                    start_date=date(2026, 8, 5),
+                    end_date=date(2026, 8, 8),
+                ),
+            ],
+            summary="测试",
+        ),
+        timeline=TimelineOutput(
+            tasks=[TimelineTask(
+                task_id="T1", name="任务1",
+                start_date=datetime(2026, 8, 7, 0, 0),
+                end_date=datetime(2026, 8, 10, 0, 0),
+                start_offset_days=0.0, duration_days=1.0,
+                is_critical=True, float_days=0.0,
+                assigned_to=["小文"], status="pending",
+            )],
+            critical_path=["T1"], total_days=1,
+        ),
+        qa_matrix=QAOutput(assignments=[]),
+        report=ReportOutput(summary=""),
+    )
+    cal = resource_calendar(plan)
+    # 窗口来自时间线 8-07~8-10，而不是任务自身的 8-05~8-08
+    assert cal["days"] == [
+        "2026-08-07T00:00:00",
+        "2026-08-08T00:00:00",
+        "2026-08-09T00:00:00",
+        "2026-08-10T00:00:00",
+    ]
+    assert cal["members"]["小文"]["daily_load"]["2026-08-07T00:00:00"] == 4.0
+    # 周末不产生负载
+    assert cal["members"]["小文"]["daily_load"]["2026-08-08T00:00:00"] == 0.0
+    assert cal["members"]["小文"]["daily_load"]["2026-08-09T00:00:00"] == 0.0
+    assert cal["members"]["小文"]["daily_load"]["2026-08-10T00:00:00"] == 4.0
+    assert not any("不可用日期" in w for w in cal["warnings"])
