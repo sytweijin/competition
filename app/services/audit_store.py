@@ -6,15 +6,35 @@ import hashlib
 import json
 import re
 import uuid
+import threading
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from pathlib import Path
 
 from app.config import MEMORY_DIR
+from app.services.storage import get_object_storage
 
 AUDIT_DIR = MEMORY_DIR / "audit"
 VERSION_DIR = MEMORY_DIR / "versions"
 SIMILARITY_THRESHOLD = 0.58
+_AUDIT_LOCK = threading.RLock()
+
+
+def _sync_file(path: Path, key: str, content_type: str = "application/json") -> None:
+    storage = get_object_storage()
+    if storage and path.exists():
+        storage.write_bytes(key, path.read_bytes(), content_type)
+
+
+def _restore_file(path: Path, key: str) -> bool:
+    storage = get_object_storage()
+    if not storage or not storage.exists(key):
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_suffix(path.suffix + ".restore")
+    temp.write_bytes(storage.read_bytes(key))
+    temp.replace(path)
+    return True
 
 
 def _safe_filename(filename: str) -> str:
@@ -75,6 +95,8 @@ def _read_raw_entries(filename: str) -> list[dict]:
     name = _safe_filename(filename)
     path = AUDIT_DIR / f"{name}.jsonl"
     if not path.exists():
+        _restore_file(path, f"audit/{name}.jsonl")
+    if not path.exists():
         return []
     entries = []
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -127,13 +149,22 @@ def _enrich_entries(filename: str, entries: list[dict]) -> list[dict]:
 
 
 def _all_filenames() -> list[str]:
-    if not AUDIT_DIR.exists():
-        return []
     suffix = ".jsonl"
-    return sorted({
+    local_names = {
         path.name[:-len(suffix)]
         for path in AUDIT_DIR.glob(f"*{suffix}")
         if path.name.endswith(suffix)
+    } if AUDIT_DIR.exists() else set()
+    # 正常请求只看已恢复的本地索引，避免每次保存方案都多一次 S3 列表请求。
+    if local_names:
+        return sorted(local_names)
+    storage = get_object_storage()
+    if not storage:
+        return []
+    return sorted({
+        Path(key).name[:-len(suffix)]
+        for key in storage.list_keys("audit/")
+        if key.startswith("audit/") and key.endswith(suffix)
     })
 
 
@@ -179,35 +210,37 @@ def save_version(
     parent_filename: str | None = None,
 ) -> str:
     """保存完整快照并写入带父节点信息的版本树记录。"""
-    name = _safe_filename(filename)
-    version_id = (
-        datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
-        + "_" + uuid.uuid4().hex[:8]
-    )
-    current_versions = list_versions(name)
-    parent = None
-    similarity = 1.0
-    if parent_version_id:
-        parent = _find_version_entry(parent_version_id, parent_filename or name)
-    elif current_versions:
-        parent = current_versions[0]
-    else:
-        parent, similarity = _similar_parent(plan_data, name)
+    with _AUDIT_LOCK:
+        name = _safe_filename(filename)
+        version_id = (
+            datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+            + "_" + uuid.uuid4().hex[:8]
+        )
+        current_versions = list_versions(name)
+        parent = None
+        similarity = 1.0
+        if parent_version_id:
+            parent = _find_version_entry(parent_version_id, parent_filename or name)
+        elif current_versions:
+            parent = current_versions[0]
+        else:
+            parent, similarity = _similar_parent(plan_data, name)
 
-    profile = _plan_profile(plan_data)
-    parent_id = parent.get("version_id") if parent else None
-    parent_name = parent.get("filename") if parent else None
-    root_id = parent.get("root_version_id") if parent else version_id
-    family_id = parent.get("family_id") if parent else f"tree_{version_id}"
+        profile = _plan_profile(plan_data)
+        parent_id = parent.get("version_id") if parent else None
+        parent_name = parent.get("filename") if parent else None
+        root_id = parent.get("root_version_id") if parent else version_id
+        family_id = parent.get("family_id") if parent else f"tree_{version_id}"
 
-    version_dir = VERSION_DIR / name
-    version_dir.mkdir(parents=True, exist_ok=True)
-    (version_dir / f"{version_id}.json").write_text(
-        json.dumps(plan_data, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    AUDIT_DIR.mkdir(parents=True, exist_ok=True)
-    entry = {
+        version_dir = VERSION_DIR / name
+        version_dir.mkdir(parents=True, exist_ok=True)
+        version_path = version_dir / f"{version_id}.json"
+        version_path.write_text(
+            json.dumps(plan_data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        AUDIT_DIR.mkdir(parents=True, exist_ok=True)
+        entry = {
         "version_id": version_id,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "action": action,
@@ -221,10 +254,13 @@ def save_version(
         "project_name": profile["project_name"],
         "task_fingerprint": profile["task_fingerprint"],
         "task_count": profile["task_count"],
-    }
-    with (AUDIT_DIR / f"{name}.jsonl").open("a", encoding="utf-8") as target:
-        target.write(json.dumps(entry, ensure_ascii=False) + "\n")
-    return version_id
+        }
+        audit_path = AUDIT_DIR / f"{name}.jsonl"
+        with audit_path.open("a", encoding="utf-8") as target:
+            target.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        _sync_file(version_path, f"versions/{name}/{version_id}.json")
+        _sync_file(audit_path, f"audit/{name}.jsonl", "application/x-ndjson")
+        return version_id
 
 
 def list_versions(filename: str) -> list[dict]:
@@ -237,6 +273,8 @@ def load_version(filename: str, version_id: str) -> dict:
     name = _safe_filename(filename)
     safe_id = _safe_version_id(version_id)
     path = VERSION_DIR / name / f"{safe_id}.json"
+    if not path.exists():
+        _restore_file(path, f"versions/{name}/{safe_id}.json")
     if not path.exists():
         raise FileNotFoundError(f"版本不存在：{version_id}")
     return json.loads(path.read_text(encoding="utf-8"))

@@ -94,6 +94,7 @@ async def admin_auth_middleware(request: Request, call_next):
         path = request.url.path
         allow = {
             "/api/health",
+            "/api/ready",
             "/api/auth/status",
             "/api/auth/login",
         }

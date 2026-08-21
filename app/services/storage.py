@@ -85,6 +85,15 @@ class S3ObjectStorage:
             raise ObjectStorageError(f"S3 列表失败：{exc.__class__.__name__}") from exc
         return keys
 
+    def check(self) -> bool:
+        """执行最小权限探测，供 readiness 检查确认对象存储可访问。"""
+        try:
+            self._client().list_objects_v2(
+                Bucket=S3_BUCKET, Prefix=self._key(""), MaxKeys=1)
+            return True
+        except Exception:
+            return False
+
 
 def get_object_storage() -> S3ObjectStorage | None:
     if STORAGE_BACKEND != "s3":

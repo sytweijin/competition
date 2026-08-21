@@ -259,6 +259,10 @@ class TimelineTask(BaseModel):
     name: str
     start_date: datetime
     end_date: datetime
+    start_offset_days: float = Field(
+        default=0.0, description="相对项目起点的工作日偏移，可精确到半天")
+    duration_days: float = Field(
+        default=1.0, description="任务工作日工期，可精确到半天")
     is_critical: bool = Field(description="是否在关键路径上")
     float_days: int = Field(default=0,
                             description="浮动天数（0 即关键路径任务）")

@@ -1,11 +1,13 @@
 """系统级路由：鉴权、工具调用与健康检查。"""
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.config import (
     APP_ASR_API_KEY, APP_ASR_MODEL, APP_VISION_API_KEY, APP_VISION_MODEL,
     LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, MEMORY_DIR,
+    S3_BUCKET, STORAGE_BACKEND,
 )
 from app.metrics import request_metrics
 from app.models.schemas import FullPlan
@@ -17,6 +19,7 @@ from app.services.auth_store import (
 from app.services.tools import call_tool, list_tools
 from app.services.report_service import generate_report
 from app.performance import llm_metrics
+from app.services.storage import get_object_storage
 
 router = APIRouter()
 
@@ -89,6 +92,7 @@ async def auth_me(request: Request):
 async def health():
     return {
         "status": "ok",
+        "version": "5.76",
         "checks": {
             "storage": MEMORY_DIR.exists(),
             "llm_configured": bool(
@@ -99,3 +103,29 @@ async def health():
                 APP_ASR_MODEL and APP_ASR_API_KEY),
         },
     }
+
+
+@router.get("/ready")
+def readiness():
+    """严格就绪检查：正式部署缺少模型、鉴权或持久存储时返回 503。"""
+    checks = {
+        "llm_configured": bool(LLM_API_KEY and LLM_BASE_URL and LLM_MODEL),
+        "durable_storage_configured": STORAGE_BACKEND == "s3" and bool(S3_BUCKET),
+        "durable_storage_reachable": False,
+    }
+    if checks["durable_storage_configured"]:
+        try:
+            storage = get_object_storage()
+            checks["durable_storage_reachable"] = bool(
+                storage and storage.check())
+        except Exception:
+            checks["durable_storage_reachable"] = False
+    ready = all(checks.values())
+    return JSONResponse(
+        status_code=200 if ready else 503,
+        content={
+            "status": "ready" if ready else "not_ready",
+            "version": "5.76",
+            "checks": checks,
+        },
+    )

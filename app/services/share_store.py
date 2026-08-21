@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -15,6 +16,7 @@ from app.config import MEMORY_DIR
 from app.services.storage import get_object_storage
 
 SHARE_FILE = MEMORY_DIR / "shares.json"
+_SHARE_LOCK = threading.RLock()
 
 
 def _load_shares() -> dict:
@@ -60,16 +62,17 @@ def create_share(filename: str, *, ttl_seconds: int | None = None) -> str:
     """创建只读分享令牌；可传 ttl_seconds 设置有效期。"""
     if ttl_seconds is not None and ttl_seconds <= 0:
         raise ValueError("分享有效期必须大于 0 秒")
-    shares = _load_shares()
-    token = uuid.uuid4().hex
-    now = time.time()
-    shares[token] = {
-        "filename": filename,
-        "created_at": now,
-        "expires_at": now + ttl_seconds if ttl_seconds is not None else None,
-    }
-    _save_shares(shares)
-    return token
+    with _SHARE_LOCK:
+        shares = _load_shares()
+        token = uuid.uuid4().hex
+        now = time.time()
+        shares[token] = {
+            "filename": filename,
+            "created_at": now,
+            "expires_at": now + ttl_seconds if ttl_seconds is not None else None,
+        }
+        _save_shares(shares)
+        return token
 
 
 def get_share_entry(token: str, *, now: float | None = None) -> dict | None:

@@ -103,6 +103,53 @@
 6. **补充（报告页）：** 项目报告正文存在文字紧贴内容区边缘的问题：① 全局 `*{margin:0}` 重置后，报告只给 h3/h4 设了间距，h1/h2 标题（如「任务列表」「责任分工」）紧贴下方表格/段落——为 `.report-box` 补上 h1/h2/h3 的上下 margin、表格上下 margin 加到 18px；② `.report-box` 增加左右 18px 内边距，与上方 Tab/角色栏对齐；③ 静态资源缓存参数 `?v=5.76` 提升为 `?v=5.76.1`，强制浏览器刷新旧 CSS。
 7. **补充（方案列表）：** 方案版本弹窗的方案列表里，「版本树」按钮因 `.modal #planList button { flex:1 }` 优先级更高被拉宽，与文件名按钮各占一半宽度、挤得长文件名换行两行。新增 `.modal #planList .versions-btn { flex:0 0 auto }` 让按钮按内容收缩，文件名改为单行省略号（hover 显示全名），整体更整齐。
 
+### 健壮性提升（P1）
+
+#### 10. 排期与甘特图精确化（周末截止日、半天精度、工作日刻度）
+
+1. **问题：** 周末作为截止日时任务会被错误排到下一周；半天任务因 Python 银行家舍入（`round`）在 0.5/1.5 处忽前忽后；甘特图只有 7 格近似刻度，跨周和半天条形不可信。
+2. **修改前：** `TimelineAgent` 用 `round(es[tid]/2)` 计算半天偏移，截止日不处理周末；甘特图按固定 7 列绘制：
+   ```python
+   work_offset = round(es[tid] / 2)
+   ideal_start = _sub_work_days(deadline_date, project_days - 1)
+   ```
+3. **修改后：** 周末截止日回退到前一个工作日（`_previous_workday`）；半天偏移改用 `//2` 并输出 `start_offset_days`/`duration_days`（精确到半天）；前端重写为按工作日刻度、跳过周末、带真实日期轴的甘特图：
+   ```python
+   deadline_base = _previous_workday(deadline_date)
+   work_offset = es[tid] // 2
+   ```
+   ```js
+   renderGantt=function renderAccurateGantt(){ /* 工作日刻度 + 半天精度 */ }
+   ```
+4. **为什么这样改：** 排期数据必须可核对（工作日、半天），舍入必须确定；甘特图应直接反映真实日期而非固定 7 格近似。
+5. **收益：** 周末截止日不再越界；半天任务位置稳定；甘特图跨周、半天、任务编号与负责人一目了然。
+
+#### 11. 版本/审计持久化与并发加固（S3 同步、线程锁、就绪探测）
+
+1. **问题：** 配置 S3 后版本快照与审计记录仍只写本地，实例重启/扩容会丢；并发保存可能写坏 JSONL；无法探测对象存储是否可访问。
+2. **修改后：** `audit_store` 的版本快照与审计记录同步到对象存储并在本地缺失时恢复；`save_version` 加 `_AUDIT_LOCK` 线程锁；`storage` 新增 `check()` 最小权限探测；`share_store` 加 `_SHARE_LOCK` 保护创建令牌。
+3. **为什么这样改：** 版本树和审计是可追溯证据，必须与方案一起持久化；并发写入需要互斥；就绪检查需要真实的存储可达性证据。
+4. **收益：** 重启不丢版本树；并发保存安全；`/api/ready` 能真实反映存储状态。
+
+#### 12. 媒体处理可配置与提速（OCR 页数/超时、并行 OCR）
+
+1. **问题：** 扫描 PDF 最多 20 页、单页串行等待视觉模型，长文档在平台超时预算内容易失败；模型超时固定不可调。
+2. **修改后：** OCR 页数改为可配置（`APP_OCR_MAX_PDF_PAGES` 默认 6，上限 12）；媒体模型超时可配置（`APP_MEDIA_TIMEOUT` 默认 20s）；扫描 PDF 逐页 OCR 改最多 3 路并发并按页序合并。
+3. **为什么这样改：** 处理上限与超时须与部署环境匹配，并行能显著缩短长文档耗时。
+4. **收益：** 长扫描件更稳更快；部署方可按模型/网络调优。
+
+#### 13. 就绪检查 `/api/ready` 与健康检查版本
+
+1. **修改后：** 新增 `/api/ready` 严格就绪检查（校验 LLM 配置、S3 配置与可达性，未就绪返回 503），并加入鉴权放行列表；`/api/health` 返回版本号。基础版版本保持 v5.76。
+2. **为什么这样改：** 健康检查只证明进程存活，就绪检查用于正式部署的滚动/负载均衡准入。
+3. **收益：** 部署可区分「活着」与「真正可用」；健康检查带版本便于核对。
+
+#### 14. 部署安全：网页管理端 APP_ADMIN_TOKEN
+
+1. **问题：** 公网部署若只配入站密钥，网页管理 `/api`（方案列表/删除/模型调用）仍裸露；基础版同样需要管理端鉴权。
+2. **修改后：** `.env.example`/`render.yaml` 增加 `APP_ADMIN_TOKEN`（Render 可 `generateValue: true`），中间件默认放行健康/就绪/登录，其余 `/api` 需鉴权。
+3. **收益：** 公网部署默认受保护；入站与管理端密钥相互隔离。
+
 ### 打磨（P3）
 
 #### 8. 依赖、部署配置、测试与文档同步
@@ -111,7 +158,7 @@
 2. **为什么这样改：** 新环境可复现、评审/部署文档一致，且基础版已完全移除清小搭接入层，后续可独立演进。
 3. **收益：** 全量 244 项测试通过；部署文档可复查。
 
-**涉及文件：** `app/` 下通用后端与前端文件（删除 `app/compat/` 清小搭协议层与 `tests/test_qingxiaoda.py`；新增 `app/services/remote_io.py`；重写 `app/services/share_store.py` 为只读令牌）、`tests/`（重写 `test_share_tokens.py`/`test_storage.py`/`test_fault_drills.py` 走通用路径）、`scripts/`、`eval/cases.json`、`docs/`（演示、部署与使用说明书）、`requirements.txt`、`.env.example`、`render.yaml`、`README.md`、`CHANGELOG.md`。
+**涉及文件：** `app/` 下通用后端与前端文件（删除 `app/compat/` 清小搭协议层与 `tests/test_qingxiaoda.py`；新增 `app/services/remote_io.py`；重写 `app/services/share_store.py` 为只读令牌；同步 `app/agents/timeline.py`、`app/services/audit_store.py`、`app/services/media_analysis.py`、`app/web/routers/system.py`、`app/web/static/app.js`/`style.css` 等通用能力）、`tests/`（重写 `test_share_tokens.py`/`test_fault_drills.py` 走通用路径，新增排期/审计测试）、`scripts/`、`eval/cases.json`、`docs/`（演示、部署与使用说明书）、`requirements.txt`、`.env.example`、`render.yaml`、`README.md`、`CHANGELOG.md`。
 
 ---
 

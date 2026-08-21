@@ -229,5 +229,64 @@ function openAuthModal(){el('authModal').classList.remove('hidden');el('authPass
 async function applyAuth(){try{var r=await fetch('/api/auth/status');var d=await r.json();if(!d.enabled)return;if(new URLSearchParams(location.search).get('share'))return;enableAuthFetch(authToken());if(!authToken())openAuthModal()}catch(e){}}
 async function submitAuth(){var username=el('authUsername').value.trim()||'admin';var password=el('authPassword').value;try{var r=await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:username,password:password})});var d=await r.json();if(!r.ok)throw Error(d.detail||'登录失败');enableAuthFetch(d.token);localStorage.setItem('app_username',username);el('authModal').classList.add('hidden');showNotice('已登录：'+username,'success')}catch(e){showNotice(e.message,'error')}}
 function bindEvents(){el('projectForm').onsubmit=function(e){e.preventDefault();generateDraft(true)};el('addMemberBtn').onclick=function(){addMember()};el('demoCaseBtn').onclick=loadDemoCase;el('importFileBtn').onclick=function(){el('importFile').click()};el('importFile').onchange=importTaskFile;document.querySelectorAll('.mode-card').forEach(function(card){card.addEventListener('click',function(){state.input=null;state.draft=null;state.plan=null;state.automatic=null;state.largeStage='modules';state.largeBoardTab='modules';state.activeStep=0;['saveBtn','exportMdBtn','exportDocxBtn','exportPdfBtn','exportExcelBtn','exportCsvBtn','exportIcsBtn','shareBtn'].forEach(function(b){el(b).disabled=true});resetChatMemory();document.querySelectorAll('.mode-card').forEach(function(c){c.classList.remove('active')});card.classList.add('active');card.querySelector('input[type="radio"]').checked=true;document.querySelectorAll('.member-role').forEach(function(sel){sel.value=card.dataset.mode==='large_project'?'骨干 / 模块负责人':'执行成员'});updateModeHint();renderSteps()})});el('chooseFileBtn').onclick=function(){el('files').click()};el('uploadBox').onclick=function(e){if(e.target.tagName!=='INPUT')el('files').click()};el('files').onchange=function(){state.files=Array.from(this.files);state.fileMetadata=[];state.fileAnalysis=null;renderFileList()};el('confirmDraftBtn').onclick=onConfirmDraft;el('confirmAssignmentBtn').onclick=onConfirmAssignment;el('resultTabs').addEventListener('click',function(e){if(e.target.dataset.tab)renderResultTab(e.target.dataset.tab)});el('backBoardBtn').onclick=function(){renderBoard();setView('board',isLargeProject()?4:2)};el('historyBtn').onclick=function(){showHistory('')};el('saveBtn').onclick=savePlan;el('exportMdBtn').onclick=function(){exportPlan('markdown')};el('exportDocxBtn').onclick=function(){exportPlan('docx')};el('exportPdfBtn').onclick=function(){exportPlan('pdf')};el('exportExcelBtn').onclick=function(){exportPlan('excel')};el('exportCsvBtn').onclick=function(){exportPlan('csv')};el('exportIcsBtn').onclick=function(){exportPlan('ics')};el('shareBtn').onclick=shareCurrentPlan;el('closeModal').onclick=function(){el('modal').classList.add('hidden')};el('closeAuthModal').onclick=function(){el('authModal').classList.add('hidden')};el('authLoginBtn').onclick=submitAuth;el('authPassword').addEventListener('keydown',function(e){if(e.key==='Enter')submitAuth()});el('planSearch').oninput=function(){showHistory(this.value)};el('assistantBtn').onclick=openAssistant;el('closeAssistant').onclick=closeAssistant;el('chatForm').onsubmit=sendChat;bindAssistantDrag()}
+renderGantt=function renderAccurateGantt(){
+  var tasks=state.plan.timeline.tasks||[];
+  if(!tasks.length)return '<div class="success-box">暂无时间线数据</div>';
+  function dateOnly(value){
+    var parts=String(value||'').slice(0,10).split('-').map(Number);
+    return new Date(Date.UTC(parts[0],parts[1]-1,parts[2]));
+  }
+  function key(value){return String(value||'').slice(0,10)}
+  function dayLabel(value){
+    var d=dateOnly(value),week=['日','一','二','三','四','五','六'];
+    return (d.getUTCMonth()+1)+'/'+d.getUTCDate()+' 周'+week[d.getUTCDay()];
+  }
+  var dates=[];
+  tasks.forEach(function(task){dates.push(dateOnly(task.start_date),dateOnly(task.end_date))});
+  var minMs=Math.min.apply(null,dates.map(function(d){return d.getTime()}));
+  var maxMs=Math.max.apply(null,dates.map(function(d){return d.getTime()}));
+  var workdays=[];
+  for(var cursor=minMs;cursor<=maxMs;cursor+=86400000){
+    var current=new Date(cursor);
+    if(current.getUTCDay()!==0&&current.getUTCDay()!==6)workdays.push(current);
+  }
+  if(!workdays.length)workdays=[new Date(minMs)];
+  var indexes={};
+  workdays.forEach(function(d,index){indexes[d.toISOString().slice(0,10)]=index});
+  var columns=workdays.length;
+  var tickStep=Math.max(1,Math.ceil(columns/7));
+  var ticks=workdays.map(function(d,index){
+    if(index!==0&&index!==columns-1&&index%tickStep!==0)return '';
+    var left=(index+.5)/columns*100;
+    return '<span style="left:'+left+'%">'+esc(dayLabel(d.toISOString()))+'</span>';
+  }).join('');
+  var statusLabels={pending:'待开始',in_progress:'进行中',completed:'已完成',blocked:'阻塞'};
+  var legend='<div class="gantt-legend"><span><i class="legend-critical"></i>关键路径</span><span><i class="legend-urgent"></i>低浮动</span><span><i class="legend-normal"></i>正常</span><span><i class="legend-blocked"></i>阻塞</span><em>工作日刻度，已跳过周末</em></div>';
+  var axis='<div class="gantt-axis">'+ticks+'</div>';
+  var head='<div class="gantt-row gantt-row-head"><span>任务 / 负责人</span>'+axis+'<div class="gantt-meta">日期 / 工期 / 浮动</div></div>';
+  var rows=tasks.map(function(task){
+    var startIndex=indexes[key(task.start_date)];
+    if(startIndex===undefined)startIndex=0;
+    var endIndex=indexes[key(task.end_date)];
+    if(endIndex===undefined)endIndex=startIndex;
+    var duration=Number(task.duration_days);
+    if(!Number.isFinite(duration)||duration<=0)duration=Math.max(1,endIndex-startIndex+1);
+    var rawOffset=Number(task.start_offset_days);
+    var fraction=Number.isFinite(rawOffset)?((rawOffset%1)+1)%1:0;
+    var position=Math.min(columns-0.1,startIndex+fraction);
+    var visibleDuration=Math.max(.22,Math.min(duration,columns-position));
+    var left=position/columns*100;
+    var width=visibleDuration/columns*100;
+    var cls=task.status==='blocked'?'blocked':task.is_critical?'critical':(task.float_days!==undefined&&task.float_days<=1?'urgent':'normal');
+    var rowCls=task.status==='completed'?'is-completed':(task.status==='blocked'?'is-blocked':'');
+    var owner=(task.assigned_to||[]).join('、')||'未分配';
+    var floatLabel=task.is_critical?'关键路径':'浮动 '+(task.float_days||0)+' 天';
+    var durationLabel=duration%1===0?duration.toFixed(0):duration.toFixed(1);
+    return '<div class="gantt-row '+rowCls+'"><span class="gantt-task" title="'+esc(task.name)+'"><b>'+esc(task.task_id)+'</b><span>'+esc(task.name)+'</span><small>'+esc(owner)+'</small></span><div class="gantt-track" style="background-size:'+(100/columns)+'% 100%"><i class="'+cls+'" title="'+esc(task.name+' · '+durationLabel+' 工作日')+'" style="left:'+left+'%;width:'+width+'%"></i></div><div class="gantt-meta"><strong>'+esc(key(task.start_date))+' → '+esc(key(task.end_date))+'</strong><small>'+durationLabel+' 工作日 · '+floatLabel+' · '+esc(statusLabels[task.status]||task.status||'')+'</small></div></div>';
+  }).join('');
+  var minWidth=Math.max(760,440+columns*34);
+  return '<div class="gantt-head"><strong>项目甘特图</strong><span>'+esc(key(workdays[0].toISOString()))+' 至 '+esc(key(workdays[columns-1].toISOString()))+' · '+state.plan.timeline.total_days+' 工作日</span></div>'+legend+'<div class="gantt-chart"><div class="gantt-grid" style="min-width:'+minWidth+'px">'+head+rows+'</div></div>';
+};
+
 function init(){bindEvents();setDefaultDates();el('startDate').addEventListener('change',function(){el('endDate').min=this.value;if(el('endDate').value<this.value)el('endDate').value=this.value});el('endDate').addEventListener('change',function(){el('startDate').max=this.value});el('projectForm').onsubmit=function(e){e.preventDefault();generateDraft(true,el('generateBtn'))};el('quickGenerateBtn').onclick=function(){generateDraft(false,el('quickGenerateBtn'))};el('assistantBtn').onclick=null;updateModeHint();renderSteps();addMember({name:'',skill_tags:[],daily_available_hours:4});applyAuth();applyShareQuery()}
 document.addEventListener('DOMContentLoaded',init);

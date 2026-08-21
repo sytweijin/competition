@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import base64
 import io
+import os
+from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 
@@ -13,8 +15,9 @@ from app.config import (
     APP_VISION_API_KEY, APP_VISION_BASE_URL, APP_VISION_MODEL,
 )
 
-MAX_OCR_PDF_PAGES = 20
+MAX_OCR_PDF_PAGES = max(1, min(12, int(os.getenv("APP_OCR_MAX_PDF_PAGES", "6"))))
 OCR_PDF_DPI = 200
+MEDIA_MODEL_TIMEOUT = max(5, min(60, int(os.getenv("APP_MEDIA_TIMEOUT", "20"))))
 DASHSCOPE_ASR_URL = (
     "https://dashscope.aliyuncs.com/api/v1/services/"
     "aigc/multimodal-generation/generation"
@@ -73,6 +76,7 @@ def image_ocr_text(filename: str, content: bytes) -> str:
                 ],
             }],
             max_tokens=1200,
+            timeout=MEDIA_MODEL_TIMEOUT,
         )
         text = response.choices[0].message.content
     except Exception as exc:
@@ -120,11 +124,15 @@ def ocr_scanned_pdf(filename: str, content: bytes) -> str:
     if not (APP_VISION_API_KEY and APP_VISION_MODEL):
         raise ValueError("扫描版 PDF 需要配置视觉模型（APP_VISION_MODEL）")
     pages = render_pdf_pages(content)
-    parts: list[str] = []
-    for index, page_bytes in enumerate(pages, 1):
+    def recognize(item: tuple[int, bytes]) -> tuple[int, str]:
+        index, page_bytes = item
         label = f"{filename} 第{index}页"
-        parts.append(image_ocr_text(label, page_bytes))
-    return "\n".join(parts)
+        return index, image_ocr_text(label, page_bytes)
+
+    # 扫描 PDF 原先逐页串行等待视觉模型；最多三路并发，在平台超时预算内完成。
+    with ThreadPoolExecutor(max_workers=min(3, len(pages))) as executor:
+        recognized = list(executor.map(recognize, enumerate(pages, 1)))
+    return "\n".join(text for _, text in sorted(recognized))
 
 
 def _dashscope_native_transcribe(filename: str, content: bytes) -> str:
@@ -156,7 +164,7 @@ def _dashscope_native_transcribe(filename: str, content: bytes) -> str:
                 "sample_rate": "16000",
             },
         },
-        timeout=180,
+        timeout=MEDIA_MODEL_TIMEOUT,
     )
     response.raise_for_status()
     data = response.json()
@@ -208,6 +216,7 @@ def audio_transcribe_text(filename: str, content: bytes) -> str:
                     }],
                 }],
                 max_tokens=2000,
+                timeout=MEDIA_MODEL_TIMEOUT,
             )
             text = response.choices[0].message.content
         else:
@@ -215,6 +224,7 @@ def audio_transcribe_text(filename: str, content: bytes) -> str:
             response = client.audio.transcriptions.create(
                 model=APP_ASR_MODEL,
                 file=(filename, io.BytesIO(content), _audio_mime(filename)),
+                timeout=MEDIA_MODEL_TIMEOUT,
             )
             text = response.text
     except Exception as exc:

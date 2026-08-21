@@ -162,3 +162,32 @@ def test_same_owner_tasks_are_serialized_but_different_owners_can_parallel():
     assert by_id["T2"].start_date > by_id["T1"].end_date
     assert by_id["T3"].start_date == by_id["T1"].start_date
     assert "资源顺序约束" in out.reasoning
+
+
+@patch('app.config.today', return_value=_dt.date(2026, 7, 13))
+def test_weekend_deadline_finishes_on_previous_workday(mock_today):
+    """周末截止日不能把任务错误排到下周一。"""
+    out = TimelineAgent().run(
+        _plan([SubTask(id="T1", name="交付", estimated_hours=4)]),
+        "2026-07-19",  # Sunday
+    )
+    assert out.tasks[0].end_date == datetime(2026, 7, 17)
+
+
+@patch('app.config.today', return_value=_dt.date(2026, 7, 13))
+def test_half_day_offsets_are_monotonic_and_exported(mock_today):
+    """半天链路应保持 0、0.5、1.0 的稳定偏移，供甘特图精确绘制。"""
+    out = TimelineAgent().run(
+        _plan([
+            SubTask(id="T1", name="A", estimated_hours=2),
+            SubTask(id="T2", name="B", estimated_hours=2,
+                    dependencies=["T1"]),
+            SubTask(id="T3", name="C", estimated_hours=2,
+                    dependencies=["T2"]),
+        ]),
+        "2026-07-17",
+    )
+    assert [task.start_offset_days for task in out.tasks] == [0, .5, 1]
+    assert [task.duration_days for task in out.tasks] == [.5, .5, .5]
+    assert out.tasks[0].start_date == out.tasks[1].start_date
+    assert out.tasks[2].start_date > out.tasks[1].start_date

@@ -40,6 +40,13 @@ def _next_workday(d: date) -> date:
     return d
 
 
+def _previous_workday(d: date) -> date:
+    """如果 d 是周末，后退到上一个周五。"""
+    while _is_weekend(d):
+        d -= timedelta(days=1)
+    return d
+
+
 def _add_work_days(start: date, days: int, skip_dates: set[date] | None = None) -> date:
     """从 start 前进 days 个工作日（跳过周末和 skip_dates 中的日期）。days >= 0。"""
     skip_dates = skip_dates or set()
@@ -247,12 +254,13 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
         # 从截止日倒推起始日；若早于今天则改为从今天正排（避免排到过去）
         # P3-1: 使用工作日计算，跳过周末
         today = config.today()
-        ideal_start = _sub_work_days(deadline_date, project_days - 1)
+        deadline_base = _previous_workday(deadline_date)
+        ideal_start = _sub_work_days(deadline_base, project_days - 1)
         forced_forward = ideal_start < today
         if forced_forward:
             start_base = _next_workday(today)
         else:
-            start_base = _next_workday(ideal_start)
+            start_base = ideal_start
 
         timeline_tasks: list[TimelineTask] = []
         for tid in topo_order:
@@ -263,16 +271,22 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
             for person in assigned_people:
                 task_skip_dates |= member_unavailable.get(person, set())
             # P3-1: half-day 偏移转工作日偏移，跳过周末和负责人不可用日
-            work_offset = round(es[tid] / 2)
+            # 不使用 round：Python 的银行家舍入会把 0.5 舍到 0、1.5 舍到 2，
+            # 造成半天任务忽前忽后。日期取所在工作日，精确位置另行输出给甘特图。
+            work_offset = es[tid] // 2
             s_date = datetime.combine(_add_work_days(start_base, work_offset, task_skip_dates), datetime.min.time())
-            # 结束日 = 开始日 + 工期 - 1 个工作日（同样跳过负责人不可用日）
-            dur_days = math.ceil(durations[tid] / 2)
-            e_date = datetime.combine(_add_work_days(s_date.date(), max(0, dur_days - 1), task_skip_dates), datetime.min.time())
+            end_offset = work_offset if durations[tid] == 0 else (ef[tid] - 1) // 2
+            e_date = datetime.combine(
+                _add_work_days(start_base, end_offset, task_skip_dates),
+                datetime.min.time(),
+            )
             timeline_tasks.append(TimelineTask(
                 task_id=tid,
                 name=t.name,
                 start_date=s_date,
                 end_date=e_date,
+                start_offset_days=es[tid] / 2,
+                duration_days=durations[tid] / 2,
                 is_critical=(tid in critical),
                 float_days=math.ceil(max(0, float_time[tid]) / 2),
                 assigned_to=assigned_people,

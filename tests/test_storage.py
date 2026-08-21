@@ -22,6 +22,9 @@ class FakeObjectStorage:
     def list_keys(self, prefix=""):
         return [key for key in self.data if key.startswith(prefix)]
 
+    def check(self):
+        return True
+
 
 def test_share_tokens_sync_and_restore_from_object_storage(monkeypatch, tmp_path):
     from app.services import share_store
@@ -73,3 +76,42 @@ def test_storage_backend_s3_requires_bucket(monkeypatch):
     monkeypatch.setattr(storage, "S3_BUCKET", "")
     with pytest.raises(storage.ObjectStorageError):
         storage.get_object_storage()
+
+
+def _full_plan():
+    from datetime import date
+
+    from app.models.schemas import (
+        AssignmentInput, CourseInfo, FullPlan, PlanOutput, QAOutput, ReportOutput,
+        SubTask, TeamMember, TimelineOutput,
+    )
+    return FullPlan(
+        input=AssignmentInput(
+            course=CourseInfo(name="测试项目", description=""),
+            members=[TeamMember(name="小文")],
+            deadline=date(2026, 8, 20),
+        ),
+        plan=PlanOutput(tasks=[SubTask(id="T1", name="调研", estimated_hours=2)], summary="测试方案"),
+        timeline=TimelineOutput(tasks=[], critical_path=[], total_days=0),
+        qa_matrix=QAOutput(assignments=[]),
+        report=ReportOutput(summary=""),
+    )
+
+
+def test_audit_versions_sync_and_restore_from_object_storage(monkeypatch, tmp_path):
+    from app.services import audit_store
+
+    storage = FakeObjectStorage()
+    monkeypatch.setattr(audit_store, "AUDIT_DIR", tmp_path / "audit")
+    monkeypatch.setattr(audit_store, "VERSION_DIR", tmp_path / "versions")
+    monkeypatch.setattr(audit_store, "get_object_storage", lambda: storage)
+
+    plan_data = _full_plan().model_dump(mode="json")
+    version_id = audit_store.save_version(plan_data, "plan.json")
+    assert "audit/plan.json.jsonl" in storage.data
+    assert f"versions/plan.json/{version_id}.json" in storage.data
+
+    (tmp_path / "audit" / "plan.json.jsonl").unlink()
+    (tmp_path / "versions" / "plan.json" / f"{version_id}.json").unlink()
+    assert audit_store.list_versions("plan.json")[0]["version_id"] == version_id
+    assert audit_store.load_version("plan.json", version_id)["input"]["course"]["name"] == "测试项目"
