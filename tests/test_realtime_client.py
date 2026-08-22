@@ -736,6 +736,20 @@ def test_parse_turn_text():
     assert reply == "没有标记的纯文本"
 
 
+def test_clean_transcript_strips_echo_tails():
+    """云端转写应去掉模型附带的确认语/客套尾巴，只保留用户原话。"""
+    from app.services.omni_chat import _clean_transcript
+
+    assert _clean_transcript("帮我看看任务安排，好的，请问有什么可以帮您？") == \
+        "帮我看看任务安排"
+    assert _clean_transcript("你好") == "你好"
+    assert _clean_transcript("用户说：帮我拆分任务。好的，我这就帮您看看") == \
+        "帮我拆分任务"
+    assert _clean_transcript("好的，就这么办") == "好的，就这么办"
+    assert _clean_transcript("今天组会确定，调研报告下周一提交。") == \
+        "今天组会确定，调研报告下周一提交。"
+
+
 @pytest.mark.asyncio
 async def test_realtime_performance_returns_analysis(monkeypatch):
     """答辩录像分析：抽帧看表情 + 抽音频转写回答。"""

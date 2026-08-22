@@ -8,13 +8,58 @@
 
 from __future__ import annotations
 
+import re
+
 from app.config import ASCEND_OMNI_WS_URL
 from app.services.realtime_client import RealtimeClient, RealtimeError
 
 TRANSCRIBE_INSTRUCTION = (
-    "这是用户的语音输入。请直接转写用户说出的原话："
-    "不要思考、不要解释、不要复述、不要补充，只输出用户说的话本身。"
+    "这是用户的语音输入。请只转写用户说出的原话，不要添加任何其他内容："
+    "不要思考过程，不要解释，不要复述，不要补充，不要确认，不要回答用户，"
+    "不要以'用户说''你说'开头，不要把'好的''请问有什么可以帮您''需要我帮忙吗'"
+    "之类的客套话写进结果。只输出用户说的话本身。"
 )
+
+_ECHO_TAILS = (
+    "好的，请问有什么可以帮您",
+    "好的，请问有什么可以帮你",
+    "请问有什么可以帮您",
+    "请问有什么可以帮你",
+    "有什么可以帮您",
+    "有什么可以帮你",
+    "需要我帮忙吗",
+    "需要我帮助您吗",
+    "需要我帮你吗",
+    "好的，我这就帮您",
+    "好的，我这就帮你",
+    "好的，我来帮您",
+    "好的，我来帮你",
+    "好的，没问题",
+    "没问题，我这就",
+    "我这就帮您",
+    "我这就帮你",
+    "好的，请问",
+    "好的，那我",
+)
+
+
+def _clean_transcript(text: str) -> str:
+    """去掉云端转写可能附带的模型确认语/客套尾巴，只保留用户原话。"""
+    text = (text or "").strip()
+    text = re.sub(
+        r"^(用户(说|讲到|的原话是)|你说|我听到(你说)?|你的话是)[：:，,]?\s*",
+        "", text,
+    ).strip()
+    changed = True
+    while changed and text:
+        changed = False
+        for tail in sorted(_ECHO_TAILS, key=len, reverse=True):
+            idx = text.find(tail)
+            if idx > 0:
+                text = text[:idx].rstrip("，,。!！?？ \t").strip()
+                changed = True
+                break
+    return text.strip()
 
 
 async def transcribe_audio(audio_b64: str, timeout: float = 120) -> str:
@@ -29,7 +74,7 @@ async def transcribe_audio(audio_b64: str, timeout: float = 120) -> str:
         tts_enabled=False,
         timeout=timeout,
     )
-    return (result.text or "").strip()
+    return _clean_transcript(result.text or "")
 
 
 async def understand_audio(

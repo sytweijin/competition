@@ -254,19 +254,25 @@ async def report_voice(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     parts = [p.strip() for p in (result.text or "").split("|")]
-    status = "进行中"
+    status_label = "进行中"
     hours = None
     note = ""
     if len(parts) >= 1:
         first = parts[0]
         if "完成" in first:
-            status = "完成"
+            status_label = "完成"
         elif "阻塞" in first or "卡住" in first or "无法" in first:
-            status = "阻塞"
+            status_label = "阻塞"
         elif "进行" in first or "开始" in first or "在做" in first:
-            status = "进行中"
+            status_label = "进行中"
         elif "未开始" in first or "还没" in first:
-            status = "未开始"
+            status_label = "未开始"
+    status = {
+        "完成": "completed",
+        "进行中": "in_progress",
+        "阻塞": "blocked",
+        "未开始": "pending",
+    }.get(status_label, "in_progress")
     if len(parts) >= 2:
         try:
             hours = float(parts[1].replace("小时", "").replace("h", ""))
@@ -277,7 +283,12 @@ async def report_voice(
 
     return {
         "task_id": task_id,
-        "parsed": {"status": status, "actual_hours": hours, "note": note},
+        "parsed": {
+            "status": status,
+            "status_label": status_label,
+            "actual_hours": hours,
+            "note": note,
+        },
         "raw": (result.text or "").strip()[:300],
     }
 

@@ -71,6 +71,12 @@ VOICE_CHAT_SYSTEM_PROMPT = (
     "不要转写用户的话，不要复述，不要输出思考过程。"
 )
 
+VOICE_CHAT_INSTRUCTION = (
+    "用户正在用语音与你对话。请直接回答用户的问题或承接用户的话："
+    "不要转写，不要复述，不要重复用户的原话，"
+    "不要以'你说的是''你的问题是''你提到'等开头，直接给出自然、简洁的回答。"
+)
+
 
 class RealtimeChatRequest(BaseModel):
     messages: list[dict] = Field(
@@ -147,6 +153,7 @@ async def realtime_dictate(file: UploadFile = File(...)):
 @router.post("/realtime/voice-chat")
 async def realtime_voice_chat(
     file: UploadFile = File(...),
+    system_prompt: str = Form(""),
     tts_enabled: bool = Form(False),
 ):
     """直接语音对话：录音作为音频消息发给 MiniCPM-o，返回文本回答与可选语音。
@@ -177,8 +184,8 @@ async def realtime_voice_chat(
     try:
         result = await understand_audio(
             audio_b64,
-            VOICE_CHAT_SYSTEM_PROMPT,
-            "用户正在用语音与你对话，请直接回答用户的话。",
+            system_prompt.strip() or VOICE_CHAT_SYSTEM_PROMPT,
+            VOICE_CHAT_INSTRUCTION,
             max_new_tokens=MAP_REALTIME_MAX_TOKENS,
             tts_enabled=tts_enabled,
         )
@@ -187,8 +194,8 @@ async def realtime_voice_chat(
             try:
                 result = await understand_audio(
                     audio_b64,
-                    VOICE_CHAT_SYSTEM_PROMPT,
-                    "用户正在用语音与你对话，请直接回答用户的话。",
+                    system_prompt.strip() or VOICE_CHAT_SYSTEM_PROMPT,
+                    VOICE_CHAT_INSTRUCTION,
                     max_new_tokens=MAP_REALTIME_MAX_TOKENS,
                     tts_enabled=False,
                 )

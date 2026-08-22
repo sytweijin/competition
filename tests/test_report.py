@@ -135,7 +135,55 @@ async def test_report_voice_parses_action(saved_plan, monkeypatch):
         )
     assert resp.status_code == 200
     assert resp.json()["parsed"] == {
-        "status": "完成", "actual_hours": 6.0, "note": "数据已归档"}
+        "status": "completed",
+        "status_label": "完成",
+        "actual_hours": 6.0,
+        "note": "数据已归档",
+    }
+
+
+@pytest.mark.asyncio
+async def test_report_voice_apply_persists_status(saved_plan, monkeypatch):
+    """语音解析返回英文枚举：确认应用后状态真实写入并持久化。"""
+    import app.services.media_analysis as media
+    import app.services.realtime_client as rt
+
+    def fake_decode(content):
+        return b"pcm"
+
+    async def fake_chat(self, **kwargs):
+        return RealtimeChatResult(text="完成|6|数据已归档")
+
+    monkeypatch.setattr(media, "_decode_audio_to_pcm16k", fake_decode)
+    monkeypatch.setattr(rt.RealtimeClient, "chat", fake_chat)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        token = await _make_token(client)
+        parsed = (await client.post(
+            "/api/report/voice",
+            data={"token": token, "task_id": "T1"},
+            files={"file": ("voice.webm", b"fake-audio", "audio/webm")},
+        )).json()["parsed"]
+        assert parsed["status"] == "completed"
+
+        up = await client.post("/api/report/update", json={
+            "token": token,
+            "task_id": "T1",
+            "status": parsed["status"],
+            "actual_hours": parsed["actual_hours"],
+            "note": parsed["note"],
+        })
+        assert up.status_code == 200
+        assert up.json()["status"] == "completed"
+
+        st = (await client.get(
+            "/api/report/state", params={"token": token})).json()
+        task = next(t for t in st["tasks"] if t["id"] == "T1")
+        assert task["status"] == "completed"
+        assert task["actual_hours"] == 6.0
 
 
 @pytest.mark.asyncio
