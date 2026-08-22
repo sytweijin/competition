@@ -867,3 +867,53 @@ def _replace_dependency(dependencies: list[str], old: str, new: str) -> list[str
 def _merge_dependencies(dependencies: list[str], old_ids: list[str], new_id: str) -> list[str]:
     return list(dict.fromkeys(new_id if dependency in old_ids else dependency
                               for dependency in dependencies if dependency != new_id))
+
+
+def recompute_plan(plan: FullPlan) -> FullPlan:
+    """基于任务状态/成员变动重新计算时间线和匹配（不重跑 LLM）。
+
+    供工作台 /api/recompute 与成员轻量汇报页共用，保证两处行为一致。
+    """
+    from app.agents.scoring import recompute_preserve
+    from app.agents.timeline import TimelineAgent
+
+    members = plan.input.members
+    qa_matrix = recompute_preserve(plan.plan, plan.qa_matrix, members)
+
+    # 回填负责人，重算 Timeline（会读取 task.status）
+    assignments: dict[str, list[str]] = {}
+    for a in qa_matrix.assignments:
+        people = [a.presenter] if a.presenter else []
+        if a.qa_primary and a.qa_primary not in people:
+            people.append(a.qa_primary)
+        for s in (a.qa_support or []):
+            if s not in people:
+                people.append(s)
+        assignments[a.task_id] = people
+
+    timeline = TimelineAgent().run(
+        plan=plan.plan,
+        deadline=plan.input.deadline.isoformat(),
+        assignments=assignments,
+        members=members,
+    )
+
+    # 状态切换是高频操作，只用本地结果更新报告，避免等待 LLM。
+    risk_note = Coordinator._build_risk_note(
+        plan.plan, timeline, qa_matrix, members, plan.input.deadline)
+    report = plan.report.model_copy(update={
+        "timeline_section": timeline.note,
+        "qa_matrix_section": "\n".join(
+            f"{item.task_name}：{item.presenter or '未分配'}"
+            for item in qa_matrix.assignments),
+        "risk_note": risk_note,
+    })
+
+    return FullPlan(
+        input=plan.input,
+        plan=plan.plan,
+        timeline=timeline,
+        qa_matrix=qa_matrix,
+        report=report,
+        volunteer_pool=plan.volunteer_pool,
+    )

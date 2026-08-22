@@ -36,6 +36,7 @@ memory/*.json
 memory/*.jsonl
 memory/audit/
 memory/versions/
+memory/attachments/
 editor_sdk.log
 
 # Jupyter

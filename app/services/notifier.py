@@ -44,3 +44,25 @@ def notify_reminders(plan: FullPlan) -> dict:
             "error": str(exc),
             "reminders": items,
         }
+
+
+def notify_event(plan: FullPlan, event: str) -> dict:
+    """推送一条事件文本（成员汇报、状态变更等）到外部 Webhook。"""
+    if not APP_NOTIFY_WEBHOOK:
+        return {"sent": False, "enabled": False}
+    payload = {
+        "project": plan.input.course.name,
+        "event": event,
+    }
+    request = urllib.request.Request(
+        APP_NOTIFY_WEBHOOK,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            status = response.status
+        return {"sent": True, "enabled": True, "status": status}
+    except Exception as exc:
+        return {"sent": False, "enabled": True, "error": str(exc)}

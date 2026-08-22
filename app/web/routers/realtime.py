@@ -1,0 +1,542 @@
+"""华为昇腾创新应用赛道：MiniCPM-o Realtime 对话、语音对话与转写路由。"""
+
+import asyncio
+import base64
+
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel, Field
+
+from app.config import (
+    ASCEND_OMNI_WS_URL,
+    MAP_REALTIME_API_KEY,
+    MAP_REALTIME_MAX_TOKENS,
+    MAP_REALTIME_MODEL,
+)
+from app.services.realtime_client import RealtimeClient, RealtimeError
+
+router = APIRouter()
+
+MAX_TRANSCRIBE_SIZE = 15 * 1024 * 1024
+MAX_PERFORMANCE_SIZE = 60 * 1024 * 1024
+
+PERFORMANCE_PROMPT = (
+    "这是用户答辩练习录像的第{n}帧画面。"
+    "请分析这帧中用户的面部表情与整体状态：是否自信、自然、紧张；"
+    "眼神、表情、姿态等细节。用中文给出简短观察（2 句话以内），"
+    "如果画面中看不清人脸，请如实说明。"
+)
+
+INTERVIEW_TURN_INSTRUCTION = (
+    "用户正在用语音/视频回答你刚才提出的问题。\n"
+    "请先输出【回答摘要】：用不超过两句话概括用户回答的要点；\n"
+    "再输出【评委回复】：以评委身份点评用户的回答，并提出下一个问题。\n"
+    "严格按以下格式输出，不要输出其他内容：\n"
+    "【回答摘要】\n<摘要>\n【评委回复】\n<点评与下一个问题>"
+)
+
+MEETING_PROMPT = (
+    "这是团队会议的录音。请整理会议内容：\n"
+    "1) 会议要点总结；\n"
+    "2) 明确提到的任务（每条一行：任务内容 | 负责人 | 截止时间，"
+    "没有负责人或截止时间就写\"无\"）；\n"
+    "3) 成员变动、风险或待确认事项。\n"
+    "严格按以下格式输出：\n"
+    "【总结】\n<会议要点>\n【任务】\n- 任务内容 | 负责人 | 截止\n"
+    "【风险】\n<风险或待确认事项，没有则写\"无\">"
+)
+
+VOICE_CHAT_SYSTEM_PROMPT = (
+    "你是协作分工助手，帮助团队做任务拆解、分工和排期。"
+    "用户通过语音与你对话：请直接、自然、简洁地回答用户的问题或承接用户的话。"
+    "如果用户问你是谁，介绍自己是协作分工助手，绝不介绍背后的模型、厂商或技术。"
+    "不要转写用户的话，不要复述，不要输出思考过程。"
+)
+
+
+class RealtimeChatRequest(BaseModel):
+    messages: list[dict] = Field(
+        default_factory=list,
+        description="多轮对话消息，role 支持 system/user/assistant",
+    )
+    message: str = Field(
+        default="", description="单条用户消息，与 messages 二选一或追加在末尾")
+    system_prompt: str | None = Field(
+        default=None, description="可选的系统提示词")
+    max_new_tokens: int | None = Field(
+        default=None, ge=1, le=16384, description="单次生成最大 token 数")
+    tts_enabled: bool = Field(
+        default=False, description="是否生成语音输出")
+    enable_thinking: bool = Field(
+        default=False, description="是否启用模型 thinking")
+
+
+@router.post("/realtime/transcribe")
+async def realtime_transcribe(file: UploadFile = File(...)):
+    """把麦克风录音转成文字：优先 MiniCPM-o Realtime，未配置时回退 ASR 模型。
+
+    返回纯文本（不带 [音频转写] 前缀），供前端填入输入框后由用户确认再发送。
+    """
+    from app.services.media_analysis import audio_transcribe_text
+
+    raw = await file.read(MAX_TRANSCRIBE_SIZE + 1)
+    if len(raw) > MAX_TRANSCRIBE_SIZE:
+        raise HTTPException(status_code=413, detail="录音文件超过 15MB 限制")
+    filename = file.filename or "语音输入.webm"
+    try:
+        text = await asyncio.to_thread(
+            audio_transcribe_text, filename, raw, False)
+    except ValueError as exc:
+        hint = "语音识别暂不可用"
+        if ASCEND_OMNI_WS_URL:
+            hint += "：本地昇腾后端未连接，请确认 llama-omni-server 已启动"
+        raise HTTPException(status_code=502, detail=f"{hint}（{exc}）")
+    if not text.strip():
+        raise HTTPException(status_code=502, detail="未能识别到语音内容")
+    source = (
+        "realtime"
+        if (MAP_REALTIME_API_KEY or ASCEND_OMNI_WS_URL)
+        else "asr"
+    )
+    return {"text": text, "source": source}
+
+
+@router.post("/realtime/dictate")
+async def realtime_dictate(file: UploadFile = File(...)):
+    """语音整理：把用户口述的回答整理成书面文字（理解后成文）。
+
+    答辩模拟等场景用：MiniCPM-o 直接听懂语音并整理成回答文字，
+    不做逐字转写，避免对话模型"作答式转写"污染回答框。
+    """
+    from app.services.media_analysis import audio_to_written_answer
+
+    raw = await file.read(MAX_TRANSCRIBE_SIZE + 1)
+    if len(raw) > MAX_TRANSCRIBE_SIZE:
+        raise HTTPException(status_code=413, detail="录音文件超过 15MB 限制")
+    try:
+        text = await asyncio.to_thread(
+            audio_to_written_answer, "answer.webm", raw)
+    except ValueError as exc:
+        hint = "语音整理暂不可用"
+        if ASCEND_OMNI_WS_URL:
+            hint += "：本地昇腾后端未连接，请确认 llama-omni-server 已启动"
+        raise HTTPException(status_code=502, detail=f"{hint}（{exc}）")
+    if not text.strip():
+        raise HTTPException(status_code=502, detail="未能整理出回答内容")
+    return {"text": text}
+
+
+@router.post("/realtime/voice-chat")
+async def realtime_voice_chat(
+    file: UploadFile = File(...),
+    tts_enabled: bool = Form(False),
+):
+    """直接语音对话：录音作为音频消息发给 MiniCPM-o，返回文本回答与可选语音。
+
+    与"转写进输入框"不同，这里不做语音转文字，而是让模型直接听懂音频并作答，
+    是 MiniCPM-o 全模态能力的核心用法。
+    """
+    import base64
+
+    from app.services.media_analysis import _decode_audio_to_pcm16k
+
+    if not (MAP_REALTIME_API_KEY or ASCEND_OMNI_WS_URL):
+        raise HTTPException(
+            status_code=503,
+            detail="MAP_REALTIME_API_KEY 或 ASCEND_OMNI_WS_URL 未配置",
+        )
+    raw = await file.read(MAX_TRANSCRIBE_SIZE + 1)
+    if len(raw) > MAX_TRANSCRIBE_SIZE:
+        raise HTTPException(status_code=413, detail="录音文件超过 15MB 限制")
+    try:
+        pcm = await asyncio.to_thread(_decode_audio_to_pcm16k, raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    audio_b64 = base64.b64encode(pcm).decode("utf-8")
+    messages = [{"role": "user", "content": [
+        {"type": "text", "text": "请直接回答这段语音里的问题或承接用户的话。"},
+        {"type": "audio", "data": audio_b64},
+    ]}]
+
+    client = RealtimeClient()
+    tts_failed = False
+    try:
+        result = await client.chat(
+            messages=messages,
+            system_prompt=VOICE_CHAT_SYSTEM_PROMPT,
+            max_new_tokens=MAP_REALTIME_MAX_TOKENS,
+            tts_enabled=tts_enabled,
+            omni_mode=True,
+        )
+    except RealtimeError as exc:
+        if tts_enabled:
+            try:
+                result = await client.chat(
+                    messages=messages,
+                    system_prompt=VOICE_CHAT_SYSTEM_PROMPT,
+                    max_new_tokens=MAP_REALTIME_MAX_TOKENS,
+                    tts_enabled=False,
+                    omni_mode=True,
+                )
+            except RealtimeError as retry_exc:
+                raise HTTPException(
+                    status_code=502, detail=str(retry_exc)) from retry_exc
+            tts_failed = True
+        else:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    try:
+        wav_base64 = (
+            result.audio_wav_base64
+            if (tts_enabled and not tts_failed) else "")
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    backend = "local" if ASCEND_OMNI_WS_URL else "map"
+    return {
+        "reply": result.text,
+        "audio_wav_base64": wav_base64,
+        "tts_failed": tts_failed,
+        "backend": backend,
+    }
+
+
+class RealtimeTTSRequest(BaseModel):
+    text: str = Field(
+        ..., min_length=1, max_length=2000, description="要朗读的文本")
+
+
+@router.post("/realtime/tts")
+async def realtime_tts(req: RealtimeTTSRequest):
+    """把指定文本转为语音（朗读），返回可播放 WAV；TTS 失败返回 502。
+
+    用于答辩模拟等场景的 AI 回复播报；本地昇腾 910C TTS 已知不可用，
+    前端仅在云端后端启用播报。
+    """
+    if not (MAP_REALTIME_API_KEY or ASCEND_OMNI_WS_URL):
+        raise HTTPException(
+            status_code=503,
+            detail="MAP_REALTIME_API_KEY 或 ASCEND_OMNI_WS_URL 未配置",
+        )
+    if ASCEND_OMNI_WS_URL:
+        # 910C 的 TTS 算子已知会挂起单会话服务；朗读接口在本地后端直接拒绝，
+        # 避免误调用把 A3 拖挂，前端播报开关也只在云端启用。
+        raise HTTPException(
+            status_code=501,
+            detail="本地昇腾 910C TTS 暂不可用，请切换到云端后端"
+            "（临时注释 .env 中 ASCEND_OMNI_WS_URL）",
+        )
+    text = req.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="文本不能为空")
+    client = RealtimeClient()
+    try:
+        result = await client.chat(
+            messages=[{"role": "user", "content": (
+                "请朗读以下内容，逐字读出，不要添加任何解释或其他内容：\n"
+                + text
+            )}],
+            system_prompt="你是朗读助手，只把给定内容读出来。",
+            max_new_tokens=1024,
+            tts_enabled=True,
+            omni_mode=False,
+        )
+    except RealtimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    try:
+        wav = result.audio_wav_base64
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if not wav:
+        raise HTTPException(status_code=502, detail="TTS 未返回音频")
+    return {"audio_wav_base64": wav}
+
+
+def _parse_turn_text(text: str) -> tuple[str, str]:
+    """解析答辩回合输出：返回 (回答摘要, 评委回复)。"""
+    text = (text or "").strip()
+    if "【回答摘要】" in text and "【评委回复】" in text:
+        _, rest = text.split("【回答摘要】", 1)
+        summary, reply = rest.split("【评委回复】", 1)
+        return summary.strip(), reply.strip()
+    if "【评委回复】" in text:
+        _, reply = text.split("【评委回复】", 1)
+        return "", reply.strip()
+    return "", text
+
+
+@router.post("/realtime/interview-turn")
+async def realtime_interview_turn(
+    file: UploadFile = File(...),
+    system_prompt: str = Form(""),
+):
+    """答辩评委直接语音/视频对话：评委听（看）用户回答后点评并追问。
+
+    不做"整理成书面回答"：音频（视频画面）直接作为多模态输入交给
+    MiniCPM-o，评委听完/看完当场回复，返回 回答摘要（用于多轮记忆）与 评委回复。
+    """
+    from app.services.media_analysis import (
+        _run_realtime_media_chat,
+        extract_audio_pcm16k,
+        extract_video_frames,
+    )
+    from app.services.realtime_client import RealtimeClient, RealtimeError
+
+    raw = await file.read(MAX_PERFORMANCE_SIZE + 1)
+    if len(raw) > MAX_PERFORMANCE_SIZE:
+        raise HTTPException(status_code=413, detail="录像文件超过 60MB 限制")
+    try:
+        frames = await asyncio.to_thread(extract_video_frames, raw, 3)
+    except Exception:
+        frames = []
+    audio = await asyncio.to_thread(extract_audio_pcm16k, raw)
+    if not audio and not frames:
+        raise HTTPException(status_code=400, detail="未从录音/录像中提取到音频或画面")
+
+    judge_sys = (
+        (system_prompt.strip() or "你是答辩模拟的评委。")
+        + "\n\n" + INTERVIEW_TURN_INSTRUCTION
+    )
+    reply = ""
+    summary = ""
+    if audio:
+        audio_b64 = base64.b64encode(audio).decode("utf-8")
+        try:
+            result = await RealtimeClient().chat(
+                messages=[{"role": "user", "content": [
+                    {"type": "text", "text": "请听用户的语音回答。"},
+                    {"type": "audio", "data": audio_b64},
+                ]}],
+                system_prompt=judge_sys,
+                max_new_tokens=MAP_REALTIME_MAX_TOKENS,
+                omni_mode=True,
+                timeout=180,
+            )
+            summary, reply = _parse_turn_text(result.text)
+        except RealtimeError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    observations: list[str] = []
+    for index, frame in enumerate(frames, 1):
+        parts = [
+            {"type": "text", "text": PERFORMANCE_PROMPT.format(n=index)},
+            {"type": "image",
+             "data": base64.b64encode(frame).decode("utf-8")},
+        ]
+        try:
+            obs = await asyncio.to_thread(
+                _run_realtime_media_chat, parts, 300, False, 120)
+            if obs and obs.strip():
+                observations.append(f"第 {index} 帧：{obs.strip()}")
+        except Exception:
+            continue
+    if observations:
+        reply = (
+            (reply + "\n\n📹 表现观察：\n" + "\n".join(observations))
+            .strip()
+        )
+
+    return {"reply": reply, "summary": summary}
+
+
+@router.post("/realtime/meeting")
+async def realtime_meeting(file: UploadFile = File(...)):
+    """会议旁听：听会议录音，整理要点、任务（负责人/截止）与风险。"""
+    from app.services.media_analysis import _decode_audio_to_pcm16k
+    from app.services.realtime_client import RealtimeClient, RealtimeError
+
+    raw = await file.read(MAX_PERFORMANCE_SIZE + 1)
+    if len(raw) > MAX_PERFORMANCE_SIZE:
+        raise HTTPException(status_code=413, detail="录音文件超过 60MB 限制")
+    try:
+        pcm = await asyncio.to_thread(_decode_audio_to_pcm16k, raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    audio_b64 = base64.b64encode(pcm).decode("utf-8")
+    try:
+        result = await RealtimeClient().chat(
+            messages=[{"role": "user", "content": [
+                {"type": "text", "text": MEETING_PROMPT},
+                {"type": "audio", "data": audio_b64},
+            ]}],
+            max_new_tokens=MAP_REALTIME_MAX_TOKENS,
+            omni_mode=True,
+            timeout=180,
+        )
+    except RealtimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    text = (result.text or "").strip()
+    tasks: list[dict] = []
+    summary = ""
+    risks = ""
+    if "【总结】" in text:
+        _, rest = text.split("【总结】", 1)
+        if "【任务】" in rest:
+            summary, rest = rest.split("【任务】", 1)
+        else:
+            summary = rest
+            rest = ""
+        summary = summary.strip()
+        if "【风险】" in rest:
+            task_block, risks = rest.split("【风险】", 1)
+            risks = risks.strip()
+        else:
+            task_block = rest
+        for line in task_block.splitlines():
+            line = line.strip().lstrip("-• ")
+            if not line:
+                continue
+            parts = [p.strip() for p in line.split("|")]
+            tasks.append({
+                "name": parts[0] if parts else line,
+                "owner": parts[1] if len(parts) > 1 and parts[1] != "无" else "",
+                "deadline": parts[2] if len(parts) > 2 and parts[2] != "无" else "",
+            })
+    return {
+        "summary": summary or text[:1000],
+        "tasks": tasks,
+        "risks": risks or "",
+        "raw": text[:2000],
+    }
+
+
+@router.post("/realtime/performance")
+async def realtime_performance(file: UploadFile = File(...)):
+    """答辩录像分析：抽帧让 MiniCPM-o 看表情 + 抽音频转写回答。
+
+    一条链路同时使用视觉（表情）与听觉（回答内容），返回表现点评与回答文本。
+    """
+    from app.services.media_analysis import (
+        _run_realtime_media_chat,
+        audio_to_written_answer,
+        extract_audio_pcm16k,
+        extract_video_frames,
+    )
+
+    raw = await file.read(MAX_PERFORMANCE_SIZE + 1)
+    if len(raw) > MAX_PERFORMANCE_SIZE:
+        raise HTTPException(status_code=413, detail="录像文件超过 60MB 限制")
+    warning = ""
+    try:
+        frames = await asyncio.to_thread(
+            extract_video_frames, raw, 4)
+    except Exception:
+        frames = []
+        warning = "未能解析录像画面，请确认画面完整后重试"
+    audio = await asyncio.to_thread(extract_audio_pcm16k, raw)
+
+    observations: list[str] = []
+    for index, frame in enumerate(frames, 1):
+        parts = [
+            {"type": "text",
+             "text": PERFORMANCE_PROMPT.format(n=index)},
+            {"type": "image",
+             "data": base64.b64encode(frame).decode("utf-8")},
+        ]
+        try:
+            obs = await asyncio.to_thread(
+                _run_realtime_media_chat, parts, 300, False, 120)
+            if obs and obs.strip():
+                observations.append(
+                    f"第 {index} 帧：{obs.strip()}")
+        except Exception as exc:
+            warning = warning or f"表情分析部分失败：{type(exc).__name__}"
+    if observations:
+        analysis = "\n".join(observations)
+    else:
+        analysis = ""
+
+    answer = ""
+    if audio:
+        try:
+            answer = await asyncio.to_thread(
+                audio_to_written_answer, "answer.webm", audio)
+        except Exception as exc:
+            answer = ""
+            warning = warning or f"回答转写失败：{type(exc).__name__}"
+    if not answer and not analysis:
+        warning = warning or "未能提取到回答与画面，请重试或缩短录制时长"
+
+    return {
+        "analysis": (analysis or "").strip(),
+        "answer": (answer or "").strip(),
+        "frames": len(frames),
+        "warning": warning,
+    }
+
+
+@router.get("/realtime/status")
+def realtime_status():
+    """返回 MiniCPM-o Realtime 配置状态，供 Demo 前端快速判断可用性。"""
+    backend = "local" if ASCEND_OMNI_WS_URL else "map"
+    return {
+        "enabled": bool(MAP_REALTIME_API_KEY or ASCEND_OMNI_WS_URL),
+        "model": "llama.cpp-omni" if ASCEND_OMNI_WS_URL else MAP_REALTIME_MODEL,
+        "mode": "chat",
+        "backend": backend,
+    }
+
+
+@router.post("/realtime/chat")
+async def realtime_chat(req: RealtimeChatRequest):
+    """调用 MiniCPM-o Chat 模式（云端 Realtime 或本地 llama-omni-server）。"""
+    if not (MAP_REALTIME_API_KEY or ASCEND_OMNI_WS_URL):
+        raise HTTPException(
+            status_code=503,
+            detail="MAP_REALTIME_API_KEY 或 ASCEND_OMNI_WS_URL 未配置",
+        )
+    messages = list(req.messages)
+    if req.message.strip():
+        messages.append({"role": "user", "content": req.message})
+    if not messages:
+        raise HTTPException(
+            status_code=400,
+            detail="messages 或 message 至少需要一项",
+        )
+
+    client = RealtimeClient()
+    tts_failed = False
+    try:
+        result = await client.chat(
+            messages=messages,
+            system_prompt=req.system_prompt,
+            max_new_tokens=req.max_new_tokens or MAP_REALTIME_MAX_TOKENS,
+            tts_enabled=req.tts_enabled,
+            enable_thinking=req.enable_thinking,
+        )
+    except RealtimeError as exc:
+        if req.tts_enabled:
+            # 部分后端（如 910C 的 TTS 算子未就绪）会在 TTS 输出时直接关闭
+            # 会话；降级为纯文本重试一次，保证对话不中断。
+            try:
+                result = await client.chat(
+                    messages=messages,
+                    system_prompt=req.system_prompt,
+                    max_new_tokens=(
+                        req.max_new_tokens or MAP_REALTIME_MAX_TOKENS),
+                    tts_enabled=False,
+                    enable_thinking=req.enable_thinking,
+                )
+            except RealtimeError as retry_exc:
+                raise HTTPException(
+                    status_code=502, detail=str(retry_exc)) from retry_exc
+            tts_failed = True
+        else:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    model = "llama.cpp-omni" if ASCEND_OMNI_WS_URL else MAP_REALTIME_MODEL
+    backend = "local" if ASCEND_OMNI_WS_URL else "map"
+    try:
+        wav_base64 = (
+            result.audio_wav_base64 if req.tts_enabled else "")
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {
+        "reply": result.text,
+        "model": model,
+        "mode": "chat",
+        "backend": backend,
+        "session_id": result.session_id,
+        "audio_base64": result.audio_base64 if req.tts_enabled else "",
+        "audio_wav_base64": wav_base64,
+        "tts_failed": tts_failed,
+    }

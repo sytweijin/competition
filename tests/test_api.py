@@ -42,7 +42,8 @@ async def test_health(client):
     assert resp.json()["status"] == "ok"
     assert set(resp.json()["checks"]) == {
         "storage", "llm_configured", "vision_model_configured",
-        "asr_model_configured",
+        "asr_model_configured", "realtime_configured",
+        "realtime_backend",
     }
 
 

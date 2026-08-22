@@ -231,7 +231,7 @@ def test_constraints_are_attached_to_task_not_created_as_tasks():
 def test_chat_can_read_draft_without_full_plan(monkeypatch):
     from app.llm.client import LLMClient
     monkeypatch.setattr(
-        LLMClient, "chat_text",
+        LLMClient, "chat_messages",
         lambda *args, **kwargs: AgentError(
             agent="test", error_type="timeout", message="offline"))
     client = TestClient(app)

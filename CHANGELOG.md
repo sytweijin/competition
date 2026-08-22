@@ -1,8 +1,570 @@
-﻿# 变更日志 (CHANGELOG)
+# 变更日志 (CHANGELOG)
 
 > 本文档记录项目每一次版本变更，附核心改动的**原版 vs 现版代码对照**，
 > 方便团队成员理解"为什么这么改、改了什么、好在哪里"。
 > 按时间倒序排列（最新在最上面），随项目同步更新。
+
+---
+## v6.9 —— 多模态需求输入：语音描述与拍照直接生成任务（2026-08-21）
+
+**定位：** 把全模态能力接入项目配置核心入口：🎤 语音描述需求自动填入项目背景、📷 拍照需求自动进入文件分析，实现"不打字也能建计划"。
+
+**审查/修改背景：** P0 已把 MiniCPM-o 接入 AI 建议抽屉，但多模态仍停留在附加功能；用户要求把全模态融入分工协作的核心流程，需求输入是第一步。
+
+### 关键缺陷（P0）
+
+#### 1. 项目配置页增加语音描述与拍照需求入口
+
+1. **问题：** 需求输入只能打字或上传文件，全模态能力被限制在 AI 建议抽屉这个小角落，没有进入核心协作流程。
+2. **修改前：** 上传区只有"上传任务要求文件"按钮；无语音、无拍照入口。
+3. **修改后：** 新增 🎤 语音描述需求按钮（录音 → `/api/realtime/transcribe` → 文字自动填入 `background`，可修改后生成拆解）和 📷 拍照需求按钮（`accept="image/*" capture="environment"`，选择/拍摄照片 → 加入 `state.files` → 立即 `analyzeFiles()` 识别需求）；识别失败显示明确状态，不静默丢失。
+4. **为什么这样改：** 需求输入是协作流程第一步，也是全模态最自然的入口；完全复用现有转写与文件分析管线，不改后端。
+5. **收益：** ① 全程不打字即可建计划；② "我来说、它来拆任务"从抽屉小角落变成核心入口；③ 演示可现场说话/拍照生成草案。
+
+#### 2. 图片分析升级为全模态理解（不止 OCR）
+
+1. **问题：** 拍照/上传图片只做文字提取（OCR），遇到流程图、界面稿、手绘草图、场景照片等无文字或文字很少的图片会识别失败或丢失关键信息，浪费 MiniCPM-o 的视觉理解能力。
+2. **修改前：** 提示词为"请提取这张图片中的文字和关键信息"，成功前缀为 `[图片 OCR]`；无文字图片基本无法转化为需求材料。
+3. **修改后：** 提示词改为三步理解：提取全部文字 → 描述非文字内容（图表、流程图、界面、场景、物品、手绘等）→ 结合项目需求提炼相关信息；成功前缀改为 `[图片理解]`；Realtime 与 OpenAI 兼容兜底两条路径统一；测试断言同步更新。
+4. **为什么这样改：** 全模态的差异点在"理解"而非"识字"；图片描述与 OCR 文本一样进入需求分析管线，让无文字图片也能成为任务拆解依据。
+5. **收益：** ① 无文字流程图实测被正确描述（色块、箭头、"步骤/数据流向"）；② 图片从"识字工具"变成"视觉理解入口"；③ 演示可现场拍流程图/白板草图直接进拆解。
+
+**涉及文件：** `app/services/media_analysis.py`、`tests/test_media_analysis.py`、`tests/test_media_formats.py`、`docs/使用说明书.md`、`docs/华为昇腾创新应用赛道接入说明.md`、`docs/功能验证清单.md`、`docs/多模态落地改造清单.md`、`docs/比赛全量备赛手册.md`、`docs/部署与回退清单.md`、`CHANGELOG.md`。
+
+### 健壮性提升（P1）
+
+#### 3. 录音组件泛化复用与事件冒泡防护
+
+1. **问题：** 原录音逻辑只服务抽屉 `micBtn`、硬编码填入 `chatInput`，无法复用于配置页；新按钮位于 `uploadBox` 内，点击会冒泡误触文件选择器。
+2. **修改前：** `toggleRecording()` 无参数；`transcribeRecording` 固定写 `chatInput`；新按钮未做冒泡处理。
+3. **修改后：** `toggleRecording(onText, source)` 泛化，转写结果按 `state.voiceOnText` 路由到抽屉或背景；`setRecorderUI` 按 `recorderSource` 分别控制两个录音按钮的状态与禁用；新按钮 click 均 `stopPropagation()`。
+4. **为什么这样改：** 单一录音链路多入口复用，避免复制两份 MediaRecorder 逻辑；阻止冒泡避免点击"拍照/语音"误弹文件选择器。
+5. **收益：** ① 抽屉与配置页共用一套录音/转写链路；② 录音态互不干扰、防止重复录音；③ 后续汇报页可直接复用同一组件。
+
+**涉及文件：** `app/web/templates/index.html`、`app/web/static/app.js`、`app/web/static/style.css`、`docs/多模态落地改造清单.md`、`docs/使用说明书.md`、`docs/功能验证清单.md`、`README.md`、`CHANGELOG.md`。
+
+### 打磨（P3）
+
+#### 4. 演示前一键预检脚本与版本号同步
+
+1. **问题：** A3 服务出现过多次空闲失联，演示现场靠人记命令检查，容易漏项；`/api/health` 版本号还停留在 6.5，与实际版本线不一致。
+2. **修改前：** 无预检脚本；`system.py` 中 `/api/health`、`/api/ready` 硬编码 `version: "6.5"`。
+3. **修改后：** 新增 `scripts/preflight_demo.py`：检查应用服务、后端配置（本地/云端/兜底）、A3 health、Realtime 状态，并在 A3 健康或云端配置时执行一次真实对话暖机；失败项输出修复提示并以退出码 1 结束。`system.py` 版本号同步为 6.9。
+4. **为什么这样改：** 演示前把"人记命令"变成"一个脚本、看结论"；版本号与 README/CHANGELOG 对齐，避免评审看到自相矛盾的信息。
+5. **收益：** ① 现场预检 10 秒完成且含暖机动作；② 失败项带修复提示；③ 健康接口版本与实际一致。
+
+**涉及文件：** `scripts/preflight_demo.py`（新增）、`app/web/routers/system.py`、`docs/功能验证清单.md`、`docs/比赛全量备赛手册.md`、`CHANGELOG.md`。
+
+### 体验优化（P2）
+
+#### 5. 拍照需求接入桌面摄像头
+
+1. **问题：** `capture="environment"` 仅在手机浏览器生效，桌面端点击"拍照需求"直接变成文件选择器，无法调用电脑摄像头。
+2. **修改前：** 点击 `cameraReqBtn` 只触发隐藏文件输入，桌面端无摄像头入口。
+3. **修改后：** 新增摄像头取景弹窗：`openCamera` 用 `getUserMedia({video:{facingMode:'environment'}})` 打开摄像头，`captureCameraPhoto` 用 canvas 截帧生成 JPEG 并复用 `addPhotoToFiles` 进入识别管线；摄像头打不开或浏览器不支持时自动回退文件选择；关闭时停止摄像头占用。
+4. **为什么这样改：** "拍照"必须真的能拍；桌面端用取景框截帧，移动端沿用后置摄像头，两条路径一致，且失败有明确回退。
+5. **收益：** ① 桌面/手机都能真实拍摄需求材料；② 拍照与选图共用同一识别管线；③ 摄像头权限被拒时不会卡死。
+
+**涉及文件：** `app/web/templates/index.html`、`app/web/static/app.js`、`app/web/static/style.css`、`docs/使用说明书.md`、`docs/功能验证清单.md`、`CHANGELOG.md`。
+
+### 关键缺陷（P0）
+
+#### 6. 语音输入状态残留与转写噪音修复
+
+1. **问题：** 抽屉麦克风第一次"开始→停止"后 `state.recording` 未复位，第二次点击无响应；音频转写提示词太弱，本地模型把思考过程和确认语当成结果填进输入框。
+2. **修改前：** `stopRecording` 未将 `state.recording` 置 false；音频转写提示词为"请转写这段音频中的文字，只输出文字内容"。
+3. **修改后：** `stopRecording` 停止时立即 `state.recording=false`；音频转写提示词改为"直接转写用户原话，不要思考/解释/复述/补充/确认"；静态资源版本号升到 6.9.1 强制刷新。
+4. **为什么这样改：** 录音状态机必须闭环，否则按钮假死；8B 模型需要更强制式指令抑制附加输出。
+5. **收益：** ① 连续多次语音输入正常；② 转写结果不再混入思考过程与确认语；③ 浏览器强制加载修复后的 JS。
+
+**涉及文件：** `app/web/static/app.js`、`app/services/media_analysis.py`、`app/web/templates/index.html`、`docs/功能验证清单.md`、`CHANGELOG.md`。
+
+### 关键缺陷（P0）
+
+#### 7. 抽屉语音改为"直接语音对话"，并统一智能体身份
+
+1. **问题：** 抽屉 🎤 走"转写进输入框"，MiniCPM-o 是对话模型，会把"你好"转写成"你好，有什么可以帮你"这类回答；用户需要的是直接语音对话，且模型被问"你是谁"时介绍底层模型而非智能体。
+2. **修改前：** 抽屉录音 → `/api/realtime/transcribe` → 文本填 `chatInput`；系统提示词未约束身份。
+3. **修改后：** 新增 `POST /api/realtime/voice-chat`（录音解码为 PCM 后作为音频消息 + `omni_mode` 直接发给 MiniCPM-o，返回文本回答与可选 TTS 音频，TTS 失败自动降级纯文本重试）；抽屉 🎤 改为直接语音对话（气泡显示"🎤 语音消息"+ 回答，不写入输入框）；配置页 🎤 保留转写填背景；Realtime 与 `/api/chat` 提示词均加入"协作分工助手"身份约束，问"你是谁"只介绍智能体。
+4. **为什么这样改：** 让模型做它擅长的（听懂音频直接作答），而不是做它不擅长的（逐字转写）；比赛要求充分展示 MiniCPM-o 全模态能力，语音对话正是其核心用法，必须保持主力地位而非兜底。
+5. **收益：** ① 语音对话实测可用（A3 4s 回答"我是协作分工助手…"）；② 身份统一为智能体，不再暴露底层模型；③ 转写路径仅保留给需求描述场景。
+
+**涉及文件：** `app/web/routers/realtime.py`、`app/web/static/app.js`、`app/web/routes.py`、`app/web/templates/index.html`、`tests/test_realtime_client.py`、`docs/使用说明书.md`、`docs/功能验证清单.md`、`docs/华为昇腾创新应用赛道接入说明.md`、`docs/多模态落地改造清单.md`、`CHANGELOG.md`。
+
+### 打磨（P3）
+
+#### 8. 智能体命名统一与版本策略
+
+1. **问题：** 提示词与文档误用"清小搭"（另一比赛平台名）作为产品名；小 bug 频繁递增版本号导致版本迭代过快（6.9.0 → 6.9.1 → 6.9.2）。
+2. **修改前：** Realtime / `/api/chat` 提示词自称"清小搭"；静态缓存参数随小修复升至 6.9.2。
+3. **修改后：** 全部改为"协作分工助手"身份；静态资源缓存参数改为文件内容哈希（sha1 前 8 位）；AGENTS.md 新增版本号管理约定（小修复不升版本号，只有功能里程碑才递增）。
+4. **为什么这样改：** 产品名不能借用其他平台名称；版本号只应表达功能里程碑，静态缓存不应伪装成产品版本。
+5. **收益：** ① 命名统一且不与外部平台混淆；② 版本号不再被小修复推高；③ 后续协作者遵守同一策略。
+
+**涉及文件：** `app/web/static/app.js`、`app/web/routes.py`、`app/web/routers/realtime.py`、`app/web/templates/index.html`、`docs/功能验证清单.md`、`AGENTS.md`、`CHANGELOG.md`。
+
+#### 9. 配置页语音需求改为"添加语音需求"（录音进材料，不贴文本）
+
+1. **问题：** 配置页 🎤 走"转写填入项目背景"，MiniCPM-o 是对话模型，会把用户语音转成对话式回答并贴进背景，显然不对。
+2. **修改前：** 配置页录音 → `/api/realtime/transcribe` → 文本追加到 `background`。
+3. **修改后：** 配置页 🎤 改为"添加语音需求"：录音直接转为音频文件加入 `state.files`，走与拍照相同的 `addRequirementFile` 管线（MiniCPM-o 理解音频 → 需求分析 → 参与拆解），不再写入背景；按钮文案、提示语与文档同步更新。
+4. **为什么这样改：** 与拍照需求对称——照片进文件列表、录音也进文件列表，都由模型理解后参与拆解；避免"逐字转写/模型作答"贴进文本框的错误用法。
+5. **收益：** ① 语音需求不再污染背景文本；② 音频与图片需求共用同一识别管线；③ 演示可"录音 → 已读取 → 生成拆解"。
+
+**涉及文件：** `app/web/templates/index.html`、`app/web/static/app.js`、`docs/使用说明书.md`、`docs/功能验证清单.md`、`README.md`、`docs/多模态落地改造清单.md`、`CHANGELOG.md`。
+
+### 关键缺陷（P0）
+
+#### 10. 不可用日期选择上限与截止日期不同步
+
+1. **问题：** 载入演示案例后把截止日期从默认（今天+15 天）改成更晚日期，成员"不可用日期"选择器上限仍停留在旧截止日，只能选窗口外日期，资源日历因此看不到不可用标记（窗口内没有格子）。
+2. **修改前：** `bindUnavailablePicker` 只在绑定瞬间读取一次 `endDate` 设置 `max`；`endDate` 变更处理器只更新 `startDate.max`。
+3. **修改后：** 新增 `syncUnavailableDateLimits()`，在 `startDate`/`endDate` 变更时同步所有 `.unavailable-date-input` 的 `min`/`max`。
+4. **为什么这样改：** 排期窗口变化后选择器必须跟随，否则成员无法标记窗口内的不可用日期；资源日历标记逻辑与数据本就正确（实测窗口内日期正常显示红条纹），根因在输入上限。
+5. **收益：** ① 截止日期修改后选择器上限即时同步；② 资源日历不可用红条纹恢复可用。
+
+**涉及文件：** `app/web/static/app.js`、`CHANGELOG.md`。
+
+### 体验优化（P2）
+
+#### 11. 答辩模拟接入语音输入与语音播报
+
+1. **问题：** 答辩模拟只有文字问答，全模态语音能力未进入"口语演练"场景。
+2. **修改前：** 答辩回答框只能打字；AI 回复只有文字，无朗读。
+3. **修改后：** 新增 `POST /api/realtime/tts` 文本朗读接口；答辩表单动态注入 🎤 语音输入（录音 → 转写 → 填入回答框）与"语音播报"开关（仅云端后端启用，AI 回复自动朗读）；`renderInterviewChat` 为每条 AI 回复添加"🔊 播报"按钮。
+4. **为什么这样改：** 答辩模拟本质是口语演练，语音输入与播报最贴近真实答辩；TTS 受 910C 限制，播报仅云端启用，语音输入不受影响。
+5. **收益：** ① 可"口述回答、听 AI 追问"，像真实通话；② 文字记录保留；③ 为后续摄像头表情分析铺路。
+
+**涉及文件：** `app/web/routers/realtime.py`、`app/web/static/app.js`、`app/web/static/style.css`、`tests/test_realtime_client.py`、`docs/使用说明书.md`、`docs/功能验证清单.md`、`CHANGELOG.md`。
+
+### 体验优化（P2）
+
+#### 12. 答辩模拟接入摄像头录像表现分析
+
+1. **问题：** 答辩练习是口语场景，只看文字/听语音仍不够贴近真实答辩，AI 无法观察用户的表情与状态。
+2. **修改前：** 答辩模拟只有文字问答 + 语音输入/播报，无视觉分析。
+3. **修改后：** 新增 `POST /api/realtime/performance`：PyAV 从录像中均匀抽 4 帧（JPEG）+ 抽音频（16k PCM）；抽帧用 MiniCPM-o 图片理解分析表情/状态并给出改进建议，抽音频走现有转写返回回答文本；前端新增 📹 录像弹窗（摄像头预览、开始/停止、60 秒自动停、计时提示），停止后自动上传，回答填入回答框、表现点评作为"📹 表现分析"卡片追加到对话。`media_analysis` 新增 `extract_video_frames` / `extract_audio_pcm16k` 工具。
+4. **为什么这样改：** 一条录像同时喂给视觉（表情）与听觉（回答内容），正是 MiniCPM-o"边看边听"的核心能力；抽帧控制输入量、失败降级为空分析，保证链路稳健。
+5. **收益：** ① 答辩练习可"对着镜头练、AI 看表情给建议"；② 回答自动转写进输入框，可修改；③ 实测合成视频 4 帧 4s 完成分析，A3 健康不受影响。
+
+**涉及文件：** `app/services/media_analysis.py`、`app/web/routers/realtime.py`、`app/web/static/app.js`、`app/web/templates/index.html`、`tests/test_realtime_client.py`、`docs/使用说明书.md`、`docs/功能验证清单.md`、`docs/多模态落地改造清单.md`、`CHANGELOG.md`。
+
+### 健壮性提升（P1）
+
+#### 13. 录像分析长时长与失败兜底加固
+
+1. **问题：** 60 秒自动停止对长回答太短；默认 MediaRecorder 码率高，60 秒录像易超 30MB 上限导致分析失败；抽帧整段载入内存，长视频又慢又吃内存；失败原因不明确。
+2. **修改前：** 60 秒上限；录制不设码率；`extract_video_frames` 用 `list(container.decode())` 全量解码；接口上限 30MB、失败静默降级。
+3. **修改后：** 上限提到 3 分钟（可提前停止）；录制设 `videoBitsPerSecond=1.2M` / `audioBitsPerSecond=64k` 低码率，60 秒约 10MB、3 分钟约 27MB；接口上限提到 60MB；`extract_video_frames` 改为流式采样（按 `stream.frames`/时长计算步长，只保留目标帧，不整段载入）；媒体分析默认超时提到 180s、表现分析显式 240s；返回 `warning` 字段说明失败原因，前端展示明确提示。
+4. **为什么这样改：** 长回答是真实场景，必须压码率保体积、流式抽帧保性能、放宽超时保完成、失败原因可见保体验。
+5. **收益：** ① 最长 3 分钟回答可用；② 60 秒录像不再超限失败；③ 长视频分析内存/耗时可控；④ 失败不再"无声无息"。
+
+**涉及文件：** `app/services/media_analysis.py`、`app/web/routers/realtime.py`、`app/web/static/app.js`、`app/web/templates/index.html`、`tests/test_realtime_client.py`、`docs/使用说明书.md`、`docs/功能验证清单.md`、`CHANGELOG.md`。
+
+### 体验优化（P2）
+
+#### 14. 答辩模拟改为直接语音/视频对话（去掉"整理成书面回答"）
+
+1. **问题：** 答辩 🎤/📹 仍走"转写/整理成书面回答填入回答框"，MiniCPM-o 会把语音理解成对话式回答，内容驴头不对马嘴；且没有材料/关注点时无法提问、兜底问题反问用户"核心观点"。
+2. **修改前：** 答辩语音走 `/api/realtime/dictate` 整理成文字填入回答框；录像走 `/api/realtime/performance` 转写回答；无材料时无法开始。
+3. **修改后：** 新增 `POST /api/realtime/interview-turn`：音频（含视频抽帧）直接作为多模态输入发给 MiniCPM-o，评委以"【回答摘要】+【评委回复】"格式当场点评追问（摘要用于多轮记忆，前端展示为"回答要点"）；视频时逐帧看画面并附"📹 表现观察"；前端 🎤/📹 改为直接对话，不再写回答框；无材料但有项目方案时可开始，兜底问题改为基于项目/任务提问。
+4. **为什么这样改：** 与 AI 建议抽屉原则一致——让模型直接听懂/看懂，而不是做它不擅长的转写；摘要机制保证多轮对话上下文连贯。
+5. **收益：** ① 语音/视频回答直接对话，评委回复与内容对应；② 不填关注点/材料也能基于方案提问；③ 视频时评委"边看边听"附表现观察。
+
+**涉及文件：** `app/web/routers/realtime.py`、`app/web/static/app.js`、`tests/test_realtime_client.py`、`docs/使用说明书.md`、`docs/功能验证清单.md`、`docs/多模态落地改造清单.md`、`CHANGELOG.md`。
+
+### 健壮性提升（P1）
+
+#### 15. 成员轻量汇报页：语音/拍照/状态更新闭环
+
+1. **问题：** 成员更新任务状态必须登录完整工作台手动点击，协作流程重；语音/拍照能力未进入执行期。
+2. **修改前：** 状态切换只在工作台内完成；无成员侧入口。
+3. **修改后：** 新增 `app/services/report_link.py`（token 绑定 方案文件+成员，14 天有效，汇报备注独立存储）与 `app/web/routers/report.py`：`/api/report/link` 生成链接、`/api/report/state` 返回我的任务、`/api/report/voice` 听懂语音汇报（状态/工时/备注）、`/api/report/photo` 拍照交付、`/api/report/update` 应用变更（状态+实际工时 → `record_task_actual` + `recompute_plan` → 保存 → 推送通知）。前端新增"成员汇报链接"按钮与 `?report=token` 汇报模式页（我的任务、语音确认、拍照、手动更新）。
+4. **为什么这样改：** 执行期闭环必须"成员侧轻量 + 服务端可靠"：token 免登录、更新走与工作台一致的业务链路，避免两套逻辑分叉。
+5. **收益：** ① 成员手机说话/拍照即可更新任务并自动重排；② 每次状态变更自动通知团队；③ 语音识别需人工确认后才应用，防误操作。
+
+#### 16. 群机器人通知自动推送与今日播报
+
+1. **问题：** 通知只靠手动按钮，状态变更不会自动触达成员手机；提醒只有文字没有语音。
+2. **修改前：** `notifier.py` 只有 `notify_reminders`；提醒页只有"发送提醒通知"。
+3. **修改后：** `notifier.py` 新增 `notify_event(plan, text)`，汇报页状态变更（完成/阻塞/开始）自动推送"张三已完成「调研」6h"等事件；提醒页新增"🔊 今日播报"：云端后端用 `/api/realtime/tts` 语音播报今日要点，本地降级文字展示。
+4. **为什么这样改：** 自动触达是"通知到达成员手机"的关键（webhook 指向企业微信群机器人即可）；播报让提醒从"要看"变成"要听"。
+5. **收益：** ① 状态变更即时推群；② 今日要点一键语音播报；③ 本地后端不触发 TTS 不会挂服务。
+
+#### 17. 会议旁听
+
+1. **问题：** 组会讨论产出的任务/负责人/截止日靠人工记录，语音理解能力未进入需求输入。
+2. **修改前：** 无会议入口。
+3. **修改后：** 新增 `POST /api/realtime/meeting`：MiniCPM-o 直接听懂会议录音，按【总结】/【任务】（任务|负责人|截止）/【风险】格式整理；配置页新增"🎙 会议旁听"按钮，解析结果弹窗展示，"生成任务草案"自动填入项目背景并进入拆解。
+4. **为什么这样改：** 会议是协作分工最重要的需求来源；直接理解音频（非逐字转写）符合 MiniCPM-o 能力定位。
+5. **收益：** ① 一段录音即可沉淀任务草案；② 任务带负责人/截止信息；③ 与既有 planner 管线无缝衔接。
+
+#### 18. recompute 公共服务抽取
+
+1. **问题：** `/api/recompute` 的重算逻辑内联在路由里，汇报页更新无法复用，容易分叉。
+2. **修改前：** `routes.recompute_plan` 内部实现全部逻辑。
+3. **修改后：** 抽取为 `project_service.recompute_plan(plan)`，路由与汇报页共用同一实现；路由改为薄封装。
+4. **为什么这样改：** 单一事实源，两处行为一致。
+5. **收益：** 汇报页更新与工作台状态切换走完全相同的重算链路；测试覆盖（290 passed）。
+
+**涉及文件：** `app/services/report_link.py`（新增）、`app/web/routers/report.py`（新增）、`app/services/project_service.py`、`app/services/notifier.py`、`app/web/routers/realtime.py`、`app/web/routes.py`、`app/web/templates/index.html`、`app/web/static/app.js`、`app/web/static/participants.js`、`app/web/static/style.css`、`tests/test_report.py`（新增）、`tests/test_realtime_client.py`、`docs/使用说明书.md`、`docs/功能验证清单.md`、`docs/多模态落地改造清单.md`、`CHANGELOG.md`。
+
+**同步修改（2026-08-22）：** `.gitignore` 新增 `memory/attachments/`，避免本地测试产物进入 Git 提交。
+
+---
+
+## v6.8 —— P0 全模态交互落地：前端接通 MiniCPM-o、语音输入与语音回复（2026-08-21）
+
+**定位：** 把 MiniCPM-o 4.5 从“只有后端接口”落地为工作台内可用的全模态交互：聊天接入 Realtime 并注入计划上下文、麦克风语音输入转写、TTS 语音回复，全部带兜底与明确提示。
+
+**审查/修改背景：** 此前 Realtime 只暴露 `/api/realtime/chat` 后端接口，前端聊天仍走通用 `/api/chat`；图片/音频只在文件上传时被动使用，TTS 有接口无播放。用户要求 P0 做扎实：功能彻底可用，不满足于“基本完成”。
+
+### 关键缺陷（P0）
+
+#### 1. 前端聊天接通 MiniCPM-o Realtime 并注入计划上下文
+
+1. **问题：** 前端 AI 建议抽屉的 `sendChat` 固定调用 `/api/chat`（通用 LLM），`/api/realtime/chat` 从未被前端调用；评委打开页面看不到 MiniCPM-o，接入层形同虚设。
+2. **修改前：** `sendChat` 直接 `jsonRequest('/api/chat', ...)`，无任何 Realtime 判断。
+3. **修改后：** `sendChat` 先探测 `/api/realtime/status`（存入 `state.realtime`），启用时走 `sendRealtimeChat`：把 `buildChatBaseline()` 方案快照 + `chatDelta` 变更 + `chatHistory` 组装成 messages，系统提示词精简为适合 8B 模型的协作助手定位；Realtime 失败自动回退 `sendLegacyChat` 并在页面提示，下次打开抽屉重新探测；抽屉顶部新增模型/后端徽标（`renderRealtimeBadge`）。
+4. **为什么这样改：** 全模态能力必须进入用户实际使用的对话路径才可能被评审看到；方案快照注入让 MiniCPM-o 的对话基于同一份计划数据，而不是通用闲聊。
+5. **收益：** ① 演示时页面直接使用 MiniCPM-o；② 回答有真实计划上下文；③ 失败不阻断，回退链路完整。
+
+#### 2. 麦克风语音输入：录音 → 转写 → 填入输入框
+
+1. **问题：** 音频能力只在上传文件时被动转写，用户无法用语音提问或下达指令，全模态的“听”没有进入交互主链路。
+2. **修改前：** 无录音入口；`audio_transcribe_text` 固定返回带 `[音频转写]` 前缀的文本，前端无法复用为语音输入。
+3. **修改后：** 新增 `POST /api/realtime/transcribe`（接收 webm/wav/mp3 等，15MB 上限，优先 Realtime、回退 ASR，返回纯文本，后端未连接时给出“本地昇腾后端未连接”类友好提示）；`audio_transcribe_text(filename, content, labeled=True)` 增加 `labeled` 参数；前端 chat-form 新增 🎤 按钮，用 MediaRecorder 录音（60 秒自动停止、权限/兼容性提示），停止后上传转写并填入 `chatInput`，用户确认后再发送。
+4. **为什么这样改：** 语音输入必须进入“用户确认后发送”的编辑闭环，不能静默执行；`labeled` 参数保证文件分析链路的 `[音频转写]` 前缀行为不变。
+5. **收益：** ① 演示“我来说、它来拆任务”；② 识别结果可编辑再发送，避免误识别直接提交；③ 只配本地昇腾后端（`ASCEND_OMNI_WS_URL`）时同样走 Realtime 优先。
+
+#### 3. TTS 语音回复：PCM 转 WAV、前端播放与重听
+
+1. **问题：** Realtime 协议返回的音频是 24kHz 单声道 float32 裸 PCM（base64），浏览器无法直接播放；此前前端连 `audio_base64` 都没有消费，TTS 等于不可用。
+2. **修改前：** `RealtimeChatResult.audio_base64` 原样返回；前端无任何播放逻辑。
+3. **修改后：** `RealtimeClient.pcm_to_wav_base64` 把 float32/int16 PCM 转成 16bit 单声道 WAV（输入已是 RIFF 则透传），`RealtimeChatResult.audio_wav_base64` 缓存转换结果；`/api/realtime/chat` 返回 `audio_wav_base64`；前端抽屉右上角新增“语音回复”开关，回答后自动播放，气泡带“🔊 重听”按钮（`audioCache` 按索引取用，避免大 base64 塞进 DOM 属性）；TTS 失败时后端自动降级为纯文本重试一次并返回 `tts_failed: true`，前端语音开关仅在云端后端（`backend: "map"`）启用——本地昇腾 910C 存在已知 TTS 算子问题，开 TTS 会挂起单会话服务。
+4. **为什么这样改：** 浏览器可播放是 TTS 可用的前提；转换放后端，前端零依赖直接 `new Audio('data:audio/wav;base64,...')`；TTS 不能成为对话中断点，降级重试保证即使误开开关也只损失语音、不损失回答。
+5. **收益：** ① 语音回复开箱即用；② 重听按钮提升演示可控性；③ 转换失败返回明确 502 提示而不是静默失败；④ 本地昇腾误开 TTS 不会拖垮对话链路。
+
+### 健壮性提升（P1）
+
+#### 4. 媒体分析纳入本地昇腾后端判断与测试隔离
+
+1. **问题：** `image_ocr_text` / `audio_transcribe_text` 只判断 `MAP_REALTIME_API_KEY`，只配 `ASCEND_OMNI_WS_URL`（本地 A3）时不会走 Realtime；且本机 `.env` 的 `ASCEND_OMNI_WS_URL` 会泄漏进测试，导致单测真实连接本地服务、每例超时约 30 秒。
+2. **修改前：** `if MAP_REALTIME_API_KEY:`；`tests/conftest.py`、`test_media_analysis.py`、`test_media_formats.py` 只屏蔽 `MAP_REALTIME_API_KEY`。
+3. **修改后：** 判断改为 `if MAP_REALTIME_API_KEY or ASCEND_OMNI_WS_URL:`；三个测试文件的同名 fixture 均补 `ASCEND_OMNI_WS_URL=""`。
+4. **为什么这样改：** 本地链路与云端链路应同样进入媒体分析；测试必须与真实环境变量隔离，否则全量测试被本机配置拖慢/拖挂。
+5. **收益：** ① A3 本地转写可用；② 全量测试稳定（273 passed，约 18 秒），不依赖本机 `.env`。
+
+#### 5. 图片/语音兜底同步阿里 DashScope 配置
+
+1. **问题：** 昇腾副本 `.env` 未配置 `APP_VISION_*` / `APP_ASR_*`，MiniCPM-o 不可用时图片/音频只剩元数据“需要确认”，演示时双后端同时故障将无多模态兜底。
+2. **修改前：** `competition-ascend/.env` 无视觉/语音回退模型配置，API key 默认复用 DeepSeek（不提供视觉/语音模型）。
+3. **修改后：** 从 `competition/.env` 同步 9 项配置：`APP_VISION_MODEL=qwen3.7-plus`、`APP_ASR_MODEL=qwen-audio-3.0-asr-flash`、独立 DashScope key 与 `https://dashscope.aliyuncs.com/compatible-mode/v1`、`APP_ASR_TRANSCRIPTION_MODE=auto`、`APP_MEDIA_TIMEOUT=20`、`APP_OCR_MAX_PDF_PAGES=6`；实测 MiniCPM-o 屏蔽后 ASR 2.7s 转写正确、OCR 6.6s 提取正确。
+4. **为什么这样改：** 兜底链越完整，演示越不怕 A3/云端双挂；复用 DeepSeek key 会静默失败，必须显式配 DashScope key。
+5. **收益：** ① 三级兜底生效（MiniCPM-o → DashScope → 元数据）；② 实测 ASR 输出比 MiniCPM-o 更干净（无思考噪音）；③ 与基础版配置保持一致。
+
+> 注：评审/联调期间默认注释该兜底配置，让昇腾或云端 MiniCPM-o 的故障直接可见（文件显示"需要确认"）；需要启用时取消 `.env` 中 `APP_VISION_*` / `APP_ASR_*` 注释并重启。
+
+### 打磨（P3）
+
+#### 6. 文档、版本号与版本规划表同步
+
+1. **问题：** 新接口与新交互没有对应文档，浏览器还会因静态资源版本号不变而缓存旧 JS，演示时加载不到新功能。
+2. **修改前：** 接入说明只有 `/api/realtime/chat`；使用说明书 8.1 只有接口描述；`index.html` 资源版本号停留在 `5.76.2`；版本规划表无 v6.8。
+3. **修改后：** 接入说明新增 `/api/realtime/transcribe` 与 WAV 播放说明；使用说明书 8.1 改写为语音输入/TTS/兜底操作说明；README 版本升至 v6.8 并补接口行；`app.js`/`participants.js` 资源版本号升至 `6.8.0`；版本规划表新增 v6.8 并标记已完成。
+4. **为什么这样改：** 评审与队友需要与代码一致的操作与接口文档；资源版本号保证演示环境加载新代码。
+5. **收益：** 文档可复现；演示不因缓存回退到旧交互。
+
+#### 7. 新增功能验证清单
+
+1. **问题：** P0 功能跨后端、跨端到端，缺少一份可重跑的验证方法，新成员或评审前难以确认"所有功能可用"。
+2. **修改前：** 只有演示流程和验收项，无自动化命令与实测记录。
+3. **修改后：** 新增 `docs/功能验证清单.md`：自动化验证命令（状态/对话/转写/OCR/兜底）、浏览器手工验证表（9 项）、2026-08-21 本地昇腾实测记录与演示红线。
+4. **为什么这样改：** 验证要可复现、可留档；实测记录让团队知道哪些链路已确认、哪些是已知不可用。
+5. **收益：** 评审前按清单逐项过即可；新成员无需摸索验证方法。
+
+**涉及文件：** `.env`、`app/services/realtime_client.py`、`app/services/media_analysis.py`、`app/web/routers/realtime.py`、`app/web/templates/index.html`、`app/web/static/app.js`、`app/web/static/style.css`、`tests/conftest.py`、`tests/test_media_analysis.py`、`tests/test_media_formats.py`、`tests/test_realtime_client.py`、`docs/华为昇腾创新应用赛道接入说明.md`、`docs/使用说明书.md`、`docs/功能验证清单.md`、`README.md`、`CHANGELOG.md`。
+
+---
+
+## v6.7 —— 比赛全量备赛手册（2026-08-21）
+
+**定位：** 把赛事信息、项目现状、技术架构、昇腾部署、群聊经验、待办、提交材料、风险兜底整合成一份新对话可独立接手的手册。
+
+**审查/修改背景：** 用户担心换对话后上下文丢失，需要一份不依赖聊天历史的完整交接文档。
+
+### 打磨（P3）
+
+#### 1. 新增全量备赛手册
+
+1. **问题：** 比赛材料分散在飞书、群聊、部署指南、备赛梳理等多个地方，新对话接手需要重新找材料。
+2. **修改前：** `docs/` 有部署指南、接入说明、群聊记录、备赛梳理，但没有统一入口。
+3. **修改后：** 新增 `docs/比赛全量备赛手册.md`，包含赛事信息、项目现状、技术架构、昇腾部署进度、群聊经验、任务清单、提交材料、风险兜底、新对话接手指南和命令速查。
+4. **为什么这样改：** 一份文档承载全部交接信息，新对话先读它即可；其他文档作为专项手册按需查阅。
+5. **收益：** 换对话不丢上下文；团队成员可快速接手；关键命令和风险集中可查。
+
+**涉及文件：** `docs/比赛全量备赛手册.md`（新增）、`docs/比赛备赛梳理.md`、`CHANGELOG.md`。
+
+---
+
+## v6.6 —— 同步基础版 v5.77 与通用产品改进（2026-08-21）
+
+**定位：** 把 `competition` 基础原版新增的纯业务改进（v5.77 不可用日期硬约束、排期/存储/媒体/安全通用能力）同步进昇腾副本，同时保留华为赛全部配置与接入层。
+
+**审查/修改背景：** 用户之前在 `competition` 里做了纯功能改进，`competition-ascend` 尚未同步；同步时不能覆盖 `MAP_REALTIME_*`、`ASCEND_OMNI_*`、Realtime 客户端、昇腾部署文档等华为赛专属内容。
+
+### 关键缺陷（P0）
+
+#### 1. 不可用日期硬约束与日期回填
+
+1. **问题：** 基础版 v5.77 修复了任务被排到成员不可用日期、资源日历把负载摊到不可用日、时间线结果不回填任务日期三个联动问题；昇腾副本仍停留在旧逻辑。
+2. **修改前：** `app/agents/timeline.py` 的 `_add_work_days` 不校验起点与窗口中间；`coordinator.py`/`editor.py`/`members.py` 不写回任务日期。
+3. **修改后：** 同步 `app/agents/timeline.py`、`app/coordinator.py`、`app/editor.py`、`app/services/project_service.py`、`app/web/routers/members.py` 及对应测试，使排期、资源日历、任务自身日期和甘特图使用同一份时间线结果。
+4. **为什么这样改：** 排期数据必须与成员可用性一致，避免演示时出现“成员明明不可用却还被派任务”的可疑结果。
+5. **收益：** 排期硬约束生效；资源日历负载准确；成员调整后日期真实回填。
+
+### 健壮性提升（P1）
+
+#### 2. 同步通用能力与部署安全
+
+1. **问题：** 基础版 903e87f 补齐了排期/甘特图精确化、S3 持久化、媒体处理可配置、`/api/ready` 与管理端鉴权等通用能力，昇腾副本缺失。
+2. **修改前：** `app/services/audit_store.py`/`share_store.py`/`storage.py` 无线程锁与 S3 同步；`media_analysis.py` OCR 串行、超时固定；`system.py` 无 `/api/ready`。
+3. **修改后：** 同步 `app/services/*`、`app/models/schemas.py`、`app/main.py`、`app/web/static/*`、`render.yaml`、`tests/*`；`system.py` 合并 `/api/ready`、S3 就绪探测与版本号，并保留 `realtime_configured`/`realtime_backend`；`media_analysis.py` 合并并行 OCR、可配置页数/超时，同时保留 MiniCPM Realtime OCR/ASR 分支。
+4. **为什么这样改：** 通用能力属于所有比赛共享，华为赛副本必须同步；重叠文件以“双方内容都保留”为合并原则。
+5. **收益：** 昇腾副本功能与基础版一致；华为赛接入层不被覆盖；部署可区分“活着”与“真正就绪”。
+
+### 打磨（P3）
+
+#### 3. 配置样例与 CHANGELOG 同步
+
+1. **修改后：** `.env.example` 同时包含队友新增的 `APP_MEDIA_TIMEOUT`/`APP_OCR_MAX_PDF_PAGES`/`APP_ADMIN_TOKEN` 与华为赛 `MAP_REALTIME_*`/`ASCEND_OMNI_*`；CHANGELOG 保留 v6.0-v6.5 华为赛记录，并接入 v5.77、v5.76 通用改进记录。
+2. **为什么这样改：** 配置样例必须是“通用 + 华为赛”的并集，避免任何一方换环境后缺变量。
+3. **收益：** 新成员按一份 `.env.example` 即可复现；版本历史完整可追溯。
+
+#### 4. 测试环境适配
+
+1. **问题：** `test_chat_can_read_draft_without_full_plan` 原版 mock 的是 `chat_text`，但 `/api/chat` 实际调用 `chat_messages`；昇腾副本的 LLM Key 不同会真实外呼并拖到 40 秒超时。
+2. **修改前：** `monkeypatch.setattr(LLMClient, "chat_text", ...)`。
+3. **修改后：** 改为 mock `LLMClient.chat_messages`，让离线回退路径不依赖真实网络。
+4. **为什么这样改：** 测试意图是验证“模型不可用时也能读草案”，应直接 mock 实际入口，而不是让测试依赖本地 Key/网络状态。
+5. **收益：** 测试稳定且快速；本地换 Key 或断网也不会把套件拖慢 40 秒。
+
+**涉及文件：** `app/`（通用后端/前端同步 + 华为赛接入层保留）、`tests/`、`render.yaml`、`.env.example`、`CHANGELOG.md`。
+
+---
+
+## v6.5 —— Realtime 客户端支持本地 llama-omni-server（2026-08-21）
+
+**定位：** 让 Demo 后端可一键从 ModelBest 云端 Realtime 切换到昇腾 A3 上的 `llama-omni-server`。
+
+**审查/修改背景：** A3 已编译并启动 `llama-omni-server`，文本/音频 WebSocket 冒烟测试通过；需要把项目的 Realtime 客户端接到本地 `/backend`，不依赖 API Key。
+
+### 健壮性提升（P1）
+
+#### 1. RealtimeClient 新增本地昇腾模式
+
+1. **问题：** `RealtimeClient` 只支持 ModelBest 云端协议（必须带 API Key、等 `session.queue_done`），无法连接本地 `llama-omni-server` 的 `/backend`。
+2. **修改前：** `chat()` 开头直接要求 `MAP_REALTIME_API_KEY`，`_build_uri()` 固定拼接 `mode`/`model` 查询参数，且输入帧带 `tts/enable_thinking/omni_mode`：
+   ```python
+   if not self.api_key:
+       raise RealtimeError("MAP_REALTIME_API_KEY 未配置...", "auth_error")
+   uri = self._build_uri()
+   headers = {"Authorization": f"Bearer {self.api_key}"}
+   ```
+3. **修改后：** 新增 `local_ws_url`（默认读 `ASCEND_OMNI_WS_URL`）；本地模式不走鉴权、跳过 `session.queue_done`、`session.init` 使用 `{"mode": "turn_based", "use_tts": ...}`，输入帧只发 `messages/streaming/generation`，`response.done` 后不发送 `session.close`：
+   ```python
+   if not self.local_ws_url and not self.api_key:
+       raise RealtimeError("MAP_REALTIME_API_KEY 或 ASCEND_OMNI_WS_URL 未配置...", "auth_error")
+   ```
+4. **为什么这样改：** 本地 `/backend` 协议与云端事件流不同，统一收口到同一客户端后，路由和媒体分析代码无需感知后端差异；云端与本地可只靠环境变量切换。
+5. **收益：** 昇腾环境复现时后端零代码改动；本地服务未配置时仍可回退云端 API；冒烟测试和正式接口走同一套事件解析。
+
+#### 2. 路由、健康检查与配置同步
+
+1. **问题：** `/api/realtime/status` 和 `/api/realtime/chat` 只看 API Key，健康检查也只报 `realtime_configured`，无法表达本地后端状态。
+2. **修改前：** `realtime_status()` 返回 `enabled=bool(MAP_REALTIME_API_KEY)`，`/api/health` 只有 `realtime_configured`。
+3. **修改后：** 新增 `ASCEND_OMNI_WS_URL` / `ASCEND_OMNI_TIMEOUT` 配置；状态接口新增 `backend: "local" | "map"`，模型名在本地模式显示 `llama.cpp-omni`；健康检查增加 `realtime_backend`。
+4. **为什么这样改：** 评审和排查时需要一眼看出当前走云端还是本地昇腾，避免“以为在昇腾跑、实际在 API 跑”的误判。
+5. **收益：** Demo 前端可展示当前后端；部署文档可明确告知评委当前链路；配置错误时 503 文案更准确。
+
+**涉及文件：** `app/services/realtime_client.py`、`app/web/routers/realtime.py`、`app/web/routers/system.py`、`app/config.py`、`.env.example`、`tests/test_realtime_client.py`、`tests/test_api.py`、`CHANGELOG.md`。
+
+---
+
+## v6.4 —— 昇腾本地服务冒烟测试脚本（2026-08-21）
+
+**定位：** 在 A3 上跑通 `llama-omni-server` 后，用 WebSocket 真实验证文本和音频推理。
+
+**审查/修改背景：** 用户已编译成功并启动 `llama-omni-server`，需要先验证本地推理再接入项目前端。
+
+### 健壮性提升（P1）
+
+#### 1. 新增文本/音频 WebSocket 测试脚本
+
+1. **问题：** 终端里手动粘贴长 Python 测试代码容易再次被格式污染，且无法快速重复验证。
+2. **修改前：** 只能靠飞书指南里的 heredoc 脚本，粘贴出错后难以排查。
+3. **修改后：** 新增 `scripts/ascend_test_ws_text.py` 和 `scripts/ascend_test_ws_audio.py`，固定连接 `ws://127.0.0.1:28099/backend`，按 `session.init -> input.append -> response.output.delta -> response.done` 事件流输出回复文本。
+4. **为什么这样改：** 测试脚本作为仓库文件分发，复制到 A3 后直接运行；音频脚本复用仓库自带的测试 WAV，转为 float32 PCM base64。
+5. **收益：** 本地昇腾链路可用性可以一键验证；后续接入项目时测试用例可复用。
+
+**涉及文件：** `scripts/ascend_test_ws_text.py`、`scripts/ascend_test_ws_audio.py`（新增）、`CHANGELOG.md`。
+
+---
+
+## v6.3 —— 昇腾模型下载脚本（2026-08-21）
+
+**定位：** 提供不易复制出错的 A3 模型下载脚本，解决 Markdown 粘贴到终端导致命令被破坏的问题。
+
+**审查/修改背景：** 用户把带格式的命令粘进 A3 终端，模型下载没有可靠执行；源码 clone 已通过 `ghfast.top` 完成。
+
+### 健壮性提升（P1）
+
+#### 1. 新增昇腾模型下载脚本
+
+1. **问题：** 长段 Python heredoc 容易在复制时被 Markdown 链接/代码块破坏，导致下载命令没有真正执行。
+2. **修改前：** 只能靠手动粘贴长命令，失败后难以定位。
+3. **修改后：** 新增 `scripts/ascend_download_models.py`，固定 `OpenBMB/MiniCPM-o-4_5-gguf` 的 10 个必需文件，并用官方文件大小做完整性校验，不完整时返回非 0。
+4. **为什么这样改：** 把“复制粘贴一段脚本”降级为“复制一个文件后运行”，避免 Markdown 格式污染；脚本内做大小校验，下载一半也能立刻发现。
+5. **收益：** 下载可重复执行；文件缺漏自动提示；团队成员可直接复用。
+
+#### 2. 新增昇腾服务启动脚本
+
+1. **问题：** 用 heredoc 在 A3 终端创建 `start_server.sh` 容易再次被 Markdown 粘贴破坏。
+2. **修改前：** 部署指南要求手动 `cat > start_server.sh <<'EOF'` 创建启动脚本。
+3. **修改后：** 新增 `scripts/ascend_start_server.sh`，固定 CANN lib64 路径，直接可拖到 `/workspace/llama.cpp-omni/` 后执行。
+4. **为什么这样改：** 脚本作为仓库文件分发，避免复制格式污染；`LD_LIBRARY_PATH` 同时包含 `build/bin` 和 CANN `lib64`，减少 `libascendcl.so` 缺失问题。
+5. **收益：** 启动服务只需两个命令；团队其他人部署时可直接复用。
+
+**涉及文件：** `scripts/ascend_download_models.py`、`scripts/ascend_start_server.sh`（新增）、`CHANGELOG.md`。
+
+---
+
+## v6.2 —— 归档赛事群聊记录（2026-08-21）
+
+**定位：** 完整保存两段飞书答疑群聊天记录，方便后续逐条答疑和复用群内经验。
+
+**审查/修改背景：** 用户提供了 08-04 至 08-14、08-15 至 08-20 两段聊天记录，并明确要求“好好记一下”，之后还会针对内容提问。
+
+### 打磨（P3）
+
+#### 1. 新增群聊记录索引
+
+1. **问题：** 群聊经验散落在飞书里，飞书需要登录态且无法从外部读取，之后想查原话很困难。
+2. **修改前：** `docs/` 只有备赛梳理和部署指南，没有原始聊天记录可查。
+3. **修改后：** 新增 `docs/群聊记录/`，保存两段原始记录，并新增 `README.md` 索引 10 条核心结论和检索方式。
+4. **为什么这样改：** 原始记录是唯一可追溯的答疑素材；索引负责快速定位，正文负责原话对照。
+5. **收益：** 后续“别人怎么解决某个问题”可以直接翻原文；经验不依赖飞书登录态；团队其他人也能复用。
+
+**涉及文件：** `docs/群聊记录/`（新增）、`CHANGELOG.md`。
+
+---
+
+## v6.1 —— 昇腾 A3 部署上手指南归档（2026-08-21）
+
+**定位：** 把飞书文档「MiniCPM-o 4.5 昇腾 910C 部署上手指南」落到仓库，避免文档失效后部署步骤丢失。
+
+**审查/修改背景：** 用户已申请到 A3 环境（CANN 9.1.0-beta.1 / Ascend 910C），飞书 wiki 需要登录且无法从外部读取；用户把正文粘贴进来，需要固化成可复查的本地文档。
+
+### 打磨（P3）
+
+#### 1. 新增昇腾 A3 部署指南
+
+1. **问题：** `docs/` 缺少昇腾 910C 上部署 `llama.cpp-omni` 的完整操作手册，部署步骤只能依赖需要登录的飞书文档。
+2. **修改前：** `docs/` 只有 API 接入说明和备赛梳理，没有模型下载、CANN 编译、服务启动与 API 测试步骤。
+3. **修改后：** 新增 `docs/昇腾A3_910C_llama_omni部署指南.md`，覆盖环境前置检查、ModelScope 模型下载、`v4.gh-proxy.org` 拉源码、`-DGGML_CANN=ON -DLLAMA_OPENSSL=OFF` 编译、`llama-omni-server` 启动、WebSocket/HTTP 测试以及 F16/单 session/websocket-client 等已知坑位。
+4. **为什么这样改：** 部署是昇腾赛复现评分的关键，指南需要脱离飞书登录态长期可查；F16、CANN 后端、国内镜像等结论直接决定 A3 上是否跑得动。
+5. **收益：** 团队可按文档逐步复现；关键约束和坑位集中记录，减少现场踩坑；后续接入本地 `/backend` 时以此协议为准。
+
+#### 2. 部署指南补充代理兜底方案
+
+1. **问题：** 2026-08-21 在 A3 实测 `v4.gh-proxy.org` 拉 `llama.cpp-omni` 连接超时，单一代理会卡住整个部署流程。
+2. **修改前：** 指南只写了 `v4.gh-proxy.org` 一个推荐代理，失败后没有自动切换方案。
+3. **修改后：** 在指南 3.4 增加多代理循环尝试脚本，并给出 `gh-proxy.com` 下载 master zip 的兜底命令。
+4. **为什么这样改：** 不同 A3 容器出口网络差异大，代理可用性不稳定；循环尝试 + zip 下载能覆盖多数超时场景。
+5. **收益：** 拉源码不再依赖单个代理；即使 git clone 全挂也能用 zip 继续编译。
+
+**涉及文件：** `docs/昇腾A3_910C_llama_omni部署指南.md`（新增）、`CHANGELOG.md`。
+
+---
+
+## v6.0 —— 华为昇腾创新应用赛道：接入 MiniCPM-o Realtime Chat 模式（2026-08-20）
+
+**定位：** 在基础原版之外建立昇腾赛独立副本，先接入 ModelBest 免费 Realtime API，让 MiniCPM-o 4.5 的文本对话、图片 OCR、音频转写全模态能力在 A3 算力排队期间即可演示。
+
+**审查/修改背景：** 用户同时参加多个比赛，`competition` 必须保持基础原版不动；昇腾赛改动全部落在 `competition-ascend`。GitHub 同步确认当前没有新的队友提交，副本直接基于 v5.76。
+
+### 健壮性提升（P1）
+
+#### 1. MiniCPM-o Realtime 客户端（新增 app/services/realtime_client.py）
+
+1. **问题：** 原版只有 DeepSeek/OpenAI 兼容的 HTTP LLM 客户端，无法调用 MiniCPM-o 4.5 的 WebSocket Realtime API；昇腾赛要求的 `llama.cpp-omni /backend` 也不走 HTTP Chat Completions。
+2. **修改前：** 没有任何 Realtime 协议实现，只有 `app/llm/client.py` 的 `chat_messages`（OpenAI SDK + `LLM_BASE_URL`）：
+   ```python
+   resp = self._client.chat.completions.create(
+       model=self.model,
+       messages=full_messages,
+       timeout=LLM_TIMEOUT,
+   )
+   ```
+3. **修改后：** 新增 `RealtimeClient`，按官方事件顺序完成 `session.queue_done -> session.init -> session.created -> input.append -> response.output.delta/response.done -> session.close`，使用 `Authorization: Bearer` 鉴权，并把 text/audio 增量聚合成 `RealtimeChatResult`。事件解析同时兼容官方文档的 `response.output.delta` 和平台控制台文档的 `response.output_text.delta` / `response.output_audio.delta`：
+   ```python
+   async with websockets.connect(uri, additional_headers=headers, ...) as ws:
+       await self._wait_event(ws, {"session.queue_done"}, wait)
+       await self._send_event(ws, {"type": "session.init", "payload": {}})
+       await self._wait_event(ws, {"session.created"}, wait)
+       await self._send_event(ws, {"type": "input.append", "input": {
+           "messages": normalized, "streaming": True,
+           "generation": {"max_new_tokens": budget},
+           "tts": {"enabled": bool(tts_enabled)},
+           "enable_thinking": bool(enable_thinking),
+           "omni_mode": bool(omni_mode),
+       }})
+   ```
+4. **为什么这样改：** 根因是协议不同：Realtime API 是事件驱动的 WebSocket，不能用 OpenAI REST 客户端调用；封装成独立服务后，API 层和测试都可以稳定模拟事件序列。`omni_mode` 用于后续视频/音频多模态输入。
+5. **收益：** 昇腾 Demo 在 A3 排队时也能用云端 MiniCPM-o；协议错误、超时、鉴权失败都能转成用户可读错误；后续换本地 `/backend` 时只替换连接层。
+
+#### 2. Realtime API 路由与配置（新增 app/web/routers/realtime.py + config）
+
+1. **问题：** 配置和路由都没有入口，网页/测试无法调用 Realtime。
+2. **修改前：** `app/config.py` 只有 `LLM_*` 配置，`.env.example` 没有 MAP 变量，`app/web/routes.py` 没有 Realtime 路由。
+3. **修改后：** 新增 `MAP_REALTIME_API_KEY / MODEL / BASE_URL / MAX_TOKENS / TIMEOUT`；新增 `/api/realtime/chat` 与 `/api/realtime/status`，并在 `routes.py` 注册：
+   ```python
+   from app.web.routers.realtime import router as realtime_router
+   router.include_router(realtime_router)
+   ```
+4. **为什么这样改：** 配置走统一环境变量，密钥不进代码；路由按业务域拆分，和现有 system/exports/members 风格一致。
+5. **收益：** Demo 前端可先查 `/api/realtime/status` 再决定是否展示对话；密钥缺失返回 503 而不是 500；`/api/health` 同步暴露 Realtime 配置状态。
+
+#### 3. Realtime 全模态媒体链路（图片 OCR / 音频转写）
+
+1. **问题：** 比赛要求充分发挥 MiniCPM-o 4.5 的全模态能力，但原版 OCR/ASR 仍走独立视觉/语音模型，`MAP_REALTIME_API_KEY` 只接到对话接口。
+2. **修改前：** `app/services/media_analysis.py` 只调用 `APP_VISION_MODEL` / `APP_ASR_MODEL`：
+   ```python
+   response = _client(APP_VISION_API_KEY, ...).chat.completions.create(
+       model=APP_VISION_MODEL, ...)
+   response = _client(APP_ASR_API_KEY, ...).audio.transcriptions.create(
+       model=APP_ASR_MODEL, ...)
+   ```
+3. **修改后：** 配置 `MAP_REALTIME_API_KEY` 时优先走 MiniCPM-o Realtime：图片用 `{"type":"image","data":"<base64>"}`；音频先用 PyAV 解码成 16kHz 单声道 float32 PCM，再以 `{"type":"audio","data":"<base64>"}` + `omni_mode:true` 发送：
+   ```python
+   content_parts = [
+       {"type": "text", "text": "请提取这张图片中的文字和关键信息，只输出内容。"},
+       {"type": "image", "data": b64},
+   ]
+   _run_realtime_media_chat(content_parts, 1200, False)
+   ```
+4. **为什么这样改：** Realtime Chat 模式支持多模态 content；图片 raw base64 与音频 PCM base64 均已实测可被 MiniCPM-o 理解。PyAV 负责把 mp3/m4a/webm/wav 统一转成模型要求的格式。
+5. **收益：** 昇腾赛只需一个 `MAP_REALTIME_API_KEY` 即可演示文本、图片、音频全模态；旧模型保留为回退，不破坏原工作台。
+
+### 打磨（P3）
+
+#### 4. 依赖、测试与文档同步
+
+1. **修改后：** `requirements.txt` 新增 `websockets==16.1`、`av==14.2.0`、`numpy==2.4.6`；新增 10 项测试（7 项 Realtime 客户端/路由 + 3 项媒体链路），覆盖事件顺序、system prompt、平台事件别名、服务端 error、缺 Key、路由、Realtime OCR/ASR 与音频 PCM 解码；`.env.example` / `render.yaml` / README / 使用说明补齐配置与接入方法；`app/models/schemas.py` 的版本默认值同步为 v6.0；接入说明明确 `MiniCPM-o-4.5-Realtime` 为昇腾赛主模型，旧视觉/语音配置保留为回退。
+2. **为什么这样改：** Realtime 依赖必须显式锁定，测试不发起真实网络请求，避免 CI 外呼。
+3. **收益：** 新环境一条命令复现；本地验证与比赛文档一致。
+
+**涉及文件：** `app/config.py`、`app/models/schemas.py`、`app/services/realtime_client.py`、`app/services/media_analysis.py`、`app/web/routers/realtime.py`、`app/web/routers/system.py`、`app/web/routes.py`、`app/main.py`、`tests/test_realtime_client.py`、`tests/test_media_analysis.py`、`tests/test_media_formats.py`、`tests/test_deployment_readiness.py`、`tests/test_api.py`、`tests/conftest.py`、`requirements.txt`、`.env.example`、`render.yaml`、`README.md`、`docs/华为昇腾创新应用赛道接入说明.md`。
 
 ---
 ## v5.77 —— 不可用日期硬约束：时间线避开、日期回填与资源日历负载修复（2026-08-21）
@@ -7349,4 +7911,6 @@ LLM 负责"创造性"：拆任务、分配角色、写报告
 | **v5.48** | **需求驱动的材料答辩模拟** | **已完成** |
 | **v5.76** | **基础版整合 v5.49–v5.76 通用能力、移除清小搭接入残留与导出区上移** | **已完成** |
 | **v5.77** | **不可用日期硬约束：时间线避开、日期回填与资源日历负载修复** | **已完成** |
-| v6.x | 正式发布与功能扩展 | 规划中 |
+| **v6.9** | **多模态需求输入：语音描述与拍照直接生成任务** | **已完成** |
+| **v6.8** | **P0 全模态交互落地：前端接通 MiniCPM-o、语音输入与语音回复** | **已完成** |
+| v6.x | 后续功能扩展 | 规划中 |

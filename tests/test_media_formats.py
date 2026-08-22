@@ -19,6 +19,8 @@ def _disable_real_media_calls(monkeypatch):
     monkeypatch.setattr(media, "APP_VISION_MODEL", "")
     monkeypatch.setattr(media, "APP_ASR_API_KEY", "")
     monkeypatch.setattr(media, "APP_ASR_MODEL", "")
+    monkeypatch.setattr(media, "MAP_REALTIME_API_KEY", "")
+    monkeypatch.setattr(media, "ASCEND_OMNI_WS_URL", "")
 
 
 def _png_bytes() -> bytes:
@@ -178,5 +180,5 @@ def test_all_image_formats_forward_to_vision_with_model(monkeypatch):
         media, "_client", lambda api_key, base_url: FakeClient())
     for filename, make_content in IMAGE_CASES:
         text = extract_text(filename, make_content())
-        assert "图片 OCR" in text
+        assert "图片理解" in text
         assert "宣传海报" in text

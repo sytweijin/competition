@@ -42,6 +42,21 @@ LLM_DISABLE_THINKING = os.getenv(
 # 该预算，留给最终 JSON 的空间有限；默认提到 16000，并在被截断时自动翻倍重试。
 LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "16000"))
 
+# MiniCPM-o Realtime（华为昇腾创新应用赛道）
+# 使用 ModelBest 提供的 Realtime WebSocket API，Chat 模式走 turn-based 对话。
+MAP_REALTIME_API_KEY = os.getenv("MAP_REALTIME_API_KEY", "")
+MAP_REALTIME_MODEL = os.getenv("MAP_REALTIME_MODEL", "MiniCPM-o-4.5-Realtime")
+MAP_REALTIME_BASE_URL = os.getenv(
+    "MAP_REALTIME_BASE_URL", "wss://api.modelbest.cn/v1/realtime")
+MAP_REALTIME_MODE = os.getenv("MAP_REALTIME_MODE", "chat")
+MAP_REALTIME_MAX_TOKENS = int(os.getenv("MAP_REALTIME_MAX_TOKENS", "1024"))
+MAP_REALTIME_TIMEOUT = int(os.getenv("MAP_REALTIME_TIMEOUT", "60"))
+
+# 本地 llama-omni-server（昇腾 A3 上启动后，通过 VSCode 端口转发 28099）
+# 配置后 Realtime 客户端优先连本地 /backend，MAP_REALTIME_API_KEY 可留空
+ASCEND_OMNI_WS_URL = os.getenv("ASCEND_OMNI_WS_URL", "")
+ASCEND_OMNI_TIMEOUT = int(os.getenv("ASCEND_OMNI_TIMEOUT", "300"))
+
 # App
 APP_HOST = os.getenv("APP_HOST", "127.0.0.1")
 APP_PORT = int(os.getenv("APP_PORT", "8000"))

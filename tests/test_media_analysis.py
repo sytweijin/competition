@@ -15,6 +15,8 @@ def _disable_real_media_calls(monkeypatch):
     monkeypatch.setattr(media, "APP_VISION_MODEL", "")
     monkeypatch.setattr(media, "APP_ASR_API_KEY", "")
     monkeypatch.setattr(media, "APP_ASR_MODEL", "")
+    monkeypatch.setattr(media, "MAP_REALTIME_API_KEY", "")
+    monkeypatch.setattr(media, "ASCEND_OMNI_WS_URL", "")
 
 
 def test_scanned_pdf_without_model_raises(monkeypatch):
@@ -94,7 +96,7 @@ def test_image_ocr_with_mock_model(monkeypatch):
     monkeypatch.setattr(
         media, "_client", lambda api_key, base_url: FakeClient())
     text = extract_text("photo.png", b"abc")
-    assert "图片 OCR" in text
+    assert "图片理解" in text
     assert "调研问卷" in text
 
 
@@ -298,3 +300,72 @@ def test_asr_auto_keeps_chat_mode_for_other_dashscope_models(monkeypatch):
     text = media.audio_transcribe_text("voice.wav", b"audio-bytes")
 
     assert "旧模型兼容模式转写结果" in text
+
+
+def test_image_ocr_prefers_realtime_when_configured(monkeypatch):
+    import app.services.media_analysis as media
+
+    captured = {}
+
+    def fake_realtime(content_parts, max_tokens, omni_mode):
+        captured["parts"] = content_parts
+        captured["omni_mode"] = omni_mode
+        return "图片中的文字：昇腾海报"
+
+    monkeypatch.setattr(media, "MAP_REALTIME_API_KEY", "key")
+    monkeypatch.setattr(
+        media, "MAP_REALTIME_MODEL", "MiniCPM-o-4.5-Realtime")
+    monkeypatch.setattr(media, "_run_realtime_media_chat", fake_realtime)
+
+    text = media.image_ocr_text("photo.png", b"abc")
+
+    assert "昇腾海报" in text
+    assert captured["parts"][1]["type"] == "image"
+    assert captured["parts"][1]["data"]
+    assert captured["omni_mode"] is False
+
+
+def test_audio_transcribe_prefers_realtime_when_configured(monkeypatch):
+    import app.services.media_analysis as media
+
+    captured = {}
+
+    def fake_decode(content):
+        assert content == b"audio-bytes"
+        return b"pcm-bytes"
+
+    def fake_realtime(content_parts, max_tokens, omni_mode):
+        captured["parts"] = content_parts
+        captured["omni_mode"] = omni_mode
+        return "会议录音：下周一完成调研"
+
+    monkeypatch.setattr(media, "MAP_REALTIME_API_KEY", "key")
+    monkeypatch.setattr(
+        media, "MAP_REALTIME_MODEL", "MiniCPM-o-4.5-Realtime")
+    monkeypatch.setattr(media, "_decode_audio_to_pcm16k", fake_decode)
+    monkeypatch.setattr(media, "_run_realtime_media_chat", fake_realtime)
+
+    text = media.audio_transcribe_text("voice.mp3", b"audio-bytes")
+
+    assert "下周一完成调研" in text
+    assert captured["parts"][1]["type"] == "audio"
+    assert captured["parts"][1]["data"] == "cGNtLWJ5dGVz"
+    assert captured["omni_mode"] is True
+
+
+def test_decode_audio_to_pcm16k_returns_raw_pcm():
+    import io
+    import wave
+
+    import app.services.media_analysis as media
+
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(8000)
+        wav.writeframes(b"\x00\x00" * 160)
+
+    pcm = media._decode_audio_to_pcm16k(buffer.getvalue())
+
+    assert len(pcm) > 0

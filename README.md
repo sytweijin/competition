@@ -1,10 +1,34 @@
 ﻿# 协作分工智能体
 
-**版本：v5.76** | 最后更新：2026-08-18（基础版整合 v5.49–v5.76 通用能力与导出区上移）
+**版本：v6.9（华为昇腾创新应用赛道版）** | 最后更新：2026-08-21
 
-当前工作区的结构拆分、导出与布局、版本树、入口归并、不可用日期、提示信息、角色模型和答辩模拟改动，已连续归档为 v5.41–v5.48；本次整合清小搭分支 v5.49–v5.76 的全部通用能力（角色化工作台、AI 助手稳定交互、OCR、监控、存储同步、Agent 稳定性等），并彻底移除清小搭接入残留，作为面向其他比赛的独立通用版本，当前统一发布版本为 **v5.76**。
+当前工作区以基础原版 v5.76 为起点，面向华为昇腾创新应用赛道增加 MiniCPM-o 4.5 Realtime 接入：核心链路仍保留原有的任务拆解、CPM 排期、技能匹配分工与报告能力，AI 对话侧新增基于 ModelBest Realtime WebSocket API 的 Chat 模式接口，供 A3 算力资源到位前先完成可演示 Demo。
 
 面向使用者的完整操作方法见 [使用说明书](docs/使用说明书.md)。
+
+## 华为昇腾创新应用赛道接入
+
+本副本的创新应用赛道主路线是 MiniCPM-o 4.5 全模态模型（完整 `MiniCPM-o-4_5-F16.gguf` + `llama.cpp-omni` + CANN 9.1.0-beta.1）。由于 A3 资源申请需要排队，当前版本先接入 ModelBest 免费 Realtime API，把模型能力跑通成可用接口：
+
+- `POST /api/realtime/chat`：Chat 模式多轮文本对话，可返回 TTS 音频 Base64。
+- `GET /api/realtime/status`：查看 Realtime 是否配置成功。
+- `POST /api/realtime/transcribe`：麦克风录音转写，优先 MiniCPM-o Realtime，回退 ASR。
+- 上传图片 / 扫描 PDF / 音频文件时，OCR 与转写优先走 MiniCPM-o Realtime，充分使用其全模态能力。
+- 前端 AI 建议抽屉已接通：聊天自动附带当前方案快照，支持麦克风语音输入、语音回复开关与 TTS 重听。
+- 项目配置页支持 🎤 添加语音需求（录音自动识别为需求材料）与 📷 拍照需求（照片自动识别进拆解），"不打字也能建计划"。
+- 鉴权：服务端通过 `Authorization: Bearer MAP_REALTIME_API_KEY` 连接 WebSocket。
+
+在 `.env` 中配置：
+
+```dotenv
+MAP_REALTIME_API_KEY=你的ModelBest_API_Key
+MAP_REALTIME_MODEL=MiniCPM-o-4.5-Realtime
+MAP_REALTIME_BASE_URL=wss://api.modelbest.cn/v1/realtime
+MAP_REALTIME_MAX_TOKENS=1024
+MAP_REALTIME_TIMEOUT=60
+```
+
+接入说明与本地验证方法见 [华为昇腾创新应用赛道接入说明](docs/华为昇腾创新应用赛道接入说明.md)，完整备赛梳理见 [比赛备赛梳理](docs/比赛备赛梳理.md)。推理优化赛道使用的 `vLLM-Omni` 不在本副本主路线中，避免与应用赛道部署方式混淆。
 
 ## 比赛 Demo
 
@@ -76,6 +100,8 @@
 
 | 版本 | 日期 | 定位 |
 |------|------|------|
+| v6.9 | 2026-08-21 | 多模态需求输入：语音描述与拍照直接生成任务 |
+| v6.0 | 2026-08-20 | 华为昇腾创新应用赛道：接入 MiniCPM-o Realtime Chat 模式 |
 | v5.76 | 2026-08-18 | 基础版整合 v5.49–v5.76 通用能力（角色视图、AI 助手、OCR、监控、存储、导出区上移） |
 | v5.48 | 2026-08-11 | 仅在项目要求涉及答辩/汇报时展示答辩模拟，并支持答辩稿或 PPT 材料驱动提问 |
 | v5.47 | 2026-08-11 | 小型项目取消人员层级，大型项目志愿者采用极简档案并支持认领 |
@@ -173,6 +199,7 @@ competition/
 |   |   +-- interview_sim.py   # 答辩模拟
 |   |   +-- validation.py      # 计划校验（去重/去环）
 |   +-- services/
+|   |   +-- realtime_client.py    # MiniCPM-o Realtime WebSocket 客户端
 |   |   +-- project_service.py    # 核心业务：草案/确认/分工/工作量
 |   |   +-- duration_estimator.py  # 知识库工时估算 + 反馈学习
 |   +-- llm/
@@ -186,10 +213,11 @@ competition/
 |       |   +-- system.py      # 鉴权、工具调用、健康检查
 |       |   +-- exports.py     # Markdown / Word / PDF / Excel 等导出接口
 |       |   +-- members.py     # 成员变动与计划重算
+|       |   +-- realtime.py    # MiniCPM-o Realtime 对话接口
 |       +-- exporters.py       # Word / PDF 文档渲染
 |       +-- templates/index.html  # TailwindCSS + Lucide + Tab 布局
 |       +-- static/style.css   # 补充样式
-+-- tests/                     # 单元与集成测试（244 项）
++-- tests/                     # 单元与集成测试（254 项）
 +-- memory/                    # 计划持久化
 +-- docs/                      # 项目文档
 +-- requirements.txt
@@ -207,6 +235,17 @@ competition/
 | POST | `/api/draft/mutate` | 结构化修改任务草案（网页与 Agent 共用） |
 | POST | `/api/workload` | 统一计算成员负载、占比和分工建议 |
 | POST | `/api/chat` | 基于当前方案实时问答 |
+| POST | `/api/realtime/chat` | 使用 MiniCPM-o Realtime Chat 模式多轮对话 |
+| GET | `/api/realtime/status` | 查看 MiniCPM-o Realtime 配置状态 |
+| POST | `/api/realtime/transcribe` | 录音转写：优先 MiniCPM-o Realtime，回退 ASR 模型 |
+| POST | `/api/realtime/interview-turn` | 答辩评委直接语音/视频对话（点评追问 + 表现观察） |
+| POST | `/api/realtime/meeting` | 会议旁听：录音整理要点/任务/风险 |
+| POST | `/api/realtime/tts` | 文本朗读（仅云端后端） |
+| POST | `/api/report/link` | 生成成员轻量汇报链接 |
+| GET | `/api/report/state` | 汇报页：我的任务列表 |
+| POST | `/api/report/voice` | 语音汇报：听懂状态/工时/备注 |
+| POST | `/api/report/photo` | 拍照交付：上传照片标记完成 |
+| POST | `/api/report/update` | 应用成员汇报并自动重算、保存、通知 |
 | POST | `/api/edit` | 应用编辑并重算 |
 | POST | `/api/interview/materials` | 临时提取答辩稿、PPT 等材料文字（不落盘） |
 | POST | `/api/interview` | 根据答辩材料生成首轮模拟问题 |
@@ -229,7 +268,7 @@ competition/
 
 ```bash
 pip install -r requirements.txt
-cp .env.example .env   # 编辑填入 LLM_API_KEY
+cp .env.example .env   # 编辑填入 LLM_API_KEY / MAP_REALTIME_API_KEY
 python -m app.main     # 默认 http://127.0.0.1:8000
 ```
 
@@ -238,6 +277,14 @@ python -m app.main     # 默认 http://127.0.0.1:8000
 ```bash
 python -m pytest -v
 ```
+
+## 演示前预检
+
+```bash
+python scripts/preflight_demo.py
+```
+
+一键检查应用服务、A3 后端、MiniCPM-o 配置与真实对话暖机，全部通过提示"可以开始演示"。
 
 ## 协作方式
 

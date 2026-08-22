@@ -6,8 +6,8 @@ from pydantic import BaseModel, Field
 
 from app.config import (
     APP_ASR_API_KEY, APP_ASR_MODEL, APP_VISION_API_KEY, APP_VISION_MODEL,
-    LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, MEMORY_DIR,
-    S3_BUCKET, STORAGE_BACKEND,
+    ASCEND_OMNI_WS_URL, LLM_API_KEY, LLM_BASE_URL, LLM_MODEL,
+    MAP_REALTIME_API_KEY, MEMORY_DIR, S3_BUCKET, STORAGE_BACKEND,
 )
 from app.metrics import request_metrics
 from app.models.schemas import FullPlan
@@ -92,7 +92,7 @@ async def auth_me(request: Request):
 async def health():
     return {
         "status": "ok",
-        "version": "5.76",
+        "version": "6.9",
         "checks": {
             "storage": MEMORY_DIR.exists(),
             "llm_configured": bool(
@@ -101,6 +101,10 @@ async def health():
                 APP_VISION_MODEL and APP_VISION_API_KEY),
             "asr_model_configured": bool(
                 APP_ASR_MODEL and APP_ASR_API_KEY),
+            "realtime_configured": bool(
+                MAP_REALTIME_API_KEY or ASCEND_OMNI_WS_URL),
+            "realtime_backend": (
+                "local" if ASCEND_OMNI_WS_URL else "map"),
         },
     }
 
@@ -125,7 +129,7 @@ def readiness():
         status_code=200 if ready else 503,
         content={
             "status": "ready" if ready else "not_ready",
-            "version": "5.76",
+            "version": "6.9",
             "checks": checks,
         },
     )

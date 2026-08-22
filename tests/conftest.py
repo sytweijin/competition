@@ -20,6 +20,8 @@ def _disable_real_media_calls(monkeypatch):
     monkeypatch.setattr(media, "APP_VISION_MODEL", "")
     monkeypatch.setattr(media, "APP_ASR_API_KEY", "")
     monkeypatch.setattr(media, "APP_ASR_MODEL", "")
+    monkeypatch.setattr(media, "MAP_REALTIME_API_KEY", "")
+    monkeypatch.setattr(media, "ASCEND_OMNI_WS_URL", "")
 
 
 @pytest.fixture(autouse=True)

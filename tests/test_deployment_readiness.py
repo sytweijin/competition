@@ -25,6 +25,8 @@ def test_env_example_covers_deployment_variables():
         "APP_VISION_API_KEY", "APP_VISION_BASE_URL",
         "APP_ASR_API_KEY", "APP_ASR_BASE_URL",
         "APP_ASR_TRANSCRIPTION_MODE",
+        "MAP_REALTIME_API_KEY", "MAP_REALTIME_MODEL",
+        "MAP_REALTIME_BASE_URL",
         "STORAGE_BACKEND", "S3_BUCKET", "S3_PREFIX",
     ):
         assert key in env

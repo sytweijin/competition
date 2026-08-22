@@ -24,6 +24,7 @@
     <button id="exportCsvBtn" class="btn btn-ghost" disabled>导出CSV</button>
     <button id="exportIcsBtn" class="btn btn-ghost" disabled>导出ICS</button>
     <button id="shareBtn" class="btn btn-ghost" disabled>复制只读链接</button>
+    <button id="reportLinkBtn" class="btn btn-ghost" title="生成成员轻量汇报链接（语音/拍照更新任务）">成员汇报链接</button>
   </div>
 </header>
 <nav class="step-nav" id="stepNav"></nav>
@@ -31,9 +32,9 @@
   <div id="notice" class="notice hidden"></div>
   <section id="configView" class="view config-view">
     <div class="config-card">
-      <div class="config-head">
-        <div><h2>项目配置</h2></div>
-        <div class="config-actions"><button type="button" id="demoCaseBtn" class="btn btn-ghost">载入演示案例</button><button type="button" id="importFileBtn" class="btn btn-ghost">导入任务文件</button><input id="importFile" type="file" hidden accept=".csv,.xlsx,.xlsm"></div>
+    <div class="config-head">
+      <div><h2>项目配置</h2></div>
+        <div class="config-actions"><button type="button" id="demoCaseBtn" class="btn btn-ghost">载入演示案例</button><button type="button" id="meetingBtn" class="btn btn-ghost" title="上传组会录音，AI 旁听整理任务">🎙 会议旁听</button><button type="button" id="importFileBtn" class="btn btn-ghost">导入任务文件</button><input id="importFile" type="file" hidden accept=".csv,.xlsx,.xlsm"><input id="meetingFile" type="file" hidden accept=".mp3,.wav,.m4a,.webm"></div>
       </div>
       <form id="projectForm" class="config-form">
         <div class="mode-selector">
@@ -63,6 +64,9 @@
           <div class="config-field span-2 upload-box" id="uploadBox">
             <input id="files" type="file" multiple hidden accept=".pdf,.docx,.txt,.md,.xlsx,.pptx,.png,.jpg,.jpeg,.webp,.mp3,.wav,.m4a">
             <button type="button" id="chooseFileBtn" class="btn btn-ghost">上传任务要求文件</button>
+            <button type="button" id="cameraReqBtn" class="btn btn-ghost" title="拍摄或选择需求照片、白板、群聊截图">📷 拍照需求</button>
+            <button type="button" id="voiceReqBtn" class="btn btn-ghost" title="录音描述项目需求和目标，自动加入需求材料">🎤 添加语音需求</button>
+            <input id="cameraReqFile" type="file" hidden accept="image/*" capture="environment">
             <div id="fileList" class="file-list"></div>
           </div>
         </div>
@@ -127,16 +131,29 @@
     </div>
   </section>
 </main>
+<section id="reportView" class="view report-view hidden">
+  <div id="reportNotice" class="notice hidden"></div>
+  <div class="report-head">
+    <div><h2 id="reportProject">项目汇报</h2><p id="reportMember">成员</p></div>
+    <div id="reportDeadline" class="report-deadline"></div>
+  </div>
+  <div id="reportTasks" class="report-tasks"></div>
+  <input id="reportPhotoInput" type="file" hidden accept="image/*" capture="environment">
+</section>
 <button id="assistantBtn" class="assistant-button" type="button" aria-label="打开 AI 调整建议" aria-expanded="false"><span class="assistant-button-icon" aria-hidden="true">✦</span><span class="assistant-button-label">AI 建议</span></button>
 <aside id="assistantDrawer" class="assistant-drawer hidden" role="dialog" aria-label="AI 调整建议">
-  <div class="drawer-head"><div class="drawer-title"><span class="drawer-title-icon" aria-hidden="true">✦</span><div><strong>AI 调整建议</strong><p>分析当前方案，不会自动修改数据</p></div></div><button id="closeAssistant" type="button" aria-label="关闭 AI 调整建议">×</button></div>
+  <div class="drawer-head"><div class="drawer-title"><span class="drawer-title-icon" aria-hidden="true">✦</span><div><strong>AI 调整建议</strong><p>分析当前方案，不会自动修改数据</p></div></div><div class="drawer-actions"><label class="voice-toggle" title="开启后使用 MiniCPM-o 语音回复"><input type="checkbox" id="voiceToggle" disabled><span>语音回复</span></label><button id="closeAssistant" type="button" aria-label="关闭 AI 调整建议">×</button></div></div>
+  <div id="realtimeBadge" class="drawer-badge hidden"></div>
   <div id="messages" class="messages"><div class="assistant-msg">你好，我可以分析任务拆解、工时和分工，并给出调整建议。</div></div>
-  <form id="chatForm" class="chat-form"><textarea id="chatInput" rows="2" placeholder="例如：摄影任务是不是太集中？"></textarea><button>发送</button></form>
+  <form id="chatForm" class="chat-form"><textarea id="chatInput" rows="2" placeholder="例如：摄影任务是不是太集中？"></textarea><button type="button" id="micBtn" class="mic-btn" aria-label="语音输入" title="语音输入">🎤</button><button type="submit" id="chatSendBtn">发送</button></form>
 </aside>
 <div id="modal" class="modal-backdrop hidden"><div class="modal"><div class="modal-head"><h3>方案版本</h3><button id="closeModal">×</button></div><input id="planSearch" class="modal-search" placeholder="搜索方案名称…"><div id="planList"></div></div></div>
 <div id="authModal" class="modal-backdrop hidden"><div class="modal"><div class="modal-head"><h3>需要登录</h3><button id="closeAuthModal">×</button></div><div class="auth-form"><label>用户名<input id="authUsername" type="text" placeholder="输入用户名" value="admin"></label><label>密码<input id="authPassword" type="password" placeholder="输入密码"></label><button id="authLoginBtn" class="btn btn-primary">登录</button></div></div></div>
+<div id="cameraModal" class="modal-backdrop hidden"><div class="modal camera-modal"><div class="modal-head"><h3>拍照需求</h3><button id="closeCameraBtn" type="button" aria-label="关闭摄像头">×</button></div><div class="camera-body"><video id="cameraPreview" autoplay playsinline muted></video><canvas id="cameraCanvas" class="hidden"></canvas><p class="camera-hint">对准白板、需求截图或群聊通知，点击拍摄后自动识别</p></div><div class="camera-actions"><button id="cameraCancelBtn" type="button" class="btn btn-ghost">取消</button><button id="cameraCaptureBtn" type="button" class="btn btn-primary">拍摄</button></div></div></div>
+<div id="videoModal" class="modal-backdrop hidden"><div class="modal camera-modal"><div class="modal-head"><h3>录像回答</h3><button id="closeVideoBtn" type="button" aria-label="关闭录像">×</button></div><div class="camera-body"><video id="videoPreview" autoplay playsinline muted></video><div class="video-status" id="videoStatus"><i class="video-rec-dot" aria-hidden="true"></i><span id="videoStatusText">等待开始</span></div><p class="camera-hint" id="videoHint">对准自己，点击"开始录制"后开始回答，最长 3 分钟，可随时提前停止</p></div><div class="camera-actions"><button id="videoCancelBtn" type="button" class="btn btn-ghost">取消</button><button id="videoStartBtn" type="button" class="btn btn-primary">开始录制</button><button id="videoStopBtn" type="button" class="btn btn-primary" disabled>停止并分析</button></div></div></div>
+<div id="meetingModal" class="modal-backdrop hidden"><div class="modal camera-modal"><div class="modal-head"><h3>会议旁听</h3><button id="closeMeetingBtn" type="button" aria-label="关闭">×</button></div><div class="meeting-body"><div id="meetingSummary" class="meeting-summary"></div><div id="meetingTasks" class="meeting-tasks"></div><div id="meetingRisks" class="meeting-risks"></div></div><div class="camera-actions"><button id="meetingCancelBtn" type="button" class="btn btn-ghost">关闭</button><button id="meetingGenerateBtn" type="button" class="btn btn-primary hidden">生成任务草案</button></div></div></div>
 <datalist id="participantNames"></datalist>
-<script src="/static/app.js?v=5.76.2"></script>
-<script src="/static/participants.js?v=5.76.2"></script>
+<script src="/static/app.js?v=72e9b5c6"></script>
+<script src="/static/participants.js?v=42eb73fd"></script>
 </body>
 </html>

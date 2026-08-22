@@ -178,10 +178,32 @@ async function loadRemindersTab(){
     var listHtml=items.length
       ? items.map(function(r){return '<div class="reminder-card '+esc(r.type)+'"><strong>'+esc(r.title)+'</strong><span>'+esc(r.detail)+'</span></div>'}).join('')
       : '<div class="success-box">当前没有待处理提醒</div>';
-    target.innerHTML='<div class="interview-actions"><button id="notifyBtn" class="btn btn-primary">发送提醒通知</button></div>'+listHtml;
+    target.innerHTML='<div class="interview-actions"><button id="notifyBtn" class="btn btn-primary">发送提醒通知</button><button id="broadcastBtn" class="btn btn-ghost">🔊 今日播报</button></div>'+listHtml;
     var notifyBtn=el('notifyBtn');
     if(notifyBtn)notifyBtn.onclick=sendNotify;
+    var broadcastBtn=el('broadcastBtn');
+    if(broadcastBtn)broadcastBtn.onclick=todayBroadcast;
   }catch(e){target.innerHTML=alertPanelHtml('提醒加载失败',e.message,'error')}
+}
+
+async function todayBroadcast(){
+  try{
+    var data=await jsonRequest('/api/reminders',state.plan);
+    var items=data.reminders||[];
+    var tasks=(state.plan&&state.plan.plan&&state.plan.plan.tasks)||[];
+    var today=localIsoDate(new Date());
+    var dueToday=tasks.filter(function(t){return t.status!=='completed'&&t.end_date&&String(t.end_date).slice(0,10)===today});
+    var lines=['今天是 '+new Date().toLocaleDateString('zh-CN',{month:'long',day:'numeric'})+'。'];
+    if(items.length){lines.push('提醒 '+items.length+' 条：');items.slice(0,5).forEach(function(r){lines.push(r.title+'：'+r.detail)})}
+    if(dueToday.length){lines.push('今天到期 '+dueToday.length+' 项：'+dueToday.slice(0,3).map(function(t){return t.name}).join('、'))}
+    var text=lines.join('\n');
+    if(state.realtime&&state.realtime.enabled&&!state.realtimeFallback&&state.realtime.backend==='map'){
+      var tts=await jsonRequest('/api/realtime/tts',{text:text.slice(0,1200)});
+      if(tts.audio_wav_base64){playRealtimeAudio(tts.audio_wav_base64);showNotice('正在播报今日要点','success');return}
+      throw Error('未返回音频');
+    }
+    showNotice(text,'info');
+  }catch(e){showNotice('今日播报失败：'+e.message,'error')}
 }
 
 async function sendNotify(){

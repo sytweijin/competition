@@ -26,6 +26,7 @@ from app.models.schemas import (
 from app.services.project_service import (
     ProjectServiceError, apply_manual_assignment, confirm_draft as confirm_draft_service,
     generate_draft, mutate_draft, record_task_actual, resource_calendar,
+    recompute_plan as recompute_plan_service,
     update_volunteer_pool, update_task_participants, workload_snapshot,
 )
 from app.services.plan_io import (
@@ -48,6 +49,8 @@ from app.services.share_store import (
 )
 from app.web.routers.exports import router as export_router
 from app.web.routers.members import router as member_router
+from app.web.routers.realtime import router as realtime_router
+from app.web.routers.report import router as report_router
 from app.web.routers.system import router as system_router
 
 logger = logging.getLogger(__name__)
@@ -57,6 +60,8 @@ router = APIRouter()
 router.include_router(system_router)
 router.include_router(export_router)
 router.include_router(member_router)
+router.include_router(realtime_router)
+router.include_router(report_router)
 
 
 def _file_status(text: str) -> str:
@@ -364,6 +369,8 @@ async def project_chat(req: ChatRequest):
     from app.llm.client import LLMClient
     context = _build_chat_context(req)
     system_prompt = (
+        "你是协作分工助手，帮助团队做任务拆解、分工和排期。"
+        "当用户问你是谁时，介绍自己是协作分工助手，绝不要介绍背后的模型、厂商或技术。\n\n"
         "你是项目协作助手，像一个懂项目管理的同事，陪用户一起看当前的任务分工，自然、口语地聊天。\n\n"
         "【仅供你判断，绝不写进回答】\n"
         "- 当前分工综合考虑了多个因素，不只是技能标签是否对口：相关能力、各阶段负载是否均匀、成员可用工时、任务之间的串行依赖都参与了权衡。所以某项任务看起来技能标签不完全匹配，不代表分配有问题——可能那个阶段他工时充裕，或整体能力足以覆盖。\n"
@@ -838,53 +845,7 @@ def recompute_plan(req: FullPlan):
     前端状态切换（completed/blocked 等）或成员变动后调用此端点，
     确保排期与分配与最新状态保持一致。
     """
-    from app.agents.scoring import recompute_preserve
-    from app.agents.timeline import TimelineAgent
-
-    plan = req.plan
-    members = req.input.members
-
-    # 重算 Matcher：状态切换保留原有分工（完成自己任务的人不再被重排到别人后续任务），
-    # 仅已完成任务标记为占位、负载/告警按现状重算；成员变动走 /edit-members 仍全量重排
-    qa_matrix = recompute_preserve(plan, req.qa_matrix, members)
-
-    # 回填负责人，重算 Timeline（会读取 task.status）
-    assignments: dict[str, list[str]] = {}
-    for a in qa_matrix.assignments:
-        people = [a.presenter] if a.presenter else []
-        if a.qa_primary and a.qa_primary not in people:
-            people.append(a.qa_primary)
-        for s in (a.qa_support or []):
-            if s not in people:
-                people.append(s)
-        assignments[a.task_id] = people
-
-    timeline = TimelineAgent().run(
-        plan=plan,
-        deadline=req.input.deadline.isoformat(),
-        assignments=assignments,
-        members=members,
-    )
-
-    # 状态切换是高频操作，只用本地结果更新报告，避免每次标记完成/阻塞都等待 LLM。
-    risk_note = Coordinator._build_risk_note(
-        plan, timeline, qa_matrix, members, req.input.deadline)
-    report = req.report.model_copy(update={
-        "timeline_section": timeline.note,
-        "qa_matrix_section": "\n".join(
-            f"{item.task_name}：{item.presenter or '未分配'}"
-            for item in qa_matrix.assignments),
-        "risk_note": risk_note,
-    })
-
-    return FullPlan(
-        input=req.input,
-        plan=plan,
-        timeline=timeline,
-        qa_matrix=qa_matrix,
-        report=report,
-        volunteer_pool=req.volunteer_pool,
-    )
+    return recompute_plan_service(req)
 
 @router.get("/plans/{filename}/export")
 async def export_plan(request: Request, filename: str, fmt: str = "markdown"):
