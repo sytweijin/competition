@@ -84,12 +84,19 @@ async def understand_audio(
     max_new_tokens: int = 1024,
     timeout: float = 180,
     tts_enabled: bool = False,
+    history: list[dict] | None = None,
 ):
-    """让模型理解一段音频：本地直接听音频，云端先转写再文字理解。"""
+    """让模型理解一段音频：本地直接听音频，云端先转写再文字理解。
+
+    history 为可选的多轮上下文（[{role, content}, ...]）：本地会拼在音频消息
+    之前；云端会拼在转写文本之前，让"边听边答"也能记住前面的对话。
+    云端返回的结果会带上转写文本（result.transcript），供调用方存入历史。
+    """
     client = RealtimeClient()
+    history = list(history or [])
     if ASCEND_OMNI_WS_URL:
         return await client.chat(
-            messages=[{"role": "user", "content": [
+            messages=history + [{"role": "user", "content": [
                 {"type": "text", "text": instruction},
                 {"type": "audio", "data": audio_b64},
             ]}],
@@ -108,11 +115,13 @@ async def understand_audio(
         f"{system_prompt}\n\n{instruction}"
         if system_prompt else instruction
     )
-    return await client.chat(
-        messages=[{"role": "user", "content": transcript}],
+    result = await client.chat(
+        messages=history + [{"role": "user", "content": transcript}],
         system_prompt=merged_system,
         max_new_tokens=max_new_tokens,
         omni_mode=False,
         tts_enabled=tts_enabled,
         timeout=timeout,
     )
+    result.transcript = transcript
+    return result

@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import json
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
@@ -154,12 +155,14 @@ async def realtime_dictate(file: UploadFile = File(...)):
 async def realtime_voice_chat(
     file: UploadFile = File(...),
     system_prompt: str = Form(""),
+    history: str = Form(""),
     tts_enabled: bool = Form(False),
 ):
     """直接语音对话：录音作为音频消息发给 MiniCPM-o，返回文本回答与可选语音。
 
     与"转写进输入框"不同，这里不做语音转文字，而是让模型直接听懂音频并作答，
-    是 MiniCPM-o 全模态能力的核心用法。
+    是 MiniCPM-o 全模态能力的核心用法。支持携带多轮对话历史（history 为 JSON
+    数组），让语音对话也有上下文记忆；返回 transcript 供前端存入历史。
     """
     import base64
 
@@ -180,6 +183,19 @@ async def realtime_voice_chat(
     audio_b64 = base64.b64encode(pcm).decode("utf-8")
     from app.services.omni_chat import understand_audio
 
+    try:
+        history_list = json.loads(history) if history.strip() else []
+        if not isinstance(history_list, list):
+            history_list = []
+    except (json.JSONDecodeError, TypeError):
+        history_list = []
+    history_list = [
+        m for m in history_list
+        if isinstance(m, dict)
+        and m.get("role") in ("user", "assistant")
+        and m.get("content")
+    ][-16:]
+
     tts_failed = False
     try:
         result = await understand_audio(
@@ -188,6 +204,7 @@ async def realtime_voice_chat(
             VOICE_CHAT_INSTRUCTION,
             max_new_tokens=MAP_REALTIME_MAX_TOKENS,
             tts_enabled=tts_enabled,
+            history=history_list,
         )
     except RealtimeError as exc:
         if tts_enabled:
@@ -198,6 +215,7 @@ async def realtime_voice_chat(
                     VOICE_CHAT_INSTRUCTION,
                     max_new_tokens=MAP_REALTIME_MAX_TOKENS,
                     tts_enabled=False,
+                    history=history_list,
                 )
             except RealtimeError as retry_exc:
                 raise HTTPException(
@@ -215,6 +233,7 @@ async def realtime_voice_chat(
     backend = "local" if ASCEND_OMNI_WS_URL else "map"
     return {
         "reply": result.text,
+        "transcript": result.transcript,
         "audio_wav_base64": wav_base64,
         "tts_failed": tts_failed,
         "backend": backend,

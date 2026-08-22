@@ -598,6 +598,87 @@ async def test_voice_chat_tts_failure_retries_text_only(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_voice_chat_carries_history_and_returns_transcript(monkeypatch):
+    """语音对话携带多轮历史，云端返回转写文本供前端存入记忆。"""
+    import app.services.media_analysis as media
+    import app.services.realtime_client as rt
+    import app.web.routers.realtime as realtime_router
+
+    monkeypatch.setattr(
+        realtime_router, "MAP_REALTIME_API_KEY", "test-key")
+    monkeypatch.setattr(
+        realtime_router, "ASCEND_OMNI_WS_URL", "")
+    call_count = [0]
+    captured = {}
+
+    def fake_decode(content):
+        return b"pcm"
+
+    async def fake_chat(self, **kwargs):
+        call_count[0] += 1
+        captured["messages_%d" % call_count[0]] = kwargs.get("messages")
+        if call_count[0] == 1:
+            return RealtimeChatResult(text="测试转写文本")
+        return RealtimeChatResult(text="最终回答")
+
+    monkeypatch.setattr(media, "_decode_audio_to_pcm16k", fake_decode)
+    monkeypatch.setattr(rt.RealtimeClient, "chat", fake_chat)
+
+    history = [
+        {"role": "user", "content": "[语音] 谁的负担最重"},
+        {"role": "assistant", "content": "王五的设计任务最重"},
+    ]
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/realtime/voice-chat",
+            data={"history": json.dumps(history)},
+            files={"file": ("voice.webm", b"fake-audio", "audio/webm")},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["reply"] == "最终回答"
+    assert payload["transcript"] == "测试转写文本"
+    # 云端两步：第一步转写；第二步 历史 + 转写文本
+    assert call_count[0] == 2
+    second = captured["messages_2"]
+    assert [m["role"] for m in second] == ["user", "assistant", "user"]
+    assert second[0]["content"] == "[语音] 谁的负担最重"
+    assert second[-1]["content"] == "测试转写文本"
+
+
+@pytest.mark.asyncio
+async def test_understand_audio_local_carries_history(monkeypatch):
+    """本地昇腾路径：历史消息拼在音频消息之前。"""
+    import app.services.omni_chat as omni
+    import app.services.realtime_client as rt
+
+    captured = {}
+
+    async def fake_chat(self, **kwargs):
+        captured["messages"] = kwargs.get("messages")
+        return RealtimeChatResult(text="本地回答")
+
+    monkeypatch.setattr(
+        omni, "ASCEND_OMNI_WS_URL", "ws://127.0.0.1:28099/backend")
+    monkeypatch.setattr(rt.RealtimeClient, "chat", fake_chat)
+
+    result = await omni.understand_audio(
+        "YXVkaW8=", "系统提示", "请听音频", history=[
+            {"role": "user", "content": "上一轮用户"},
+            {"role": "assistant", "content": "上一轮回答"},
+        ])
+    assert result.text == "本地回答"
+    msgs = captured["messages"]
+    assert [m["role"] for m in msgs] == ["user", "assistant", "user"]
+    assert msgs[-1]["content"][0]["type"] == "text"
+    assert msgs[-1]["content"][1]["data"] == "YXVkaW8="
+
+
+@pytest.mark.asyncio
 async def test_voice_chat_not_configured_503(monkeypatch):
     import app.web.routers.realtime as realtime_router
 

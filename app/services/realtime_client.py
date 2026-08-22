@@ -34,6 +34,7 @@ class RealtimeChatResult:
     audio_chunks: list[str] = field(default_factory=list)
     session_id: str = ""
     response_id: str = ""
+    transcript: str = ""
     _wav_cache: str = field(default="", repr=False, init=False)
 
     @property

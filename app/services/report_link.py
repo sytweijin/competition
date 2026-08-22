@@ -73,6 +73,60 @@ def get_report_token(token: str) -> dict | None:
         return entry
 
 
+def add_report_activity(
+    filename: str, task_id: str, member: str, *,
+    status: str | None = None,
+    actual_hours: float | None = None,
+    note: str | None = None,
+    photo: str | None = None,
+) -> list[dict]:
+    """记录一次成员汇报活动（谁、什么状态/工时/备注/交付物），供负责人查看。"""
+    key = f"{filename}::{task_id}"
+    entry = {
+        "member": member,
+        "status": status,
+        "actual_hours": actual_hours,
+        "note": note,
+        "photo": photo,
+        "ts": time.time(),
+    }
+    with _LOCK:
+        data = _load(NOTES_FILE)
+        items = list(data.get(key) or [])
+        items.append(entry)
+        data[key] = items[-50:]
+        _save(NOTES_FILE, data)
+    return get_report_activities(filename, task_id)
+
+
+def get_report_activities(filename: str, task_id: str) -> list[dict]:
+    """返回某任务的全部汇报活动（含历史兼容的纯字符串备注）。"""
+    key = f"{filename}::{task_id}"
+    with _LOCK:
+        items = _load(NOTES_FILE).get(key) or []
+    out: list[dict] = []
+    for item in items:
+        if isinstance(item, dict):
+            out.append({
+                "member": str(item.get("member") or ""),
+                "status": str(item.get("status") or ""),
+                "actual_hours": item.get("actual_hours"),
+                "note": str(item.get("note") or ""),
+                "photo": str(item.get("photo") or ""),
+                "ts": float(item.get("ts") or 0),
+            })
+        else:
+            out.append({
+                "member": "",
+                "status": "",
+                "actual_hours": None,
+                "note": str(item),
+                "photo": "",
+                "ts": 0,
+            })
+    return out
+
+
 def add_report_note(filename: str, task_id: str, note: str) -> list[str]:
     key = f"{filename}::{task_id}"
     with _LOCK:
@@ -86,6 +140,13 @@ def add_report_note(filename: str, task_id: str, note: str) -> list[str]:
 
 
 def get_report_notes(filename: str, task_id: str) -> list[str]:
-    key = f"{filename}::{task_id}"
-    with _LOCK:
-        return list(_load(NOTES_FILE).get(key) or [])
+    """返回某任务的全部备注文本（活动中的 note + 历史字符串备注）。"""
+    # 旧版双写曾导致同一备注连续出现两次：连续重复只保留一条
+    out: list[str] = []
+    prev = ""
+    for entry in get_report_activities(filename, task_id):
+        note = entry["note"]
+        if note and note != prev:
+            out.append(note)
+            prev = note
+    return out
