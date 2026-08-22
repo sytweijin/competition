@@ -120,7 +120,7 @@ def test_draft_editor_uses_handle_only_dragging_and_always_analyzes_files():
     assert "handle.ondragstart" in js
     assert "if(state.files.length)await analyzeFiles()" in js
     assert "state.files.length&&useAi!==true" not in js
-    assert "AI 本次未返回可用草案，已改用文件任务蓝图" in js
+    assert "AI 本次未返回可用草案，已改用确定性兜底蓝图" in js
 
 
 def test_file_analysis_txt():

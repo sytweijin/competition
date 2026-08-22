@@ -4075,6 +4075,30 @@ th {
   color: #b45309;
 }
 
+.report-owner-badge {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(16,185,129,.16);
+  border: 1px solid rgba(16,185,129,.4);
+  color: #047857;
+}
+
+.report-confirm-member {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--primary);
+  color: var(--primary);
+  background: var(--card);
+  cursor: pointer;
+  transition: .15s;
+}
+
+.report-confirm-member:hover {
+  background: var(--primary-soft);
+}
+
 .report-photo-badge {
   background: rgba(79,70,229,.1);
   border: 1px solid rgba(79,70,229,.3);

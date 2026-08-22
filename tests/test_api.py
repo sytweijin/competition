@@ -250,6 +250,14 @@ async def test_draft_fast_mode_returns_plan(client):
 
 
 @pytest.mark.asyncio
+async def test_index_html_not_cached(client):
+    """index.html 必须带 no-cache，避免浏览器缓存旧页面导致前端修复不生效。"""
+    resp = await client.get("/")
+    assert resp.status_code == 200
+    assert "no-cache" in resp.headers.get("cache-control", "")
+
+
+@pytest.mark.asyncio
 async def test_draft_ai_mode_without_key_still_returns_plan(client, monkeypatch):
     """use_ai=true 但无 API key 时自动降级为兜底，不抛 500。"""
     import app.llm.client as llm_client
@@ -263,6 +271,26 @@ async def test_draft_ai_mode_without_key_still_returns_plan(client, monkeypatch)
     data = resp.json()
     assert "plan" in data
     assert len(data["plan"]["tasks"]) > 0
+    assert data["warnings"], "兜底草案应带 warnings 提示"
+    assert any("兜底" in w for w in data["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_draft_large_fallback_has_warnings(client, monkeypatch):
+    """大型项目 LLM 失败降级为确定性兜底时，响应带 warnings 提示。"""
+    import app.llm.client as llm_client
+
+    monkeypatch.setattr(llm_client, "LLM_API_KEY", "")
+    monkeypatch.setattr(
+        llm_client.LLMClient, "get_shared", lambda: llm_client.LLMClient())
+    inp = _sample_course_input()
+    inp["project_mode"] = "large_project"
+    payload = {"input": inp, "use_ai": True}
+    resp = await client.post("/api/draft", json=payload)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["warnings"]
+    assert any("兜底" in w for w in data["warnings"])
 
 
 # ──────────── Draft Mutate（增删改排序） ────────────

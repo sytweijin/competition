@@ -50,6 +50,10 @@ class ReportUpdateRequest(BaseModel):
     actual_hours: float | None = Field(default=None, ge=0)
     actual_end_date: str | None = Field(default=None)
     note: str | None = Field(default=None)
+    member: str | None = Field(
+        default=None,
+        description="负责人代确认的成员姓名（仅任务负责人可用）",
+    )
 
 
 def _safe_plan_path(filename: str) -> Path:
@@ -273,7 +277,8 @@ def _member_latest_hours(activities: list[dict]) -> dict[str, float]:
         hours = act.get("actual_hours")
         if hours is not None:
             latest[name] = float(hours)
-        elif act.get("status") and not act.get("photo"):
+        elif (act.get("status") and not act.get("photo")
+              and act["status"] != "confirmed"):
             latest.pop(name, None)
     return latest
 
@@ -290,6 +295,7 @@ def _apply_update(
     entry: dict, task_id: str, status: str | None,
     actual_hours: float | None, actual_end_date: str | None,
     note: str | None, photo: str | None = None,
+    target_member: str | None = None,
 ) -> dict:
     from datetime import date
 
@@ -297,6 +303,45 @@ def _apply_update(
     plan = _load_plan(filename)
     task = next(t for t in plan.plan.tasks if t.id == task_id)
     is_owner = task.assignee_id == member
+
+    if target_member and target_member != member:
+        # 负责人代成员确认/标记状态（如志愿者线下完成、由负责人补录）
+        if not is_owner:
+            raise HTTPException(
+                status_code=403,
+                detail="只有任务负责人可以确认其他成员的状态",
+            )
+        if target_member not in _task_member_names(plan, task):
+            raise HTTPException(
+                status_code=400,
+                detail=f"{target_member} 不是任务 {task_id} 的成员",
+            )
+        member_status = (
+            "confirmed" if status in ("completed", "confirmed", None)
+            else status
+        )
+        add_report_activity(
+            filename, task_id, target_member,
+            status=member_status,
+            note=note,
+        )
+        plan = recompute_plan(plan)
+        _save_plan(filename, plan)
+        if member_status == "confirmed":
+            notify_event(
+                plan,
+                f"{member} 已确认 {target_member} 完成「{task.name}」"
+                + (f"（备注：{note}）" if note else ""),
+            )
+        return {
+            "ok": True,
+            "project": plan.input.course.name,
+            "member": member,
+            "task_id": task_id,
+            "status": task.status,
+            "member_status": member_status,
+            "awaiting_confirm": False,
+        }
 
     reverted = False
     if status and status in ("pending", "in_progress", "completed", "blocked"):
@@ -604,4 +649,5 @@ def report_update(req: ReportUpdateRequest):
     return _apply_update(
         entry, req.task_id, req.status,
         req.actual_hours, req.actual_end_date, req.note,
+        target_member=req.member,
     )

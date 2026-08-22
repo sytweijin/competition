@@ -125,6 +125,21 @@ async def request_metrics_middleware(request: Request, call_next):
     return response
 
 
+@app.middleware("http")
+async def no_cache_html_middleware(request: Request, call_next):
+    """HTML 响应不缓存：保证 index.html 每次都重新校验，加载最新 ?v= 静态资源。
+
+    之前 index.html 无显式 Cache-Control，浏览器启发式缓存旧页面，导致
+    前端修复后用户仍加载旧 app.js（老哈希），出现"改了没生效"的错觉。
+    JS/CSS 仍按内容哈希 ?v= 缓存，不受影响。
+    """
+    response = await call_next(request)
+    content_type = response.headers.get("content-type", "")
+    if "text/html" in content_type:
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return response
+
+
 # 注册路由
 from app.web.routes import router as api_router
 app.include_router(api_router, prefix="/api")

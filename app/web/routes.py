@@ -177,7 +177,23 @@ async def import_tasks(
 def create_draft(req: DraftRequest):
     """只生成可编辑任务草案，不分工。"""
     plan = generate_draft(req.input, use_ai=req.use_ai)
-    return DraftResponse(input=req.input, plan=plan)
+    warnings: list[str] = []
+    if req.use_ai:
+        reasoning = plan.reasoning or ""
+        is_fallback = (
+            "LLM 规划失败" in reasoning
+            or "LLM 不可用" in reasoning
+            or "AI 拆解本次未成功" in reasoning
+            or "兜底" in (plan.summary or "")
+        )
+    else:
+        is_fallback = False
+    if is_fallback:
+        warnings.append(
+            "AI 本次未返回可用草案，已改用确定性兜底蓝图；"
+            "可重新生成，或直接在草稿页手动编辑"
+        )
+    return DraftResponse(input=req.input, plan=plan, warnings=warnings)
 
 
 @router.post("/confirm-draft", response_model=FullPlan)

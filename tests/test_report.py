@@ -663,6 +663,46 @@ async def test_report_owner_cannot_complete_while_member_unfinished(saved_plan):
 
 
 @pytest.mark.asyncio
+async def test_report_owner_can_confirm_member_status(saved_plan):
+    """负责人可代协作者确认完成：成员状态 confirmed、工时保留、待确认消失。"""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        li = await _make_token(client, member="李四")
+        r1 = await client.post("/api/report/update", json={
+            "token": li, "task_id": "T1", "status": "completed",
+            "actual_hours": 3.0,
+        })
+        assert r1.status_code == 200
+        assert r1.json()["awaiting_confirm"] is True
+
+        # 负责人张三代李四确认完成
+        zhang = await _make_token(client, member="张三")
+        r2 = await client.post("/api/report/update", json={
+            "token": zhang, "task_id": "T1",
+            "status": "completed", "member": "李四",
+        })
+        assert r2.status_code == 200
+        assert r2.json()["member_status"] == "confirmed"
+
+        st = (await client.get(
+            "/api/report/state", params={"token": zhang})).json()
+        t1 = next(t for t in st["tasks"] if t["id"] == "T1")
+        li_row = next(m for m in t1["members"] if m["name"] == "李四")
+        assert li_row["status"] == "confirmed"
+        assert li_row["awaiting_confirm"] is False
+        assert li_row["actual_hours"] == 3.0  # 代确认不清除其工时
+
+        # 非负责人不能代他人确认
+        r3 = await client.post("/api/report/update", json={
+            "token": li, "task_id": "T1",
+            "status": "completed", "member": "张三",
+        })
+        assert r3.status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_meeting_parses_tasks(monkeypatch):
     import app.services.media_analysis as media
     import app.services.realtime_client as rt
