@@ -524,9 +524,9 @@ async def test_voice_chat_route_returns_reply(monkeypatch):
         return b"pcm-bytes"
 
     async def fake_chat(self, **kwargs):
-        captured["omni_mode"] = kwargs.get("omni_mode")
-        captured["tts"] = kwargs.get("tts_enabled")
-        assert kwargs.get("system_prompt")
+        captured.setdefault("omni_mode", []).append(kwargs.get("omni_mode"))
+        captured.setdefault("tts", []).append(kwargs.get("tts_enabled"))
+        captured.setdefault("sys", []).append(kwargs.get("system_prompt"))
         return RealtimeChatResult(text="语音对话回复")
 
     monkeypatch.setattr(media, "_decode_audio_to_pcm16k", fake_decode)
@@ -548,8 +548,9 @@ async def test_voice_chat_route_returns_reply(monkeypatch):
     assert payload["backend"] == "map"
     assert payload["tts_failed"] is False
     assert payload["audio_wav_base64"] == ""
-    assert captured["omni_mode"] is True
-    assert captured["tts"] is False
+    assert True in captured["omni_mode"]  # 音频转写/理解调用走 omni
+    assert captured["tts"] == [False, False]
+    assert any(captured["sys"])  # 主对话调用带系统提示词
 
 
 @pytest.mark.asyncio
@@ -592,7 +593,8 @@ async def test_voice_chat_tts_failure_retries_text_only(monkeypatch):
     assert payload["reply"] == "纯文本回复"
     assert payload["tts_failed"] is True
     assert payload["audio_wav_base64"] == ""
-    assert calls == [True, False]
+    # 云端两步：第一次尝试 = 转写(False)+主调用(True,失败)；重试 = 转写(False)+主调用(False)
+    assert calls == [False, True, False, False]
 
 
 @pytest.mark.asyncio
@@ -831,7 +833,7 @@ async def test_interview_turn_parses_summary_and_reply(monkeypatch):
 
     async def fake_chat(self, **kwargs):
         captured["sys"] = kwargs.get("system_prompt")
-        captured["omni"] = kwargs.get("omni_mode")
+        captured.setdefault("omni", []).append(kwargs.get("omni_mode"))
         return RealtimeChatResult(
             text="【回答摘要】\n我负责调研并完成报告。\n"
                  "【评委回复】\n回答清晰，请补充数据来源。")
@@ -855,7 +857,7 @@ async def test_interview_turn_parses_summary_and_reply(monkeypatch):
     payload = response.json()
     assert payload["summary"] == "我负责调研并完成报告。"
     assert payload["reply"] == "回答清晰，请补充数据来源。"
-    assert captured["omni"] is True
+    assert True in captured["omni"]
     assert "答辩评委" in captured["sys"]
 
 

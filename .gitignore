@@ -38,6 +38,7 @@ memory/audit/
 memory/versions/
 memory/attachments/
 editor_sdk.log
+_diag_voice.*
 
 # Jupyter
 .ipynb_checkpoints/

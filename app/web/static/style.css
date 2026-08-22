@@ -3993,6 +3993,18 @@ th {
   white-space: nowrap;
 }
 
+.meeting-visual {
+  margin-top: 4px;
+  padding: 8px 10px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  background: rgba(79, 70, 229, .04);
+}
+
+.meeting-visual:empty {
+  display: none;
+}
+
 .modal-backdrop {
   position: fixed;
   inset: 0;

@@ -92,7 +92,7 @@ async def auth_me(request: Request):
 async def health():
     return {
         "status": "ok",
-        "version": "6.9",
+        "version": "7.0",
         "checks": {
             "storage": MEMORY_DIR.exists(),
             "llm_configured": bool(
@@ -129,7 +129,7 @@ def readiness():
         status_code=200 if ready else 503,
         content={
             "status": "ready" if ready else "not_ready",
-            "version": "6.9",
+            "version": "7.0",
             "checks": checks,
         },
     )

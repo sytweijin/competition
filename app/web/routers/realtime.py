@@ -28,10 +28,14 @@ PERFORMANCE_PROMPT = (
 
 INTERVIEW_TURN_INSTRUCTION = (
     "用户正在用语音/视频回答你刚才提出的问题。\n"
-    "请先输出【回答摘要】：用不超过两句话概括用户回答的要点；\n"
-    "再输出【评委回复】：以评委身份点评用户的回答，并提出下一个问题。\n"
-    "严格按以下格式输出，不要输出其他内容：\n"
-    "【回答摘要】\n<摘要>\n【评委回复】\n<点评与下一个问题>"
+    "请严格按以下结构输出，且只输出这四个部分：\n"
+    "1) 第一行写【回答摘要】，下一段用不超过两句话概括用户回答的要点；\n"
+    "2) 再写【评委回复】，随后以评委身份做两件事：\n"
+    "   a. 点评：明确指出用户是否正面回答了问题、是否回避或遗漏了要点、"
+    "回答是否全面、依据是否到位；\n"
+    "   b. 追问：如果回答不完整、有漏洞或不到位，就同一问题继续追问、"
+    "要求补充说明，不要提出新问题；只有回答到位，才提出下一个新问题。\n"
+    "不要输出任何占位符、尖括号标签或格式说明。"
 )
 
 MEETING_PROMPT = (
@@ -40,9 +44,24 @@ MEETING_PROMPT = (
     "2) 明确提到的任务（每条一行：任务内容 | 负责人 | 截止时间，"
     "没有负责人或截止时间就写\"无\"）；\n"
     "3) 成员变动、风险或待确认事项。\n"
-    "严格按以下格式输出：\n"
-    "【总结】\n<会议要点>\n【任务】\n- 任务内容 | 负责人 | 截止\n"
-    "【风险】\n<风险或待确认事项，没有则写\"无\">"
+    "严格按以下格式输出，且只输出这四个部分：\n"
+    "【总结】\n会议要点\n【任务】\n- 任务内容 | 负责人 | 截止\n"
+    "【风险】\n风险或待确认事项，没有就写\"无\""
+)
+
+MEETING_FRAME_PROMPT = (
+    "这是团队会议视频的第{n}帧画面。请描述画面中与项目/任务相关的信息：\n"
+    "1) 屏幕或白板上展示的内容（PPT、文档、代码、图表、手绘等，尽量提取可见文字）；\n"
+    "2) 画面中的人物与动作（谁在讲、在演示什么）；\n"
+    "3) 结合会议场景，提炼可能成为任务的事项。\n"
+    "只输出内容，不要客套，看不清就如实说明。"
+)
+
+MEETING_VISUAL_SYNTHESIS = (
+    "以下是团队会议视频各帧画面的理解（没有声音轨道）。"
+    "请基于画面内容整理会议要点与可能产生的任务，严格按以下格式输出：\n"
+    "【总结】\n会议要点\n【任务】\n- 任务内容 | 负责人 | 截止\n"
+    "【风险】\n风险或待确认事项，没有就写\"无\""
 )
 
 VOICE_CHAT_SYSTEM_PROMPT = (
@@ -152,30 +171,26 @@ async def realtime_voice_chat(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     audio_b64 = base64.b64encode(pcm).decode("utf-8")
-    messages = [{"role": "user", "content": [
-        {"type": "text", "text": "请直接回答这段语音里的问题或承接用户的话。"},
-        {"type": "audio", "data": audio_b64},
-    ]}]
+    from app.services.omni_chat import understand_audio
 
-    client = RealtimeClient()
     tts_failed = False
     try:
-        result = await client.chat(
-            messages=messages,
-            system_prompt=VOICE_CHAT_SYSTEM_PROMPT,
+        result = await understand_audio(
+            audio_b64,
+            VOICE_CHAT_SYSTEM_PROMPT,
+            "用户正在用语音与你对话，请直接回答用户的话。",
             max_new_tokens=MAP_REALTIME_MAX_TOKENS,
             tts_enabled=tts_enabled,
-            omni_mode=True,
         )
     except RealtimeError as exc:
         if tts_enabled:
             try:
-                result = await client.chat(
-                    messages=messages,
-                    system_prompt=VOICE_CHAT_SYSTEM_PROMPT,
+                result = await understand_audio(
+                    audio_b64,
+                    VOICE_CHAT_SYSTEM_PROMPT,
+                    "用户正在用语音与你对话，请直接回答用户的话。",
                     max_new_tokens=MAP_REALTIME_MAX_TOKENS,
                     tts_enabled=False,
-                    omni_mode=True,
                 )
             except RealtimeError as retry_exc:
                 raise HTTPException(
@@ -253,14 +268,77 @@ async def realtime_tts(req: RealtimeTTSRequest):
 def _parse_turn_text(text: str) -> tuple[str, str]:
     """解析答辩回合输出：返回 (回答摘要, 评委回复)。"""
     text = (text or "").strip()
+    placeholder_lines = {
+        "<摘要>", "<点评与下一个问题>", "<摘要内容>",
+        "点评与下一个问题", "<点评>",
+    }
+
+    def clean(part: str) -> str:
+        lines = [
+            line for line in part.splitlines()
+            if line.strip() not in placeholder_lines
+            and "<点评与下一个问题>" not in line
+            and "<摘要>" not in line
+        ]
+        return "\n".join(lines).strip()
+
     if "【回答摘要】" in text and "【评委回复】" in text:
         _, rest = text.split("【回答摘要】", 1)
         summary, reply = rest.split("【评委回复】", 1)
-        return summary.strip(), reply.strip()
+        return clean(summary), clean(reply)
     if "【评委回复】" in text:
         _, reply = text.split("【评委回复】", 1)
-        return "", reply.strip()
-    return "", text
+        return "", clean(reply)
+    return "", clean(text)
+
+
+def _parse_meeting_text(text: str) -> tuple[str, list[dict], str]:
+    """解析会议整理输出：返回 (会议要点, 任务列表, 风险)。"""
+    text = (text or "").strip()
+    placeholder_lines = {
+        "<会议要点>", "<任务>", "<风险>", "会议要点", "任务内容 | 负责人 | 截止",
+        "风险或待确认事项，没有就写\"无\"",
+        "风险或待确认事项，没有则写\"无\"",
+    }
+
+    def clean(part: str) -> str:
+        kept: list[str] = []
+        for line in part.splitlines():
+            s = line.strip()
+            if s.startswith("【") and kept:
+                # 模型偶尔会多输出【其他】等额外段落，遇到新段落即截断
+                break
+            if s not in placeholder_lines:
+                kept.append(line)
+        return "\n".join(kept).strip()
+
+    tasks: list[dict] = []
+    summary = ""
+    risks = ""
+    if "【总结】" in text:
+        _, rest = text.split("【总结】", 1)
+        if "【任务】" in rest:
+            summary, rest = rest.split("【任务】", 1)
+        else:
+            summary = rest
+            rest = ""
+        summary = clean(summary)
+        if "【风险】" in rest:
+            task_block, risks = rest.split("【风险】", 1)
+            risks = clean(risks)
+        else:
+            task_block = rest
+        for line in task_block.splitlines():
+            line = line.strip().lstrip("-• ")
+            if not line:
+                continue
+            parts = [p.strip() for p in line.split("|")]
+            tasks.append({
+                "name": parts[0] if parts else line,
+                "owner": parts[1] if len(parts) > 1 and parts[1] != "无" else "",
+                "deadline": parts[2] if len(parts) > 2 and parts[2] != "无" else "",
+            })
+    return summary, tasks, risks
 
 
 @router.post("/realtime/interview-turn")
@@ -299,16 +377,14 @@ async def realtime_interview_turn(
     summary = ""
     if audio:
         audio_b64 = base64.b64encode(audio).decode("utf-8")
+        from app.services.omni_chat import understand_audio
+
         try:
-            result = await RealtimeClient().chat(
-                messages=[{"role": "user", "content": [
-                    {"type": "text", "text": "请听用户的语音回答。"},
-                    {"type": "audio", "data": audio_b64},
-                ]}],
-                system_prompt=judge_sys,
+            result = await understand_audio(
+                audio_b64,
+                judge_sys,
+                "用户正在回答你提出的问题，请听用户的语音并点评追问。",
                 max_new_tokens=MAP_REALTIME_MAX_TOKENS,
-                omni_mode=True,
-                timeout=180,
             )
             summary, reply = _parse_turn_text(result.text)
         except RealtimeError as exc:
@@ -339,62 +415,86 @@ async def realtime_interview_turn(
 
 @router.post("/realtime/meeting")
 async def realtime_meeting(file: UploadFile = File(...)):
-    """会议旁听：听会议录音，整理要点、任务（负责人/截止）与风险。"""
-    from app.services.media_analysis import _decode_audio_to_pcm16k
+    """会议旁听：听会议录音/看会议录像，整理要点、任务（负责人/截止）与风险。
+
+    录像链路与答辩一致：抽帧看画面 + 抽音频听内容，边看边听整理会议；
+    纯录音走音频理解；无声轨的录屏视频仅凭画面理解整理。
+    """
+    from app.services.media_analysis import (
+        _run_realtime_media_chat,
+        extract_audio_pcm16k,
+        extract_video_frames,
+    )
     from app.services.realtime_client import RealtimeClient, RealtimeError
 
     raw = await file.read(MAX_PERFORMANCE_SIZE + 1)
     if len(raw) > MAX_PERFORMANCE_SIZE:
-        raise HTTPException(status_code=413, detail="录音文件超过 60MB 限制")
+        raise HTTPException(status_code=413, detail="录音/录像文件超过 60MB 限制")
     try:
-        pcm = await asyncio.to_thread(_decode_audio_to_pcm16k, raw)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    audio_b64 = base64.b64encode(pcm).decode("utf-8")
-    try:
-        result = await RealtimeClient().chat(
-            messages=[{"role": "user", "content": [
-                {"type": "text", "text": MEETING_PROMPT},
-                {"type": "audio", "data": audio_b64},
-            ]}],
-            max_new_tokens=MAP_REALTIME_MAX_TOKENS,
-            omni_mode=True,
-            timeout=180,
-        )
-    except RealtimeError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        frames = await asyncio.to_thread(extract_video_frames, raw, 3)
+    except Exception:
+        frames = []
+    audio = await asyncio.to_thread(extract_audio_pcm16k, raw)
+    if not audio and not frames:
+        raise HTTPException(status_code=400, detail="未从录音/录像中提取到音频或画面")
 
-    text = (result.text or "").strip()
-    tasks: list[dict] = []
     summary = ""
+    tasks: list[dict] = []
     risks = ""
-    if "【总结】" in text:
-        _, rest = text.split("【总结】", 1)
-        if "【任务】" in rest:
-            summary, rest = rest.split("【任务】", 1)
-        else:
-            summary = rest
-            rest = ""
-        summary = summary.strip()
-        if "【风险】" in rest:
-            task_block, risks = rest.split("【风险】", 1)
-            risks = risks.strip()
-        else:
-            task_block = rest
-        for line in task_block.splitlines():
-            line = line.strip().lstrip("-• ")
-            if not line:
-                continue
-            parts = [p.strip() for p in line.split("|")]
-            tasks.append({
-                "name": parts[0] if parts else line,
-                "owner": parts[1] if len(parts) > 1 and parts[1] != "无" else "",
-                "deadline": parts[2] if len(parts) > 2 and parts[2] != "无" else "",
-            })
+    text = ""
+    if audio:
+        audio_b64 = base64.b64encode(audio).decode("utf-8")
+        from app.services.omni_chat import understand_audio
+
+        try:
+            result = await understand_audio(
+                audio_b64,
+                "",
+                MEETING_PROMPT,
+                max_new_tokens=MAP_REALTIME_MAX_TOKENS,
+            )
+            text = (result.text or "").strip()
+            summary, tasks, risks = _parse_meeting_text(text)
+        except RealtimeError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    visual: list[str] = []
+    for index, frame in enumerate(frames, 1):
+        parts = [
+            {"type": "text",
+             "text": MEETING_FRAME_PROMPT.format(n=index)},
+            {"type": "image",
+             "data": base64.b64encode(frame).decode("utf-8")},
+        ]
+        try:
+            obs = await asyncio.to_thread(
+                _run_realtime_media_chat, parts, 500, False, 120)
+            if obs and obs.strip():
+                visual.append(f"第 {index} 帧：{obs.strip()}")
+        except Exception:
+            continue
+
+    if not audio and visual:
+        # 无声轨录屏：把画面理解交给模型再整理成结构化会议结果
+        try:
+            result = await RealtimeClient().chat(
+                messages=[{"role": "user", "content": (
+                    MEETING_VISUAL_SYNTHESIS
+                    + "\n\n画面理解：\n" + "\n".join(visual)
+                )}],
+                max_new_tokens=MAP_REALTIME_MAX_TOKENS,
+            )
+            text = (result.text or "").strip()
+            summary, tasks, risks = _parse_meeting_text(text)
+        except RealtimeError:
+            pass
+
     return {
-        "summary": summary or text[:1000],
+        "summary": summary or text[:1000] or "（未能整理出要点）",
         "tasks": tasks,
         "risks": risks or "",
+        "visual": "\n".join(visual),
+        "has_video": bool(frames),
         "raw": text[:2000],
     }
 

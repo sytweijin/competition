@@ -132,6 +132,13 @@ def _apply_update(
     filename, member = _authorize(entry, task_id)
     plan = _load_plan(filename)
     task = next(t for t in plan.plan.tasks if t.id == task_id)
+    is_owner = task.assignee_id == member
+
+    if status in ("completed", "blocked") and not is_owner:
+        raise HTTPException(
+            status_code=403,
+            detail="该任务需由负责人确认完成/阻塞状态；协作者可更新进度、工时与交付物",
+        )
 
     if status and status in ("pending", "in_progress", "completed", "blocked"):
         task.status = TaskStatus(status)
@@ -157,16 +164,20 @@ def _apply_update(
     if note:
         add_report_note(filename, task_id, note)
 
-    if status == "completed":
+    if status == "completed" and is_owner:
         notify_event(
             plan,
             f"{member} 已完成「{task.name}」"
             + (f"（实际 {actual_hours:g}h）" if actual_hours else ""),
         )
-    elif status == "blocked":
+    elif status == "blocked" and is_owner:
         notify_event(plan, f"{member} 报告「{task.name}」遇到阻塞")
     elif status == "in_progress":
-        notify_event(plan, f"{member} 开始执行「{task.name}」")
+        notify_event(
+            plan,
+            f"{member} 更新了「{task.name}」进度"
+            + ("（实际工时 " + f"{actual_hours:g}h）" if actual_hours else ""),
+        )
 
     return {
         "ok": True,
@@ -233,15 +244,11 @@ async def report_voice(
         raise HTTPException(status_code=400, detail=str(exc))
     audio_b64 = base64.b64encode(pcm).decode("utf-8")
     prompt = REPORT_VOICE_PROMPT.format(task=task.name)
+    from app.services.omni_chat import understand_audio
+
     try:
-        result = await RealtimeClient().chat(
-            messages=[{"role": "user", "content": [
-                {"type": "text", "text": prompt},
-                {"type": "audio", "data": audio_b64},
-            ]}],
-            max_new_tokens=256,
-            omni_mode=True,
-            timeout=120,
+        result = await understand_audio(
+            audio_b64, "", prompt, 256, 120,
         )
     except RealtimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -250,9 +257,16 @@ async def report_voice(
     status = "进行中"
     hours = None
     note = ""
-    if len(parts) >= 1 and parts[0] in (
-            "完成", "进行中", "阻塞", "未开始"):
-        status = parts[0]
+    if len(parts) >= 1:
+        first = parts[0]
+        if "完成" in first:
+            status = "完成"
+        elif "阻塞" in first or "卡住" in first or "无法" in first:
+            status = "阻塞"
+        elif "进行" in first or "开始" in first or "在做" in first:
+            status = "进行中"
+        elif "未开始" in first or "还没" in first:
+            status = "未开始"
     if len(parts) >= 2:
         try:
             hours = float(parts[1].replace("小时", "").replace("h", ""))
@@ -291,10 +305,17 @@ async def report_photo(
     attach_path = ATTACH_DIR / f"{filename.replace('.json', '')}_{safe_id}{ext}"
     attach_path.write_bytes(raw)
     note = f"交付物照片已上传（{attach_path.name}）"
+    plan = _load_plan(filename)
+    task = next(t for t in plan.plan.tasks if t.id == task_id)
+    is_owner = task.assignee_id == member
+    note += "" if is_owner else "，等待负责人确认完成"
     result = _apply_update(
-        entry, task_id, "completed", None, None, note)
+        entry, task_id,
+        "completed" if is_owner else "in_progress",
+        None, None, note)
     result["photo"] = attach_path.name
     result["member"] = member
+    result["confirmed"] = is_owner
     return result
 
 
