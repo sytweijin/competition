@@ -46,7 +46,7 @@ function buildDefaultParticipants(task){
 
 function renderParticipantTask(task){
   var rows=(task.participants&&task.participants.length?task.participants:buildDefaultParticipants(task)).map(participantRowHtml).join('');
-  return '<div class="participant-task" data-task-id="'+esc(task.id)+'"><header><span class="task-code">'+esc(task.id)+'</span><div><strong>'+esc(task.name)+'</strong><small>计划 '+task.estimated_hours+'h · '+(task.assignee_id||'未分配')+'</small></div></header><div class="participant-list">'+rows+'</div><div class="participant-actions"><button class="btn-small participant-add" type="button">＋ 添加参与者</button><button class="btn-small participant-save" type="button">保存参与清单</button></div></div>';
+  return '<div class="participant-task" data-task-id="'+esc(task.id)+'"><header><span class="task-code">'+esc(task.id)+'</span><div><strong>'+esc(task.name)+'</strong><small>计划 '+task.estimated_hours+'h · '+(task.assignee_id||'未分配')+'</small></div></header><div class="participant-dates"><label>开始日期<input class="participant-date-start" data-task-id="'+esc(task.id)+'" type="date" value="'+(task.start_date?String(task.start_date).slice(0,10):'')+'"></label><label>截止日期<input class="participant-date-end" data-task-id="'+esc(task.id)+'" type="date" value="'+(task.end_date?String(task.end_date).slice(0,10):'')+'"></label><button class="btn-small participant-date-save" type="button">应用日期并重算排期</button></div><div class="participant-list">'+rows+'</div><div class="participant-actions"><button class="btn-small participant-add" type="button">＋ 添加参与者</button><button class="btn-small participant-save" type="button">保存参与清单</button></div></div>';
 }
 
 function renderParticipantsContent(){
@@ -61,8 +61,40 @@ function bindParticipantsControls(){
     var saveBtn=card.querySelector('.participant-save');
     if(addBtn)addBtn.onclick=function(){var list=card.querySelector('.participant-list');if(list)list.insertAdjacentHTML('beforeend',participantRowHtml({role:'执行成员'}))};
     if(saveBtn)saveBtn.onclick=function(){saveTaskParticipants(card.dataset.taskId)};
+    var dateSave=card.querySelector('.participant-date-save');
+    if(dateSave)dateSave.onclick=function(){saveTaskDates(card.dataset.taskId)};
     card.querySelectorAll('.participant-remove').forEach(function(btn){btn.onclick=function(){btn.closest('.participant-row').remove()}});
   });
+}
+
+async function saveTaskDates(taskId){
+  var card=document.querySelector('.participant-task[data-task-id="'+taskId+'"]');
+  if(!card)return;
+  var startInput=card.querySelector('.participant-date-start');
+  var endInput=card.querySelector('.participant-date-end');
+  var startVal=startInput&&startInput.value?startInput.value:null;
+  var endVal=endInput&&endInput.value?endInput.value:null;
+  var task=state.plan.plan.tasks.find(function(t){return t.id===taskId});
+  if(!task)return;
+  task.start_date=startVal||(task.start_date?String(task.start_date).slice(0,10):null);
+  task.end_date=endVal||(task.end_date?String(task.end_date).slice(0,10):null);
+  if(startVal&&endVal){
+    task.dates_manual=true;
+  }else if(startVal||endVal){
+    task.dates_manual=true;
+    showNotice('开始与截止日期都填写后才会固定排期','info');
+  }
+  var btn=card.querySelector('.participant-date-save');
+  if(btn)btn.disabled=true;
+  try{
+    state.plan=await jsonRequest('/api/recompute',state.plan);
+    renderResultTab('collaboration');
+    showNotice('已按新的任务日期重算排期','success');
+  }catch(e){
+    showNotice(e.message,'error');
+  }finally{
+    if(btn)btn.disabled=false;
+  }
 }
 
 async function saveTaskParticipants(taskId){

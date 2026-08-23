@@ -2358,22 +2358,25 @@ a {
   font-weight: 600;
 }
 
-.plan-date-inputs {
-  display: inline-flex;
+.participant-dates {
+  display: flex;
   flex-wrap: wrap;
-  gap: 6px 10px;
-  margin-left: 2px;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--card-soft);
 }
 
-.plan-date-inputs label {
+.participant-dates label {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   font-size: 11px;
   color: var(--muted);
 }
 
-.plan-date-inputs input {
+.participant-dates input {
   max-width: 132px;
   font-size: 12px;
   border: 1px solid var(--line);

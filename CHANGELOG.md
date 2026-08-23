@@ -531,6 +531,8 @@
 
 **涉及文件：** `app/models/schemas.py`、`app/agents/timeline.py`、`app/services/project_service.py`、`app/web/static/app.js`、`app/web/static/style.css`、`app/web/templates/index.html`、`tests/test_timeline.py`、`docs/功能验证清单.md`、`CHANGELOG.md`。
 
+**同步修改（2026-08-23）：** 按用户意见把任务日期编辑从「任务计划」统一挪到「分工协作 → 任务参与清单」：任务计划卡片不再显示开始/截止日期输入（移除 `plan-date-inputs` 与 `bindPlanDateControls`）；参与清单每个任务卡片新增「开始日期 / 截止日期」输入与「应用日期并重算排期」按钮（`participant-dates` 区域），修改后调 `/api/recompute` 重算并刷新分工协作页。参与者、工时、角色、起止日期等可编辑项现在集中在一处。验证：任务计划 0 个日期输入、参与清单 13 个任务均有日期输入与按钮，修改 T1 → 应用 → timeline 同步为 08-22~08-24。`app.js?v=` → `2541fcc4`，`participants.js?v=` → `fed5c16c`，`style.css?v=` → `1185e233`。
+
 ### 体验优化（P2）
 
 #### 44. 企业微信群机器人通知接入：提醒与成员汇报自动推送
