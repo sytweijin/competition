@@ -2072,7 +2072,9 @@ a {
 }
 
 .result-content {
-  overflow-x: auto;
+  /* 外层不拦截横向手势：内部组件（资源日历/甘特图）自己横向滚动，
+     clip 保证任何溢出都被裁剪、不产生页面级横滚 */
+  overflow-x: clip;
   max-width: 100%;
   padding-bottom: 60px;
 }
@@ -3041,6 +3043,15 @@ th {
   margin-bottom: 10px;
   overflow: hidden;
   box-shadow: inset 0 1px 0 rgba(255,255,255,.9),var(--shadow-xs);
+}
+
+/* 窄屏（手机）：成员卡片宽度跟随日历行（720px），避免 overflow:hidden 把行裁剪成"只有一屏"，
+   保证横向滚动时整行内容完整可见；宽屏保持自动填满容器 */
+@media (max-width: 720px) {
+  .cal-member {
+    width: max-content;
+    min-width: 720px;
+  }
 }
 
 .cal-member-head {
