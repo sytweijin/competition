@@ -679,6 +679,46 @@ async def test_understand_audio_local_carries_history(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_voice_requirement_returns_understanding(monkeypatch):
+    """语音需求理解：云端转写后理解，返回需求要点而非原话。"""
+    import app.services.media_analysis as media
+    import app.services.realtime_client as rt
+    import app.web.routers.realtime as realtime_router
+
+    monkeypatch.setattr(
+        realtime_router, "MAP_REALTIME_API_KEY", "test-key")
+    monkeypatch.setattr(
+        realtime_router, "ASCEND_OMNI_WS_URL", "")
+    call_count = [0]
+
+    def fake_decode(content):
+        return b"pcm"
+
+    async def fake_chat(self, **kwargs):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return RealtimeChatResult(text="我需要重点围绕创新点提问")
+        return RealtimeChatResult(
+            text="需求要点：请评委重点围绕创新点与技术架构提问。")
+
+    monkeypatch.setattr(media, "_decode_audio_to_pcm16k", fake_decode)
+    monkeypatch.setattr(rt.RealtimeClient, "chat", fake_chat)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/api/realtime/voice-requirement",
+            files={"file": ("v.webm", b"fake-audio", "audio/webm")},
+        )
+    assert resp.status_code == 200
+    assert resp.json()["text"] == (
+        "需求要点：请评委重点围绕创新点与技术架构提问。")
+    assert call_count[0] == 2  # 云端两步：转写 → 理解
+
+
+@pytest.mark.asyncio
 async def test_voice_chat_not_configured_503(monkeypatch):
     import app.web.routers.realtime as realtime_router
 
@@ -996,3 +1036,60 @@ async def test_interview_turn_video_adds_observations(monkeypatch):
     assert "追问内容" in payload["reply"]
     assert "📹 表现观察" in payload["reply"]
     assert "第 1 帧" in payload["reply"]
+
+
+@pytest.mark.asyncio
+async def test_interview_turn_carries_history(monkeypatch):
+    """答辩语音/视频轮次携带完整历史，评委有全程记忆。"""
+    import app.services.media_analysis as media
+    import app.services.realtime_client as rt
+    import app.web.routers.realtime as realtime_router
+
+    monkeypatch.setattr(
+        realtime_router, "MAP_REALTIME_API_KEY", "test-key")
+    monkeypatch.setattr(
+        realtime_router, "ASCEND_OMNI_WS_URL", "")
+    call_count = [0]
+    captured = {}
+
+    def fake_frames(content, max_frames):
+        return []
+
+    def fake_audio(content):
+        return b"pcm"
+
+    async def fake_chat(self, **kwargs):
+        call_count[0] += 1
+        captured["messages_%d" % call_count[0]] = kwargs.get("messages")
+        if call_count[0] == 1:
+            return RealtimeChatResult(text="历史问题转写")
+        return RealtimeChatResult(text=(
+            "【回答摘要】\n要点\n【评委回复】\n点评与追问"))
+
+    monkeypatch.setattr(media, "extract_video_frames", fake_frames)
+    monkeypatch.setattr(media, "extract_audio_pcm16k", fake_audio)
+    monkeypatch.setattr(rt.RealtimeClient, "chat", fake_chat)
+
+    history = [
+        {"role": "assistant", "content": "第一个问题"},
+        {"role": "user", "content": "🎤 [语音回答] 要点：我是张三负责调研"},
+    ]
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/api/realtime/interview-turn",
+            data={
+                "system_prompt": "你是答辩评委",
+                "history": json.dumps(history),
+            },
+            files={"file": ("voice.webm", b"fake-audio", "audio/webm")},
+        )
+    assert resp.status_code == 200
+    assert resp.json()["summary"] == "要点"
+    second = captured["messages_2"]
+    # 云端两步：转写（call1）→ 历史 + 转写文本（call2）
+    assert second[0]["content"] == "第一个问题"
+    assert second[1]["content"] == "🎤 [语音回答] 要点：我是张三负责调研"
+    assert second[-1]["content"] == "历史问题转写"

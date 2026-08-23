@@ -49,6 +49,55 @@ def test_plan_to_csv_and_ics():
     assert "DTEND;VALUE=DATE:20260807" in ics_text
 
 
+def test_plan_to_ics_bom_method_and_folding():
+    """ICS 带 UTF-8 BOM、METHOD:PUBLISH，长行按 RFC5545 折行。"""
+    plan = _plan()
+    plan.plan.tasks[0].name = "很长" * 40  # 触发折行
+    text = plan_to_ics(plan)
+    assert text.startswith("\ufeff")
+    assert "METHOD:PUBLISH" in text
+    lines = text.lstrip("\ufeff").split("\r\n")
+    for line in lines:
+        assert len(line.encode("utf-8")) <= 75
+    assert any(line.startswith(" ") for line in lines)  # 续行以空格开头
+
+
+def test_plan_to_excel_participants_and_review():
+    """参与清单由负责人/协作者/志愿者推导；复盘列出全部任务（含无实际工时）。"""
+    pytest.importorskip("openpyxl")
+    import io
+    from openpyxl import load_workbook
+
+    plan = _plan()
+    plan.plan.tasks[0].collaborator_ids = ["小红"]
+    data = plan_to_excel(plan)
+    wb = load_workbook(io.BytesIO(data))
+    parts = list(wb["参与清单"].iter_rows(values_only=True))
+    assert len(parts) == 3  # 表头 + 负责人 + 协作者
+    assert parts[1][1] == "小文"
+    assert parts[2][1] == "小红"
+    rev = list(wb["复盘"].iter_rows(values_only=True))
+    assert len(rev) == 2  # 表头 + 任务（无实际工时也列出）
+
+
+def test_plan_to_csv_extra_columns():
+    """CSV 多区块：任务/成员/分工/时间线/参与清单/复盘，列补全。"""
+    plan = _plan()
+    plan.plan.tasks[0].collaborator_ids = ["小红"]
+    plan.plan.tasks[0].required_skills = ["调研"]
+    csv_text = plan_to_csv(plan)
+    assert "协作者" in csv_text
+    assert "关键路径" in csv_text
+    assert "所需技能" in csv_text
+    assert "小红" in csv_text
+    assert "调研" in csv_text
+    # 区块标题与 Excel 的 sheet 对齐
+    for section in ("任务", "成员", "分工矩阵", "时间线", "参与清单", "复盘"):
+        assert section + "\r\n" in csv_text
+    # 复盘区块即使无实际工时也会列出任务
+    assert "小文" in csv_text.split("参与清单")[1]
+
+
 def test_parse_task_file_csv():
     content = (
         "编号,任务,模块,计划工时,负责人,开始日期,结束日期\n"

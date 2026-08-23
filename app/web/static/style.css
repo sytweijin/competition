@@ -844,7 +844,19 @@ a {
   animation: micPulse 1.2s ease-in-out infinite;
 }
 
+#defenseVoiceBtn.recording {
+  background: var(--danger-soft);
+  border-color: var(--danger);
+  color: var(--danger);
+  animation: micPulse 1.2s ease-in-out infinite;
+}
+
 #voiceReqBtn:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+
+#defenseVoiceBtn:disabled {
   opacity: .55;
   cursor: not-allowed;
 }
@@ -6128,6 +6140,31 @@ th {
   justify-content: center;
 }
 
+.defense-voice-photo {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.defense-voice-photo .btn {
+  justify-content: center;
+  border-color: var(--line);
+  background: var(--card);
+}
+
+.defense-input-hint {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  background: var(--bg-subtle);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--primary);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
 .defense-file-list {
   display: flex;
   flex-wrap: wrap;
@@ -6155,6 +6192,10 @@ th {
 
 @media (max-width: 720px) {
   .defense-materials {
+    grid-template-columns: 1fr;
+  }
+
+  .defense-voice-photo {
     grid-template-columns: 1fr;
   }
 

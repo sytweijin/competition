@@ -78,6 +78,13 @@ VOICE_CHAT_INSTRUCTION = (
     "不要以'你说的是''你的问题是''你提到'等开头，直接给出自然、简洁的回答。"
 )
 
+VOICE_REQUIREMENT_INSTRUCTION = (
+    "用户用语音补充项目/答辩需求。请理解用户想表达的需求要点，"
+    "整理成简洁的中文要点（不超过几行）："
+    "不要转写原话，不要复述，不要客套，不要提问，不要输出思考过程，"
+    "只输出整理后的需求要点。"
+)
+
 
 class RealtimeChatRequest(BaseModel):
     messages: list[dict] = Field(
@@ -240,6 +247,45 @@ async def realtime_voice_chat(
     }
 
 
+@router.post("/realtime/voice-requirement")
+async def realtime_voice_requirement(file: UploadFile = File(...)):
+    """语音需求理解：本地直听 / 云端转写后理解，返回整理后的需求要点文本。
+
+    与"转写"不同：本地 A3 能直接听懂音频，转写指令会被模型当成对话回答；
+    因此统一走 understand_audio 适配层，两端都返回"理解后的需求要点"，
+    供答辩模拟/项目配置等需求输入使用。
+    """
+    from app.services.media_analysis import _decode_audio_to_pcm16k
+    from app.services.omni_chat import understand_audio
+
+    if not (MAP_REALTIME_API_KEY or ASCEND_OMNI_WS_URL):
+        raise HTTPException(
+            status_code=503,
+            detail="MAP_REALTIME_API_KEY 或 ASCEND_OMNI_WS_URL 未配置",
+        )
+    raw = await file.read(MAX_TRANSCRIBE_SIZE + 1)
+    if len(raw) > MAX_TRANSCRIBE_SIZE:
+        raise HTTPException(status_code=413, detail="录音文件超过 15MB 限制")
+    try:
+        pcm = await asyncio.to_thread(_decode_audio_to_pcm16k, raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    audio_b64 = base64.b64encode(pcm).decode("utf-8")
+    try:
+        result = await understand_audio(
+            audio_b64,
+            "",
+            VOICE_REQUIREMENT_INSTRUCTION,
+            max_new_tokens=512,
+        )
+    except RealtimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    text = (result.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=502, detail="未能理解语音需求")
+    return {"text": text}
+
+
 class RealtimeTTSRequest(BaseModel):
     text: str = Field(
         ..., min_length=1, max_length=2000, description="要朗读的文本")
@@ -371,11 +417,14 @@ def _parse_meeting_text(text: str) -> tuple[str, list[dict], str]:
 async def realtime_interview_turn(
     file: UploadFile = File(...),
     system_prompt: str = Form(""),
+    history: str = Form(""),
 ):
     """答辩评委直接语音/视频对话：评委听（看）用户回答后点评并追问。
 
     不做"整理成书面回答"：音频（视频画面）直接作为多模态输入交给
     MiniCPM-o，评委听完/看完当场回复，返回 回答摘要（用于多轮记忆）与 评委回复。
+    history 为可选的完整对话历史（JSON 数组），让语音/视频轮次与文字轮次
+    一样拥有全程记忆。
     """
     from app.services.media_analysis import (
         _run_realtime_media_chat,
@@ -399,6 +448,18 @@ async def realtime_interview_turn(
         (system_prompt.strip() or "你是答辩模拟的评委。")
         + "\n\n" + INTERVIEW_TURN_INSTRUCTION
     )
+    try:
+        history_list = json.loads(history) if history.strip() else []
+        if not isinstance(history_list, list):
+            history_list = []
+    except (json.JSONDecodeError, TypeError):
+        history_list = []
+    history_list = [
+        m for m in history_list
+        if isinstance(m, dict)
+        and m.get("role") in ("user", "assistant")
+        and m.get("content")
+    ]
     reply = ""
     summary = ""
     if audio:
@@ -411,6 +472,7 @@ async def realtime_interview_turn(
                 judge_sys,
                 "用户正在回答你提出的问题，请听用户的语音并点评追问。",
                 max_new_tokens=MAP_REALTIME_MAX_TOKENS,
+                history=history_list,
             )
             summary, reply = _parse_turn_text(result.text)
         except RealtimeError as exc:

@@ -164,6 +164,14 @@ def _task_members_detail(
         v.name for v in (plan.volunteer_pool or [])
         if v.task_id == task.id and v.status == "已确认"
     }
+
+    def latest_value(name: str, key: str) -> str:
+        """该成员最近一条带该字段的活动值（照片/备注不随后续状态变更消失）。"""
+        for act in reversed(activities):
+            if act.get("member") == name and act.get(key):
+                return str(act[key])
+        return ""
+
     members = []
     for name in sorted(_task_member_names(plan, task)):
         role = (
@@ -182,8 +190,8 @@ def _task_members_detail(
             "role": role,
             "status": status,
             "actual_hours": member_hours.get(name),
-            "note": (act or {}).get("note") or "",
-            "photo": (act or {}).get("photo") or "",
+            "note": latest_value(name, "note"),
+            "photo": latest_value(name, "photo"),
             "awaiting_confirm": awaiting,
             "ts": (act or {}).get("ts") or 0,
         })

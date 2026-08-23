@@ -703,6 +703,53 @@ async def test_report_owner_can_confirm_member_status(saved_plan):
 
 
 @pytest.mark.asyncio
+async def test_report_photo_and_note_survive_status_changes(saved_plan):
+    """照片与备注不随成员后续改状态/负责人代确认而消失。"""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        li = await _make_token(client, member="李四")
+        # 协作者上传照片+备注
+        up = await client.post(
+            "/api/report/photo",
+            data={"token": li, "task_id": "T1"},
+            files={"file": ("p.png", b"\x89PNG\r\n\x1a\n", "image/png")},
+        )
+        assert up.status_code == 200
+        photo_name = up.json()["photo"]
+
+        # 协作者再改一次自己的状态（不带照片/备注）
+        await client.post("/api/report/update", json={
+            "token": li, "task_id": "T1", "status": "in_progress",
+        })
+
+        zhang = await _make_token(client, member="张三")
+        st = (await client.get(
+            "/api/report/state", params={"token": zhang})).json()
+        t1 = next(t for t in st["tasks"] if t["id"] == "T1")
+        li_row = next(m for m in t1["members"] if m["name"] == "李四")
+        assert li_row["photo"] == photo_name  # 改状态后照片仍在
+
+        # 负责人代确认后照片仍在
+        await client.post("/api/report/update", json={
+            "token": zhang, "task_id": "T1",
+            "status": "completed", "member": "李四",
+        })
+        st2 = (await client.get(
+            "/api/report/state", params={"token": zhang})).json()
+        t1b = next(t for t in st2["tasks"] if t["id"] == "T1")
+        li_row2 = next(m for m in t1b["members"] if m["name"] == "李四")
+        assert li_row2["photo"] == photo_name
+        assert li_row2["status"] == "confirmed"
+
+        try:
+            (MEMORY_DIR / "attachments" / photo_name).unlink()
+        except OSError:
+            pass
+
+
+@pytest.mark.asyncio
 async def test_meeting_parses_tasks(monkeypatch):
     import app.services.media_analysis as media
     import app.services.realtime_client as rt

@@ -7,7 +7,7 @@ import io
 import re
 import zipfile
 import unicodedata
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from xml.sax.saxutils import escape
 
 from app.models.schemas import FullPlan, PlanOutput, ProjectModule, SubTask
@@ -29,27 +29,133 @@ def _safe_text(value, default=""):
     return "" if value is None else str(value)
 
 
+def _csv_section(
+    writer, title: str, header: list[str], rows: list[list],
+) -> None:
+    """CSV 多区块结构：区块标题 + 空行 + 表头 + 数据行 + 空行。"""
+    writer.writerow([title])
+    writer.writerow([])
+    writer.writerow(header)
+    writer.writerows(rows)
+    writer.writerow([])
+
+
 def plan_to_csv(plan: FullPlan) -> str:
+    """导出多区块 CSV：任务/成员/分工矩阵/时间线/参与清单/复盘，与 Excel 对齐。"""
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow([
-        "编号", "任务", "模块", "计划工时", "实际工时", "负责人",
-        "开始日期", "结束日期", "依赖", "阶段", "状态",
-    ])
+
+    critical = {
+        item.task_id: item.is_critical
+        for item in (plan.timeline.tasks if plan.timeline else [])
+    }
+    task_rows = []
     for task in plan.plan.tasks:
-        writer.writerow([
+        task_rows.append([
             task.id,
             task.name,
             task.module_id or "",
             task.estimated_hours,
             task.actual_hours if task.actual_hours is not None else "",
             task.assignee_id or "",
+            ",".join(task.collaborator_ids or []),
+            getattr(task, "suggested_people", None) or "",
+            ",".join(task.required_skills or []),
             task.start_date.isoformat() if task.start_date else "",
             task.end_date.isoformat() if task.end_date else "",
+            task.actual_end_date.isoformat() if task.actual_end_date else "",
             ",".join(task.dependencies or []),
             task.execution_stage or "",
             task.status.value if hasattr(task.status, "value") else task.status,
+            "是" if critical.get(task.id) else "",
         ])
+    _csv_section(
+        writer, "任务",
+        ["编号", "任务", "模块", "计划工时", "实际工时", "负责人",
+         "协作者", "建议人数", "所需技能", "开始日期", "结束日期",
+         "完成日期", "依赖", "阶段", "状态", "关键路径"],
+        task_rows,
+    )
+
+    member_rows = [[
+        m.name, m.role or "执行成员", m.manager or "",
+        m.daily_available_hours, ",".join(m.skill_tags or []),
+    ] for m in plan.input.members]
+    _csv_section(
+        writer, "成员",
+        ["姓名", "角色", "上级", "每日可用工时", "技能"],
+        member_rows,
+    )
+
+    matrix_rows = [[
+        item.task_name, item.presenter or "", item.qa_primary or "",
+        ",".join(item.qa_support or []), item.score,
+    ] for item in plan.qa_matrix.assignments]
+    _csv_section(
+        writer, "分工矩阵",
+        ["任务", "负责人", "主要协助", "辅助协助", "匹配度"],
+        matrix_rows,
+    )
+
+    timeline_rows = [[
+        item.name,
+        item.start_date.isoformat() if item.start_date else "",
+        item.end_date.isoformat() if item.end_date else "",
+        "是" if item.is_critical else "",
+        getattr(item, "float_days", 0),
+    ] for item in (plan.timeline.tasks if plan.timeline else [])]
+    _csv_section(
+        writer, "时间线",
+        ["任务", "开始", "结束", "关键", "浮动"],
+        timeline_rows,
+    )
+
+    participant_rows = []
+    for task in plan.plan.tasks:
+        seen: set[str] = set()
+        people: list[tuple[str, str, str]] = []
+        if task.assignee_id:
+            people.append((task.assignee_id, "负责人", "内部成员"))
+        for collab in task.collaborator_ids or []:
+            people.append((collab, "协作者", "内部成员"))
+        for p in task.participants:
+            people.append((
+                p.name, p.role or "参与者",
+                "志愿者 / 外部协作者" if p.is_volunteer else "内部成员",
+            ))
+        for v in plan.volunteer_pool or []:
+            if v.task_id == task.id and v.status == "已确认":
+                people.append((v.name, "志愿者", "志愿者 / 外部协作者"))
+        for name, role, typ in people:
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            participant_rows.append([
+                f"{task.id} {task.name}", name, role, "", typ,
+            ])
+    _csv_section(
+        writer, "参与清单",
+        ["任务", "参与者", "角色", "投入工时", "类型"],
+        participant_rows,
+    )
+
+    review_rows = []
+    for task in plan.plan.tasks:
+        dev = (
+            round(task.actual_hours - task.estimated_hours, 2)
+            if task.actual_hours is not None else ""
+        )
+        review_rows.append([
+            task.name, task.estimated_hours,
+            task.actual_hours if task.actual_hours is not None else "",
+            dev,
+            task.actual_end_date.isoformat() if task.actual_end_date else "",
+        ])
+    _csv_section(
+        writer, "复盘",
+        ["任务", "计划工时", "实际工时", "偏差", "实际完成"],
+        review_rows,
+    )
     return output.getvalue()
 
 
@@ -58,11 +164,18 @@ def plan_to_ics(plan: FullPlan) -> str:
     if plan.timeline and plan.timeline.tasks:
         for item in plan.timeline.tasks:
             timeline_map[item.task_id] = item
+    def esc_text(value: str) -> str:
+        return value.replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    cal_name = esc_text(plan.input.course.name or "协作分工方案")
     lines = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
         "PRODID:-//Collaboration Planner//CN",
         "CALSCALE:GREGORIAN",
+        "METHOD:PUBLISH",
+        f"X-WR-CALNAME:{cal_name}",
+        "X-WR-TIMEZONE:Asia/Shanghai",
     ]
     for task in plan.plan.tasks:
         start = task.start_date
@@ -75,21 +188,46 @@ def plan_to_ics(plan: FullPlan) -> str:
         if start is None or end is None:
             continue
         uid = f"{task.id}@collaboration-planner"
-        summary = task.name.replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,")
+        summary = esc_text(task.name)
         description = (
             f"{task.estimated_hours}h · {task.assignee_id or '未分配'}"
-            .replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,")
         )
+        description = esc_text(description)
         lines.append("BEGIN:VEVENT")
         lines.append(f"UID:{uid}")
-        lines.append(f"DTSTAMP:{start.strftime('%Y%m%d')}T000000Z")
+        lines.append(f"DTSTAMP:{stamp}")
         lines.append(f"DTSTART;VALUE=DATE:{start.strftime('%Y%m%d')}")
         lines.append(f"DTEND;VALUE=DATE:{(end + timedelta(days=1)).strftime('%Y%m%d')}")
         lines.append(f"SUMMARY:{summary}")
         lines.append(f"DESCRIPTION:{description}")
         lines.append("END:VEVENT")
     lines.append("END:VCALENDAR")
-    return "\r\n".join(lines) + "\r\n"
+    raw = "\r\n".join(lines) + "\r\n"
+    # RFC 5545 折行：超过 75 字节的行用 CRLF+空格续行；加 UTF-8 BOM，
+    # 保证 Windows/Outlook 能识别含中文的 ICS。
+    def fold(line: str) -> list[str]:
+        if len(line.encode("utf-8")) <= 75:
+            return [line]
+        out: list[str] = []
+        cur = ""
+        cur_bytes = 0
+        for ch in line:
+            ch_bytes = len(ch.encode("utf-8"))
+            limit = 74 if out else 75
+            if cur_bytes + ch_bytes > limit:
+                out.append(cur)
+                cur = " "
+                cur_bytes = 1
+            cur += ch
+            cur_bytes += ch_bytes
+        if cur:
+            out.append(cur)
+        return out
+
+    folded: list[str] = []
+    for line in raw.split("\r\n"):
+        folded.extend(fold(line))
+    return "\ufeff" + "\r\n".join(folded) + "\r\n"
 
 
 def _xlsx_bytes(sheets: list[tuple[str, list[list]]]) -> bytes:
@@ -221,19 +359,35 @@ def plan_to_excel(plan: FullPlan) -> bytes:
 
     participant_rows = [["任务", "参与者", "角色", "投入工时", "类型"]]
     for task in plan.plan.tasks:
+        seen: set[str] = set()
+        people: list[tuple[str, str, str]] = []
+        if task.assignee_id:
+            people.append((task.assignee_id, "负责人", "内部成员"))
+        for collab in task.collaborator_ids or []:
+            people.append((collab, "协作者", "内部成员"))
         for p in task.participants:
-            participant_rows.append([
-                f"{task.id} {task.name}", p.name, p.role,
-                p.contribution_hours,
+            people.append((
+                p.name, p.role or "参与者",
                 "志愿者 / 外部协作者" if p.is_volunteer else "内部成员",
+            ))
+        for v in plan.volunteer_pool or []:
+            if v.task_id == task.id and v.status == "已确认":
+                people.append((v.name, "志愿者", "志愿者 / 外部协作者"))
+        for name, role, typ in people:
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            participant_rows.append([
+                f"{task.id} {task.name}", name, role, "", typ,
             ])
     sheets.append(("参与清单", participant_rows))
 
     review_rows = [["任务", "计划工时", "实际工时", "偏差", "实际完成"]]
     for task in plan.plan.tasks:
-        if task.actual_hours is None:
-            continue
-        dev = round(task.actual_hours - task.estimated_hours, 2)
+        dev = (
+            round(task.actual_hours - task.estimated_hours, 2)
+            if task.actual_hours is not None else ""
+        )
         review_rows.append([
             task.name, task.estimated_hours, task.actual_hours, dev,
             task.actual_end_date.isoformat() if task.actual_end_date else "",
