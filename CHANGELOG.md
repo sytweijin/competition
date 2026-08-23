@@ -419,7 +419,137 @@
 
 **涉及文件：** `app/services/plan_io.py`、`tests/test_plan_io.py`、`docs/功能验证清单.md`、`CHANGELOG.md`。
 
-**同步修改（2026-08-22）：** `/api/health`、`/api/ready` 版本号 6.9 → 7.0；`docs/多模态落地改造清单.md` 勾选视频理解/移动端适配/演示脚本；`docs/功能验证清单.md` 增加录像旁听、窄屏、语音记忆、主页面自动同步、成员级进度、工时累加、完成日期归属、成员状态语义、回退警告、备注去重、交付物查看、志愿者汇报、团队总览、大型项目对齐、兜底提示、总览入口、代确认、下拉归一、HTML 缓存、照片保留、答辩完整记忆、答辩语音/拍照输入、语音需求理解、提示文案、需求区 UI、多文件上传与导出补全验证记录；全量测试 291 → 293 → 295 → 297 → 299 → 300 → 301 → 303 → 304 → 305 → 306 → 307 → 308 → 309 → 310 → 311 → 314 passed；`app.js?v=` 内容哈希更新（3ebd7446 → b76c30b0 → cb210587 → 07f4bba5 → 426dc9c0 → 444b84ee → 3dfc830a → 1df0ce5e → 30f8f38b → b85bd944 → a3ef6b30 → 1a07dc4f → 9f53303a → 24913ac6 → 6a2a103c → ddb17b3f → e58551bc → e5815907 → 7dd00da3 → 7e49694d → e6a984ec → e50d1a9e → 4809de87）。
+### 体验优化（P2）
+
+#### 36. 启动时打印本机/手机（局域网）访问地址
+
+1. **问题：** 手机端操作需要知道电脑的局域网地址，用户每次都要自己查 IP；且 `APP_HOST` 默认 127.0.0.1 时手机根本访问不到，没有提示。
+2. **修改前：** `python -m app.main` 启动后只有 uvicorn 日志，无访问地址提示。
+3. **修改后：** 启动前打印访问横幅：本机地址；`APP_HOST` 允许外访（0.0.0.0/局域网 IP）时列出探测到的局域网 IPv4 地址（socket 探测，无外部依赖）并提示"同一 WiFi/放行防火墙/鉴权默认关闭建议配置 APP_ADMIN_TOKEN"；否则明确提示如何开启 `APP_HOST=0.0.0.0`。
+4. **为什么这样改：** 手机端入口的第一步就是"知道访问哪个地址"，把地址和开启方法直接打在终端最省事。
+5. **收益：** ① 启动即见手机访问地址；② 默认配置下也有明确的开启指引；③ 无新增依赖。
+
+**涉及文件：** `app/main.py`、`docs/功能验证清单.md`、`CHANGELOG.md`。
+
+### 关键缺陷（P0）
+
+#### 37. 移动端汇报链接/只读链接无法自动复制
+
+1. **问题：** 手机通过 `http://局域网IP:8000` 访问时非安全上下文，`navigator.clipboard` 不存在，代码把复制失败静默吞掉却仍提示"已复制"，链接无法自动复制。
+2. **修改前：** `generateReportLink` 与 `shareCurrentPlan` 都 `try{await navigator.clipboard.writeText(url)}catch(e){}` 然后固定提示"已复制"。
+3. **修改后：** 新增 `copyText`（优先 clipboard API，失败降级 `execCommand('copy')` 隐藏 textarea 方案，返回是否成功）；两处改为按结果提示：成功"已复制"，失败提示"请从弹窗中复制"并弹出包含链接的 `prompt` 供手动长按复制。
+4. **为什么这样改：** 移动端 LAN 访问是常态，复制必须有降级；提示必须与实际结果一致，不能谎报成功。
+5. **收益：** ① 手机生成汇报链接/只读链接可自动复制（或明确手动复制）；② 不再出现"提示已复制但实际没复制"。
+
+**涉及文件：** `app/web/static/app.js`、`app/web/static/participants.js`、`app/web/templates/index.html`、`docs/功能验证清单.md`、`CHANGELOG.md`。
+
+### 体验优化（P2）
+
+#### 38. 非安全上下文（http 局域网）下录音/录像/取景框提示明确
+
+1. **问题：** 手机通过 `http://局域网IP` 访问时是非安全上下文，MediaRecorder/getUserMedia 不可用：录音、答辩录像、摄像头取景框全部失效，但提示语笼统（"浏览器不支持"），用户不知道为什么手机不能用语音。
+2. **修改前：** 三处统一提示"当前浏览器不支持录音/录像/摄像头"。
+3. **修改后：** 检测 `window.isSecureContext === false` 时提示"当前为非安全上下文（http），手机端无法录音/录像；请改用 HTTPS 或 localhost 访问"；取景框提示"已切换到系统相机/选图"（拍照经 `capture` 属性仍可用）。
+4. **为什么这样改：** 浏览器安全策略限制，功能本身没问题——把原因讲清楚，用户才知道要上 HTTPS（Dev Tunnel/隧道/VPS）而不是换浏览器。
+5. **收益：** ① 手机端语音失效时提示原因与解法；② 拍照回退为系统相机仍可用，提示如实。
+
+**涉及文件：** `app/web/static/app.js`、`app/web/templates/index.html`、`docs/功能验证清单.md`、`CHANGELOG.md`。
+
+### 体验优化（P2）
+
+#### 39. 自动 HTTPS：自签名证书 + 8443 监听，手机语音/录像零配置可用
+
+1. **问题：** 手机用 `http://局域网IP` 访问时是非安全上下文，录音/录像/取景框不可用；让用户自己去配 HTTPS 不实用。
+2. **修改前：** 只监听 HTTP；提示"请改用 HTTPS 或 localhost"。
+3. **修改后：** 应用启动时自动生成自签名证书（缓存于 `memory/ssl/`，已 gitignore），并在 `APP_HTTPS_PORT`（默认 8443）后台线程监听 HTTPS；横幅手机地址只显示 https（含语音/录像/摄像头，首次证书警告点「继续」），本机仍显示 http://127.0.0.1；证书生成失败或端口被占用时静默跳过、不影响 HTTP；pytest 环境不启动。
+4. **为什么这样改：** 手机要语音/录像必须安全上下文；自签名证书是局域网内零配置的可行方案，浏览器首次警告是安全规则无法绕过，但"点一次继续"远好于让用户配置证书。
+5. **收益：** ① 手机直接开 `https://IP:8443` 即可用语音/录像（Chrome/Edge）；② HTTP 保留，localhost 桌面不受影响；③ 无需任何配置。
+
+**涉及文件：** `app/config.py`、`app/main.py`、`.gitignore`、`docs/功能验证清单.md`、`CHANGELOG.md`。
+
+### 关键缺陷（P0）
+
+#### 40. 链接"只能复制第一次"：改为弹窗内点击复制（每次均为新手势）
+
+1. **问题：** 手机连续生成多个汇报链接时，第二次复制粘贴的仍是第一次的链接。
+2. **排查：** CDP 复现确认 JS 每次传给剪贴板的是不同新链接（两次 URL 不同）——根因是移动端浏览器安全规则：异步 fetch 之后自动执行 `navigator.clipboard.writeText` 时用户手势已过期，第二次写入被浏览器静默忽略（代码以为成功，剪贴板仍是旧内容）。这是平台限制，代码无法在"无手势"时保证写入。
+3. **修改前：** 生成后自动 `copyText(url)`，失败才弹 prompt。
+4. **修改后：** 生成链接后弹出"链接已生成"弹窗（含可选中链接文字 + 「复制链接」按钮 + 「完成」），**点击复制按钮时才执行复制（每次都是新的用户手势，100% 可靠）**；打开弹窗时仍自动尝试一次（成功则按钮显示"已复制 ✓"）。汇报链接与只读分享链接统一走该弹窗。
+5. **收益：** ① 连续生成多个链接，每次点复制都写入当前链接（CDP 实测两次 URL 不同且与弹窗一致）；② 手机端有可长按复制的备选；③ 提示与行为一致。
+
+**涉及文件：** `app/web/static/app.js`、`app/web/static/participants.js`、`app/web/static/style.css`、`app/web/templates/index.html`、`docs/功能验证清单.md`、`CHANGELOG.md`。
+
+### 关键缺陷（P0）
+
+#### 41. 排期资源日历手机端乱码与挤压
+
+1. **问题：** 手机打开排期资源页：日期显示成 `00:00:010T00:00:011T…` 乱码、列被压成一团。
+2. **排查：** 后端 `resource_calendar` 的 `as_date` 用 `isinstance(value, date)` 判断——`datetime` 是 `date` 的子类，时间线里的 datetime（`2026-09-09T00:00:00`）被当成"已是 date"直接返回，导致 days 全是带时间戳的字符串，前端 `slice(5)` 切出乱码；同时不可用日期匹配也因此失效。另有测试把带时间戳的 days 当预期，固化了该 bug。
+3. **修改前：** days = ["2026-09-09T00:00:00", …]；前端直接 `d.slice(5)`；`.cal-row` 无强制最小宽，手机挤压。
+4. **修改后：** ① 后端 `as_date` 先判 `datetime` 转 `.date()`，days 恒为纯日期；② 前端日期显示/汇总统一 `String(d).slice(0,10)` 加固；③ `.cal-row` 设 `min-width:720px; width:max-content`、`.cal-cells` `min-width:max-content`，容器横向滚动（`-webkit-overflow-scrolling:touch`），首列"成员/日期" sticky 固定；④ 更新被 bug 固化的测试断言。
+5. **收益：** ① 手机端日期干净可读（实测 "09-08"…），日历 720px 横向滑动不挤压；② 不可用日期红条纹恢复正常匹配；③ 首列固定方便对照成员。
+
+**涉及文件：** `app/services/project_service.py`、`app/web/static/participants.js`、`app/web/static/style.css`、`app/web/templates/index.html`、`tests/test_project_service.py`、`docs/功能验证清单.md`、`CHANGELOG.md`。
+
+### 健壮性提升（P1）
+
+#### 42. 移动端全视图巡检 + 清理重复 renderResultTab 死代码
+
+1. **问题：** 用户担心还有没发现的移动端渲染问题；巡检发现 app.js 存在两个 `renderResultTab` 定义（约 14KB 死代码被后定义覆盖），旧版按单标签渲染 workload/members/reminders 等，新版按角色合并到 team/collaboration/review，重复定义既浪费又误导排查。
+2. **修改前：** 两个同名函数（后定义生效）；按旧标签调用会被静默回落到 tasks。
+3. **修改后：** 删除第一个死代码定义（保留其后续辅助函数 resultSection/renderAssignmentMatrix/renderMemberEditor/renderDefensePanel 等），只保留角色化新版；用 CDP 在 390×844 对 三角色全部真实标签（manager: tasks/schedule/team/collaboration/review/report/interview；member: mine/schedule/collaboration；reviewer: evaluation/report/interview）+ 汇报页/总览/抽屉/会议弹窗 巡检：无文档级溢出、无控制台报错、无 undefined/NaN 异常文本；甘特图 792px 在自身 overflow-x:auto 容器内横向滚动属正常。
+4. **为什么这样改：** 巡检的价值在于把"没查过的地方"系统性过一遍并消除隐患；重复定义是维护与排查的地雷。
+5. **收益：** ① 三角色全部视图移动端渲染通过；② 死代码移除（-8KB），后续维护不再混淆；③ 巡检脚本可复跑。
+
+**涉及文件：** `app/web/static/app.js`、`app/web/templates/index.html`、`docs/功能验证清单.md`、`CHANGELOG.md`。
+
+### 健壮性提升（P1）
+
+#### 43. 资源日历手机端"往右划不动"：外层包装套娃滚动容器拦截触摸手势
+
+1. **问题：** 用户在手机上打开大型项目"骨干认领/排期资源"页，资源日历只在手机屏幕宽度内显示开头几天，向右横滑后面的日期直接"被吞掉"，划不动；切换浏览器依旧。
+2. **排查：** 用 CDP 在 390×844 实测并逐步消融定位：① 内层 `.resource-calendar` 内容宽 720px、可视 332px、maxScroll=388，**程序化滚动完全正常**，右侧日期（09-14 之后）都能显示；② 真正的问题在渲染结构套了两层滚动容器——`renderResultTab` 写入 `<div id="resourceCalendarContent" class="resource-calendar">`，`renderResourceCalendarHtml` 又在里面包了一个 `<div class="resource-calendar">`。外层 `#resourceCalendarContent` 因此也带 `overflow-x:auto`，但它的子级只有 332px，自己没有滚动量；移动端横向手势被这个无内容可滚的外层拦截，内层 720px 的日历永远收不到滑动。style.css 缓存参数旧值（5.76.2）是第二层因素，此前所有 CSS 修复手机端从未加载。
+3. **修改前：** `#resourceCalendarContent` 带 `class="resource-calendar"`（`overflow-x:auto`），内部再渲染一个 `.resource-calendar`，两层滚动容器嵌套。
+4. **修改后：** ① `app.js` 中 `#resourceCalendarContent` 去掉 `resource-calendar` 类，外层不再参与滚动，内层 `.resource-calendar` 成为唯一横向滚动容器；② `style.css?v=` 改为内容哈希 `d03cd0a5`、`app.js?v=` 改为 `2b6c685e`（均按文件内容重算），与 participants.js 同一套机制；③ `.cal-member-head span` 增加 `min-width:0; overflow-wrap:anywhere`，成员格头部窄屏可换行不再截断；④ AGENTS.md 静态资源缓存条款把 `style.css` 纳入内容哈希规则，避免再次漏算。
+5. **为什么这样改：** 嵌套滚动容器的触摸事件归属由浏览器决定——手势落在外层"能滚但没内容"的容器上时，内层收不到滑动，这是移动端套娃滚动容器的典型问题；去掉外层滚动类后，720px 内容直接暴露给唯一滚动容器，横滑即生效。缓存参数改内容哈希则保证手机必然拉到新代码。
+6. **收益：** ① 手机端资源日历可横滑查看全部日期（实测 scrollLeft 300px 后 09-14/15/16 正常显示）；② 成员格头部窄屏可读；③ 缓存规则统一，后续改动不再出现"改了没效果"。
+
+**涉及文件：** `app/web/templates/index.html`、`app/web/static/app.js`、`app/web/static/style.css`、`AGENTS.md`、`docs/功能验证清单.md`、`CHANGELOG.md`。
+
+### 体验优化（P2）
+
+#### 44. 企业微信群机器人通知接入：提醒与成员汇报自动推送
+
+1. **问题：** 应用已有通知体系（提醒列表"发送提醒通知"按钮 + 成员汇报状态变更），但 `notifier.py` 给 webhook 发的是自定义 JSON（`{project, event/reminders}`），企业微信群机器人只接受 `msgtype=markdown/text` 的消息格式，配置 webhook 后会被企业微信直接拒绝，通知一直无法真正到达群聊。
+2. **修改前：** payload 为 `{"project": ..., "event": ...}` 或 `{"project": ..., "reminders": [...]}`，企业微信返回 `errmsg: invalid message`。
+3. **修改后：** `notifier.py` 重构为 `_post_webhook(content)`——统一按企业微信 markdown 格式发送：提醒通知以 `**项目名** 待处理提醒 N 条` 开头、逐条 `> 标题：详情`；成员汇报/状态变更以 `**项目名**\n> 事件` 发送，均带推送时间。`.env` 配置 `APP_NOTIFY_WEBHOOK`（已被 gitignore，密钥不进仓库），`.env.example` 补充说明。
+4. **为什么这样改：** webhook 是群机器人的唯一入口，消息格式是硬性契约；把格式适配下沉到 notifier 后，前端 `/api/notify`、成员汇报 `notify_event` 等所有调用点无需改动即自动生效。
+5. **收益：** ① 企业微信实测返回 `errcode:0`，提醒与成员汇报可直达群聊；② 消息带项目名便于多项目区分；③ 密钥只存本机 `.env`，不随仓库泄漏。
+
+**涉及文件：** `app/services/notifier.py`、`.env`（本地）、`.env.example`、`tests/test_notifier.py`、`docs/功能验证清单.md`、`CHANGELOG.md`。
+
+#### 45. 通知多平台兼容：企业微信 / 飞书 / 钉钉自动适配
+
+1. **问题：** 通知仅按企业微信 `msgtype=markdown` 契约发送，飞书/钉钉群机器人无法直接使用；用户询问飞书是否兼容。
+2. **修改前：** 单一 `APP_NOTIFY_WEBHOOK`，统一发企业微信格式，不支持多群同时推送。
+3. **修改后：** ① 新增 `APP_NOTIFY_WEBHOOKS`（逗号/分号分隔多地址），与 `APP_NOTIFY_WEBHOOK` 兼容并存、去重合并；② `_webhook_kind(url)` 按域名识别平台：企业微信（qyapi.weixin.qq.com）→ markdown、飞书（open.feishu.cn）→ interactive 卡片、钉钉（oapi.dingtalk.com）→ markdown、未知 → 纯文本；③ 多地址逐个推送，返回 `sent/enabled/bodies/errors` 汇总，单群失败不影响其余群。
+4. **为什么这样改：** 每个平台消息格式是硬性契约（企业微信 msgtype、飞书 msg_type/card、钉钉 msgtype），按 URL 域名自动选型比让用户手动指定格式更不易配错；多地址支持可同时通知多个群。
+5. **收益：** ① 同一套配置可推企业微信 + 飞书 + 钉钉任意组合；② 飞书以卡片呈现，信息更结构化；③ 测试覆盖三平台 payload 与多地址并发（4 passed，全量 316 passed）。
+
+**涉及文件：** `app/services/notifier.py`、`app/config.py`、`.env.example`、`tests/test_notifier.py`、`CHANGELOG.md`。
+
+#### 46. 通知推送时间错 7 小时：notifier 用了系统时区而非应用时区
+
+1. **问题：** 群里收到的消息显示"1:01"，实际是"8:01"——推送时间少了 7 小时。
+2. **排查：** notifier 里用 `datetime.now()` 取时间，它返回服务器系统时区时间；项目应用时区由 `APP_TZ`（默认东八区 +8）定义，启动时 `configure_timezone()` 依赖 Linux `time.tzset()`，在 Windows/部分部署环境不生效，导致系统时区与 `APP_TZ` 不一致。
+3. **修改前：** `datetime.now().strftime('%H:%M')`（notifier.py 两处）。
+4. **修改后：** 改为 `from app.config import now as app_now`，使用 `app_now().strftime('%H:%M')`——`app_now()` 内部按 `APP_TZ` 固定偏移计算，不依赖系统时区。
+5. **为什么这样改：** 与排期边界（`today()`/`now()`）同一套时区口径，通知时间与页面"今天"保持一致；系统时区是什么不再影响推送时间。
+6. **收益：** ① 推送时间恒为应用配置时区（默认东八区）；② 与项目其他时间逻辑统一；③ 不依赖部署环境是否支持 tzset。
+
+**涉及文件：** `app/services/notifier.py`、`CHANGELOG.md`。
+
+**同步修改（2026-08-22）：** `/api/health`、`/api/ready` 版本号 6.9 → 7.0；`docs/多模态落地改造清单.md` 勾选视频理解/移动端适配/演示脚本；`docs/功能验证清单.md` 增加录像旁听、窄屏、语音记忆、主页面自动同步、成员级进度、工时累加、完成日期归属、成员状态语义、回退警告、备注去重、交付物查看、志愿者汇报、团队总览、大型项目对齐、兜底提示、总览入口、代确认、下拉归一、HTML 缓存、照片保留、答辩完整记忆、答辩语音/拍照输入、语音需求理解、提示文案、需求区 UI、多文件上传、导出补全、手机访问地址提示、移动端链接复制、非安全上下文提示、自动 HTTPS、弹窗复制、资源日历移动端与全视图巡检、企业微信群机器人通知接入、通知多平台兼容（企业微信/飞书/钉钉）；全量测试 291 → 293 → 295 → 297 → 299 → 300 → 301 → 303 → 304 → 305 → 306 → 307 → 308 → 309 → 310 → 311 → 314 → 316 passed；`app.js?v=` 内容哈希更新（3ebd7446 → b76c30b0 → cb210587 → 07f4bba5 → 426dc9c0 → 444b84ee → 3dfc830a → 1df0ce5e → 30f8f38b → b85bd944 → a3ef6b30 → 1a07dc4f → 9f53303a → 24913ac6 → 6a2a103c → ddb17b3f → e58551bc → e5815907 → 7dd00da3 → 7e49694d → e6a984ec → e50d1a9e → 4809de87 → 250419d0 → b2b607b7 → 493ea1d5 → cd952134 → 2b6c685e），`participants.js?v=` 42eb73fd → 3fffd76d → 799d7271 → 6e0ede94，`style.css?v=` 5.76.2 → bb8e686c → d03cd0a5（本次条目 43 后重算）。
 
 ---
 ## v6.9 —— 多模态需求输入：语音描述与拍照直接生成任务（2026-08-21）

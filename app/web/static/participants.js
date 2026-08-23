@@ -108,9 +108,10 @@ function renderResourceCalendarHtml(data){
     : '';
   function dayCells(load,unavailable){
     return data.days.map(function(d){
+      var day=String(d).slice(0,10);
       var h=load&&load[d]?load[d]:0;
       var cls='cal-cell'+(h>0?' has-load':'')+((unavailable||[]).indexOf(d)>=0?' unavailable':'');
-      return '<div class="'+cls+'" title="'+d+'">'+(h>0?Math.round(h*10)/10:'')+'</div>';
+      return '<div class="'+cls+'" title="'+day+'">'+(h>0?Math.round(h*10)/10:'')+'</div>';
     }).join('');
   }
   function memberCard(name,m){
@@ -128,8 +129,8 @@ function renderResourceCalendarHtml(data){
       : '';
     return '<div class="cal-member cal-volunteer"><div class="cal-member-head"><strong>'+esc(name)+'</strong><span>志愿者 / 外部协作者</span></div><div class="cal-row"><div class="cal-name">'+esc(name)+'</div><div class="cal-cells">'+dayCells(v.daily_load,[])+'</div></div>'+tasks+'</div>';
   }).join('');
-  var header='<div class="cal-row cal-header-row"><div class="cal-name">成员 / 日期</div><div class="cal-cells">'+data.days.map(function(d){return '<div class="cal-cell cal-day">'+d.slice(5)+'</div>'}).join('')+'</div></div>';
-  return '<div class="resource-calendar">'+warnings+'<div class="cal-summary"><span>'+data.days.length+' 天 · '+data.days[0]+' → '+data.days[data.days.length-1]+'</span></div>'+header+memberHtml+(volHtml?'<h3 class="cal-vol-title">志愿者 / 外部协作者</h3>'+volHtml:'')+'</div>';
+  var header='<div class="cal-row cal-header-row"><div class="cal-name">成员 / 日期</div><div class="cal-cells">'+data.days.map(function(d){return '<div class="cal-cell cal-day">'+String(d).slice(0,10).slice(5)+'</div>'}).join('')+'</div></div>';
+  return '<div class="resource-calendar">'+warnings+'<div class="cal-summary"><span>'+data.days.length+' 天 · '+String(data.days[0]).slice(0,10)+' → '+String(data.days[data.days.length-1]).slice(0,10)+'</span></div>'+header+memberHtml+(volHtml?'<h3 class="cal-vol-title">志愿者 / 外部协作者</h3>'+volHtml:'')+'</div>';
 }
 
 async function shareCurrentPlan(){
@@ -140,8 +141,7 @@ async function shareCurrentPlan(){
     }
     var data=await jsonRequest('/api/share',{filename:state.lastSavedFilename});
     var url=location.origin+'/?share='+data.token;
-    try{await navigator.clipboard.writeText(url)}catch(e){}
-    showNotice('只读链接已复制：'+url,'success');
+    showLinkModal('只读分享链接已生成',url);
   }catch(e){showNotice(e.message,'error')}
 }
 

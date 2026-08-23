@@ -60,9 +60,12 @@ ASCEND_OMNI_TIMEOUT = int(os.getenv("ASCEND_OMNI_TIMEOUT", "300"))
 # App
 APP_HOST = os.getenv("APP_HOST", "127.0.0.1")
 APP_PORT = int(os.getenv("APP_PORT", "8000"))
+APP_HTTPS = os.getenv("APP_HTTPS", "1") not in ("0", "false", "False", "no")
+APP_HTTPS_PORT = int(os.getenv("APP_HTTPS_PORT", "8443"))
 APP_ADMIN_TOKEN = os.getenv("APP_ADMIN_TOKEN", "")
 APP_USERS_JSON = os.getenv("APP_USERS_JSON", "")
 APP_NOTIFY_WEBHOOK = os.getenv("APP_NOTIFY_WEBHOOK", "")
+APP_NOTIFY_WEBHOOKS = os.getenv("APP_NOTIFY_WEBHOOKS", "")
 
 # 持久化：local 使用本地 memory 目录；s3 启用 S3 兼容对象存储同步
 STORAGE_BACKEND = os.getenv("STORAGE_BACKEND", "local").lower()

@@ -37,6 +37,7 @@ memory/*.jsonl
 memory/audit/
 memory/versions/
 memory/attachments/
+memory/ssl/
 editor_sdk.log
 _diag_voice.*
 

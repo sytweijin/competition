@@ -307,14 +307,14 @@ def test_resource_calendar_prefers_timeline_dates():
     cal = resource_calendar(plan)
     # 窗口来自时间线 8-07~8-10，而不是任务自身的 8-05~8-08
     assert cal["days"] == [
-        "2026-08-07T00:00:00",
-        "2026-08-08T00:00:00",
-        "2026-08-09T00:00:00",
-        "2026-08-10T00:00:00",
+        "2026-08-07",
+        "2026-08-08",
+        "2026-08-09",
+        "2026-08-10",
     ]
-    assert cal["members"]["小文"]["daily_load"]["2026-08-07T00:00:00"] == 4.0
+    assert cal["members"]["小文"]["daily_load"]["2026-08-07"] == 4.0
     # 周末不产生负载
-    assert cal["members"]["小文"]["daily_load"]["2026-08-08T00:00:00"] == 0.0
-    assert cal["members"]["小文"]["daily_load"]["2026-08-09T00:00:00"] == 0.0
-    assert cal["members"]["小文"]["daily_load"]["2026-08-10T00:00:00"] == 4.0
+    assert cal["members"]["小文"]["daily_load"]["2026-08-08"] == 0.0
+    assert cal["members"]["小文"]["daily_load"]["2026-08-09"] == 0.0
+    assert cal["members"]["小文"]["daily_load"]["2026-08-10"] == 4.0
     assert not any("不可用日期" in w for w in cal["warnings"])

@@ -2955,6 +2955,7 @@ th {
 
 .resource-calendar {
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .cal-summary {
@@ -2974,22 +2975,31 @@ th {
   display: flex;
   align-items: stretch;
   min-width: 720px;
+  width: max-content;
 }
 
 .cal-name {
   flex: 0 0 140px;
+  position: sticky;
+  left: 0;
+  z-index: 2;
   display: flex;
   align-items: center;
   padding: 8px 10px;
   font-size: 12px;
   font-weight: 700;
   color: var(--text-secondary);
+  background: var(--card);
+}
+
+.cal-header-row .cal-name {
+  background: var(--bg-subtle);
 }
 
 .cal-cells {
   flex: 1;
   display: flex;
-  min-width: 0;
+  min-width: max-content;
 }
 
 .cal-cell {
@@ -3050,6 +3060,9 @@ th {
 .cal-member-head span {
   font-size: 11px;
   color: var(--muted);
+  min-width: 0;
+  text-align: right;
+  overflow-wrap: anywhere;
 }
 
 .cal-tasks {
@@ -4325,6 +4338,33 @@ th {
 
 .meeting-visual:empty {
   display: none;
+}
+
+.link-modal-body {
+  padding: 16px 20px 0;
+}
+
+.link-modal-body input {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 13px;
+  padding: 9px 10px;
+  border: 1.5px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+}
+
+.link-modal-hint {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.link-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 14px 20px 18px;
 }
 
 .modal-backdrop {

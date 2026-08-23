@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from app.agents.timeline import sync_task_dates
 from app.agents.validation import (
@@ -648,6 +648,8 @@ def resource_calendar(plan: FullPlan) -> dict:
     active_tasks = [t for t in plan.plan.tasks if t.status != "completed"]
 
     def as_date(value):
+        if isinstance(value, datetime):
+            return value.date()
         if isinstance(value, date):
             return value
         return date.fromisoformat(str(value)[:10])
