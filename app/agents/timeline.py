@@ -116,6 +116,36 @@ def _end_from_workdays(start: date, workdays: int,
     return cur
 
 
+def _as_date(value):
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
+
+
+def _workday_offset(anchor: date, target: date) -> int:
+    """anchor 到 target 的纯工作日偏移：anchor 当天为 0，向未来为正、向过去为负。"""
+    count = 0
+    cur = anchor
+    if target > anchor:
+        while cur < target:
+            cur += timedelta(days=1)
+            if not _is_weekend(cur):
+                count += 1
+    elif target < anchor:
+        while cur > target:
+            cur -= timedelta(days=1)
+            if not _is_weekend(cur):
+                count -= 1
+    return count
+
+
 def sync_task_dates(plan, timeline):
     """把 Timeline 算出的每项任务起止日期回填到 plan.tasks。
 
@@ -127,15 +157,18 @@ def sync_task_dates(plan, timeline):
     if not timeline or not timeline.tasks:
         return plan
     by_id = {t.task_id: t for t in timeline.tasks}
-    tasks = [
-        t.model_copy(update={
+    tasks = []
+    for t in plan.tasks:
+        # 用户手动设置的起止日期是硬约束：保留用户日期，不回填覆盖
+        if getattr(t, "dates_manual", False):
+            tasks.append(t)
+            continue
+        tasks.append(t.model_copy(update={
             "start_date": by_id[t.id].start_date.date()
             if t.id in by_id else t.start_date,
             "end_date": by_id[t.id].end_date.date()
             if t.id in by_id else t.end_date,
-        })
-        for t in plan.tasks
-    ]
+        }))
     return plan.model_copy(update={"tasks": tasks})
 
 
@@ -162,6 +195,17 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
         deadline_date = date.fromisoformat(deadline)
         tasks = plan.tasks
         assignments = assignments or {}
+
+        # 用户手动设置的起止日期（dates_manual=True 且日期完整）作为硬约束：
+        # 该任务固定在用户窗口上，其余任务围绕它重新排期。
+        fixed_dates: dict[str, tuple[date, date]] = {}
+        for t in tasks:
+            if not getattr(t, "dates_manual", False):
+                continue
+            s = _as_date(t.start_date)
+            e = _as_date(t.end_date)
+            if s and e:
+                fixed_dates[t.id] = (s, e)
 
         # 构建成员名→每日可用工时的映射
         member_daily: dict[str, float] = {}
@@ -278,15 +322,29 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
             # 转成 half-day 单位并向上取整，最少 1 个 half-day（即 0.5 天）
             durations[t.id] = max(1, math.ceil(days_needed * 2))
 
+        # 固定任务锚点：最早固定开始日作为偏移零点
+        fixed_es: dict[str, int] = {}
+        fixed_ef: dict[str, int] = {}
+        anchor = min(s for s, _ in fixed_dates.values()) if fixed_dates else None
+        if anchor is not None:
+            for tid, (s, e) in fixed_dates.items():
+                fixed_es[tid] = _workday_offset(anchor, s) * 2
+                fixed_ef[tid] = _workday_offset(anchor, e) * 2 + 1
+
         # Forward pass: 最早开始/结束（单位：half-day）
+        # 固定任务窗口作为硬约束；其前置任务若排不进窗口前，会产生负浮动并提示。
         es: dict[str, int] = {}
         ef: dict[str, int] = {}
         for tid in topo_order:
-            if not predecessors[tid]:
+            if tid in fixed_es:
+                es[tid] = fixed_es[tid]
+                ef[tid] = fixed_ef[tid]
+            elif not predecessors[tid]:
                 es[tid] = 0
             else:
                 es[tid] = max(ef[p] for p in predecessors[tid])
-            ef[tid] = es[tid] + durations[tid]
+            if tid not in fixed_es:
+                ef[tid] = es[tid] + durations[tid]
 
         project_half_days = max(ef.values()) if ef else 0
 
@@ -294,11 +352,15 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
         lf: dict[str, int] = {}
         ls: dict[str, int] = {}
         for tid in reversed(topo_order):
-            if not successors[tid]:
+            if tid in fixed_es:
+                lf[tid] = fixed_ef[tid]
+                ls[tid] = fixed_es[tid]
+            elif not successors[tid]:
                 lf[tid] = project_half_days
             else:
                 lf[tid] = min(ls[s] for s in successors[tid])
-            ls[tid] = lf[tid] - durations[tid]
+            if tid not in fixed_es:
+                ls[tid] = lf[tid] - durations[tid]
 
         # 关键路径: float == 0
         float_time = {tid: ls[tid] - es[tid] for tid in task_map}
@@ -307,16 +369,23 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
         # half-day → 自然天数（向上取整，0.5 天算 1 天工期）
         project_days = math.ceil(project_half_days / 2)
 
-        # 从截止日倒推起始日；若早于今天则改为从今天正排（避免排到过去）
-        # P3-1: 使用工作日计算，跳过周末
+        # 基准日：有固定任务时以最早固定开始日为锚点；否则从截止日倒推，
+        # 若倒推早于今天则从今天正排（避免排到过去）。
+        risk = ""
         today = config.today()
-        deadline_base = _previous_workday(deadline_date)
-        ideal_start = _sub_work_days(deadline_base, project_days - 1)
-        forced_forward = ideal_start < today
-        if forced_forward:
-            start_base = _next_workday(today)
+        forced_forward = False
+        if anchor is not None:
+            start_base = anchor
+            if anchor < today:
+                risk = "（存在任务指定日期早于今天，请确认）"
         else:
-            start_base = ideal_start
+            deadline_base = _previous_workday(deadline_date)
+            ideal_start = _sub_work_days(deadline_base, project_days - 1)
+            forced_forward = ideal_start < today
+            if forced_forward:
+                start_base = _next_workday(today)
+            else:
+                start_base = ideal_start
 
         timeline_tasks: list[TimelineTask] = []
         for tid in topo_order:
@@ -329,19 +398,29 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
             # P3-1: half-day 偏移转工作日偏移，跳过周末和负责人不可用日
             # 不使用 round：Python 的银行家舍入会把 0.5 舍到 0、1.5 舍到 2，
             # 造成半天任务忽前忽后。日期取所在工作日，精确位置另行输出给甘特图。
-            work_offset = es[tid] // 2
-            raw_start = _add_work_days(start_base, work_offset, task_skip_dates)
-            s_date = datetime.combine(
-                _normalize_workday(raw_start, task_skip_dates),
-                datetime.min.time(),
-            )
-            # 任务工期按“可用工作日”累计：窗口内的不可用日/周末被跳过，
-            # end 是累计够 workdays 个工作日的最后一天。
-            work_span = math.ceil(durations[tid] / 2)
-            e_date = datetime.combine(
-                _end_from_workdays(s_date.date(), work_span, task_skip_dates),
-                datetime.min.time(),
-            )
+            if tid in fixed_dates:
+                # 固定任务：直接采用用户指定窗口
+                s_date = datetime.combine(fixed_dates[tid][0], datetime.min.time())
+                e_date = datetime.combine(fixed_dates[tid][1], datetime.min.time())
+            else:
+                work_offset = es[tid] // 2
+                if work_offset >= 0:
+                    raw_start = _add_work_days(
+                        start_base, work_offset, task_skip_dates)
+                else:
+                    raw_start = _sub_work_days(
+                        start_base, -work_offset, task_skip_dates)
+                s_date = datetime.combine(
+                    _normalize_workday(raw_start, task_skip_dates),
+                    datetime.min.time(),
+                )
+                # 任务工期按“可用工作日”累计：窗口内的不可用日/周末被跳过，
+                # end 是累计够 workdays 个工作日的最后一天。
+                work_span = math.ceil(durations[tid] / 2)
+                e_date = datetime.combine(
+                    _end_from_workdays(s_date.date(), work_span, task_skip_dates),
+                    datetime.min.time(),
+                )
             timeline_tasks.append(TimelineTask(
                 task_id=tid,
                 name=t.name,
@@ -355,7 +434,6 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
                 status=t.status,
             ))
 
-        risk = ""
         if broken_cycle:
             risk = "（检测到依赖环，已断环继续排期，结果仅供参考）"
         if project_days <= 0:

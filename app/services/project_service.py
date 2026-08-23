@@ -350,7 +350,7 @@ def update_task_participants(
 def apply_manual_assignment(req: ManualAssignmentRequest) -> FullPlan:
     """保存负责人/协作者并重算排期；Web 与未来对话指令共用。"""
     from app.agents.scoring import _work_from, skill_score
-    from app.agents.timeline import TimelineAgent
+    from app.agents.timeline import TimelineAgent, sync_task_dates
 
     fp = req.plan
     member_map = {
@@ -899,6 +899,8 @@ def recompute_plan(plan: FullPlan) -> FullPlan:
         assignments=assignments,
         members=members,
     )
+    # 回填新排期到任务日期；用户手动设置的日期（dates_manual）保持不变
+    plan_with_dates = sync_task_dates(plan.plan, timeline)
 
     # 状态切换是高频操作，只用本地结果更新报告，避免等待 LLM。
     risk_note = Coordinator._build_risk_note(
@@ -913,7 +915,7 @@ def recompute_plan(plan: FullPlan) -> FullPlan:
 
     return FullPlan(
         input=plan.input,
-        plan=plan.plan,
+        plan=plan_with_dates,
         timeline=timeline,
         qa_matrix=qa_matrix,
         report=report,

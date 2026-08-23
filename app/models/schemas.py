@@ -165,6 +165,10 @@ class SubTask(BaseModel):
     custom_stage: Optional[str] = None
     start_date: Optional[date] = None
     end_date: Optional[date] = None
+    dates_manual: bool = Field(
+        default=False,
+        description="起止日期是否为用户手动设置；为 True 时排期重算会将该任务固定在用户日期上",
+    )
     assignee_id: Optional[str] = None
     collaborator_ids: list[str] = Field(default_factory=list)
     suggested_people: int = Field(default=1, ge=1, le=10,

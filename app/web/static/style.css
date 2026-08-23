@@ -2358,6 +2358,30 @@ a {
   font-weight: 600;
 }
 
+.plan-date-inputs {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin-left: 2px;
+}
+
+.plan-date-inputs label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.plan-date-inputs input {
+  max-width: 132px;
+  font-size: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  padding: 4px 6px;
+  background: var(--card);
+}
+
 .final-card.status-completed {
   opacity: .55;
   background: var(--success-soft);

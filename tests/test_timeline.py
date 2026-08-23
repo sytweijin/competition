@@ -78,6 +78,62 @@ def test_parallel_task_has_float():
     assert short.float_days > 0
 
 
+@patch('app.config.today', return_value=_FakeDate.today())
+@patch('app.agents.timeline.date', new=_FakeDate)
+def test_fixed_manual_date_respected(mock_today):
+    """用户手动设置日期（dates_manual=True）的任务固定在指定窗口上。"""
+    plan = _plan([
+        SubTask(
+            id="T1", name="固定任务", estimated_hours=4,
+            start_date=_dt.date(2026, 7, 16),
+            end_date=_dt.date(2026, 7, 17),
+            dates_manual=True,
+        ),
+    ])
+    out = TimelineAgent().run(plan, "2026-07-20")
+    t1 = next(t for t in out.tasks if t.task_id == "T1")
+    assert t1.start_date == datetime(2026, 7, 16)
+    assert t1.end_date == datetime(2026, 7, 17)
+
+
+@patch('app.config.today', return_value=_FakeDate.today())
+@patch('app.agents.timeline.date', new=_FakeDate)
+def test_fixed_date_anchors_chain(mock_today):
+    """T2 手动固定窗口，前置 T1 排在其前、后继 T3 排在其后。"""
+    plan = _plan([
+        SubTask(id="T1", name="前置", estimated_hours=4, dependencies=[]),
+        SubTask(
+            id="T2", name="固定", estimated_hours=4, dependencies=["T1"],
+            start_date=_dt.date(2026, 7, 20),
+            end_date=_dt.date(2026, 7, 21),
+            dates_manual=True,
+        ),
+        SubTask(id="T3", name="后继", estimated_hours=4, dependencies=["T2"]),
+    ])
+    out = TimelineAgent().run(plan, "2026-07-24")
+    by_id = {t.task_id: t for t in out.tasks}
+    assert by_id["T2"].start_date == datetime(2026, 7, 20)
+    assert by_id["T2"].end_date == datetime(2026, 7, 21)
+    # T1 必须在 T2 开始之前（依赖约束），T3 必须不早于 T2 结束
+    assert by_id["T1"].end_date.date() <= by_id["T2"].start_date.date()
+    assert by_id["T3"].start_date.date() >= by_id["T2"].end_date.date()
+
+
+@patch('app.config.today', return_value=_FakeDate.today())
+@patch('app.agents.timeline.date', new=_FakeDate)
+def test_non_manual_date_ignored(mock_today):
+    """未标记 dates_manual 的任务日期不参与固定，行为与旧版一致（倒推）。"""
+    plan = _plan([
+        SubTask(
+            id="T1", name="A", estimated_hours=8,
+            start_date=_dt.date(2026, 7, 1),
+            end_date=_dt.date(2026, 7, 2),
+        ),
+    ])
+    out = TimelineAgent().run(plan, "2026-07-20")
+    assert out.tasks[0].end_date == datetime(2026, 7, 20)
+
+
 def test_parallel_paths_have_one_explicit_critical_path():
     """两条并行路径汇合时，较长分支及汇合点构成关键路径。"""
     plan = _plan([
