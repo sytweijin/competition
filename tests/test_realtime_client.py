@@ -511,12 +511,14 @@ async def test_realtime_chat_tts_failure_retries_text_only(monkeypatch):
 async def test_voice_chat_route_returns_reply(monkeypatch):
     """直接语音对话：录音作为音频消息发给 MiniCPM-o，返回文本回答。"""
     import app.web.routers.realtime as realtime_router
+    import app.services.omni_chat as omni_chat
     import app.services.media_analysis as media
 
     monkeypatch.setattr(
         realtime_router, "MAP_REALTIME_API_KEY", "test-key")
     monkeypatch.setattr(
         realtime_router, "ASCEND_OMNI_WS_URL", "")
+    monkeypatch.setattr(omni_chat, "ASCEND_OMNI_WS_URL", "")
     captured = {}
 
     def fake_decode(content):
@@ -557,12 +559,14 @@ async def test_voice_chat_route_returns_reply(monkeypatch):
 async def test_voice_chat_tts_failure_retries_text_only(monkeypatch):
     """语音对话开启 TTS 失败时降级纯文本重试。"""
     import app.web.routers.realtime as realtime_router
+    import app.services.omni_chat as omni_chat
     import app.services.media_analysis as media
 
     monkeypatch.setattr(
         realtime_router, "MAP_REALTIME_API_KEY", "test-key")
     monkeypatch.setattr(
         realtime_router, "ASCEND_OMNI_WS_URL", "")
+    monkeypatch.setattr(omni_chat, "ASCEND_OMNI_WS_URL", "")
     calls = []
 
     def fake_decode(content):
@@ -603,11 +607,13 @@ async def test_voice_chat_carries_history_and_returns_transcript(monkeypatch):
     import app.services.media_analysis as media
     import app.services.realtime_client as rt
     import app.web.routers.realtime as realtime_router
+    import app.services.omni_chat as omni_chat
 
     monkeypatch.setattr(
         realtime_router, "MAP_REALTIME_API_KEY", "test-key")
     monkeypatch.setattr(
         realtime_router, "ASCEND_OMNI_WS_URL", "")
+    monkeypatch.setattr(omni_chat, "ASCEND_OMNI_WS_URL", "")
     call_count = [0]
     captured = {}
 
@@ -684,11 +690,13 @@ async def test_voice_requirement_returns_understanding(monkeypatch):
     import app.services.media_analysis as media
     import app.services.realtime_client as rt
     import app.web.routers.realtime as realtime_router
+    import app.services.omni_chat as omni_chat
 
     monkeypatch.setattr(
         realtime_router, "MAP_REALTIME_API_KEY", "test-key")
     monkeypatch.setattr(
         realtime_router, "ASCEND_OMNI_WS_URL", "")
+    monkeypatch.setattr(omni_chat, "ASCEND_OMNI_WS_URL", "")
     call_count = [0]
 
     def fake_decode(content):
@@ -1044,11 +1052,13 @@ async def test_interview_turn_carries_history(monkeypatch):
     import app.services.media_analysis as media
     import app.services.realtime_client as rt
     import app.web.routers.realtime as realtime_router
+    import app.services.omni_chat as omni_chat
 
     monkeypatch.setattr(
         realtime_router, "MAP_REALTIME_API_KEY", "test-key")
     monkeypatch.setattr(
         realtime_router, "ASCEND_OMNI_WS_URL", "")
+    monkeypatch.setattr(omni_chat, "ASCEND_OMNI_WS_URL", "")
     call_count = [0]
     captured = {}
 
