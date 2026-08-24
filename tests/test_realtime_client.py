@@ -735,8 +735,19 @@ def test_looks_like_canned_reply_rejects_assistant_smalltalk():
     assert _looks_like_canned_reply("我是由阿里云开发的语言模型。")
     assert _looks_like_canned_reply(
         "Hello! It seems like you might have made a mistake.")
+    assert _looks_like_canned_reply(
+        "Hi! It's great to connect with you. I'm here to help.")
     assert not _looks_like_canned_reply("下周一完成调研")
     assert not _looks_like_canned_reply("你好，我叫小红")
+
+
+def test_looks_like_garbage_flags_question_runs():
+    from app.services.omni_chat import _looks_like_garbage
+
+    assert _looks_like_garbage("????????????????")
+    assert _looks_like_garbage("会议要点：????????????")
+    assert not _looks_like_garbage("会议要点：今天下午三点召开项目组会。")
+    assert not _looks_like_garbage("还有问题吗？请随时告诉我。")
 
 
 def test_flatten_history_skips_placeholder():
@@ -785,6 +796,54 @@ async def test_understand_audio_local_merges_chunks(monkeypatch):
     assert "分片处理的结果" in merge_msg
     assert "原始任务要求" in merge_msg
     assert "请整理会议" in merge_msg
+
+
+@pytest.mark.asyncio
+async def test_understand_audio_local_retries_garbage(monkeypatch):
+    """本地 A3 输出全问号时自动重试，成功则返回正常结果。"""
+    import base64
+    import app.services.omni_chat as omni
+    import app.services.realtime_client as rt
+
+    calls = []
+
+    async def fake_chat(self, **kwargs):
+        calls.append(1)
+        if len(calls) < 3:
+            return RealtimeChatResult(text="??????")
+        return RealtimeChatResult(text="会议要点正常")
+
+    monkeypatch.setattr(
+        omni, "ASCEND_OMNI_WS_URL", "ws://127.0.0.1:28099/backend")
+    monkeypatch.setattr(rt.RealtimeClient, "chat", fake_chat)
+
+    b64 = base64.b64encode(b"\x00\x00\x00\x00" * (5 * 16000)).decode("ascii")
+    result = await omni.understand_audio(
+        b64, "", "请整理会议", max_new_tokens=128)
+    assert result.text == "会议要点正常"
+    assert len(calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_understand_audio_local_garbage_falls_back_to_error(monkeypatch):
+    """全部重试仍为问号时抛友好错误，绝不把问号返回给界面。"""
+    import base64
+    import app.services.omni_chat as omni
+    import app.services.realtime_client as rt
+
+    async def fake_chat(self, **kwargs):
+        return RealtimeChatResult(text="??????")
+
+    monkeypatch.setattr(
+        omni, "ASCEND_OMNI_WS_URL", "ws://127.0.0.1:28099/backend")
+    monkeypatch.setattr(rt.RealtimeClient, "chat", fake_chat)
+
+    b64 = base64.b64encode(b"\x00\x00\x00\x00" * (5 * 16000)).decode("ascii")
+    with pytest.raises(omni.RealtimeError) as exc_info:
+        await omni.understand_audio(
+            b64, "", "请整理会议", max_new_tokens=128)
+    assert "?" not in str(exc_info.value)
+    assert "重试" in str(exc_info.value)
 
 
 @pytest.mark.asyncio

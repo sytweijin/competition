@@ -502,7 +502,7 @@ async def realtime_interview_turn(
     if audio:
         audio_b64 = base64.b64encode(audio).decode("utf-8")
         from app.services.omni_chat import (
-            _AUDIO_CHUNK_SECONDS, understand_audio)
+            _AUDIO_CHUNK_SECONDS, _looks_like_garbage, understand_audio)
 
         try:
             result = await understand_audio(
@@ -544,7 +544,7 @@ async def realtime_interview_turn(
         try:
             obs = await asyncio.to_thread(
                 _run_realtime_media_chat, parts, 300, False, 120)
-            if obs and obs.strip():
+            if obs and obs.strip() and not _looks_like_garbage(obs):
                 observations.append(f"第 {index} 帧：{obs.strip()}")
         except Exception:
             continue
@@ -661,7 +661,8 @@ async def realtime_performance(file: UploadFile = File(...)):
         extract_audio_pcm16k,
         extract_video_frames,
     )
-    from app.services.omni_chat import _AUDIO_CHUNK_SECONDS
+    from app.services.omni_chat import (
+        _AUDIO_CHUNK_SECONDS, _looks_like_garbage)
 
     raw = await file.read(MAX_PERFORMANCE_SIZE + 1)
     if len(raw) > MAX_PERFORMANCE_SIZE:
@@ -686,7 +687,7 @@ async def realtime_performance(file: UploadFile = File(...)):
         try:
             obs = await asyncio.to_thread(
                 _run_realtime_media_chat, parts, 300, False, 120)
-            if obs and obs.strip():
+            if obs and obs.strip() and not _looks_like_garbage(obs):
                 observations.append(
                     f"第 {index} 帧：{obs.strip()}")
         except Exception as exc:
@@ -804,7 +805,8 @@ async def realtime_chat(req: RealtimeChatRequest):
 
     # 本地 A3 偶发输出全 "?" 乱码（长上下文时更常见）：去掉摊平的长上下文，
     # 用裸问句重试一次，提升抽屉对话的演示稳定性。
-    from app.services.omni_chat import _looks_like_garbage
+    from app.services.omni_chat import (
+        _looks_like_canned_reply, _looks_like_garbage)
     if (ASCEND_OMNI_WS_URL and _looks_like_garbage(result.text)
             and bare_last_content is not None):
         try:
@@ -817,6 +819,12 @@ async def realtime_chat(req: RealtimeChatRequest):
             )
         except RealtimeError:
             pass
+    if ASCEND_OMNI_WS_URL and (_looks_like_garbage(result.text)
+                               or _looks_like_canned_reply(result.text)):
+        raise HTTPException(
+            status_code=502,
+            detail="本地昇腾模型输出异常（未能理解该问题）：已切换通用模型回答",
+        )
 
     model = "llama.cpp-omni" if ASCEND_OMNI_WS_URL else MAP_REALTIME_MODEL
     backend = "local" if ASCEND_OMNI_WS_URL else "map"

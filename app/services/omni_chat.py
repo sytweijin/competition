@@ -77,6 +77,14 @@ _CANNED_REPLY_PATTERNS = (
 _EN_CANNED_PATTERNS = (
     "hello!",
     "hi there",
+    "hi! it's",
+    "it's great to connect",
+    "nice to meet you",
+    "glad to meet you",
+    "glad to help",
+    "i'm here to help",
+    "i'd be happy to help",
+    "how can i assist",
     "how can i help",
     "it seems like you",
     "as an ai",
@@ -214,6 +222,13 @@ def _ensure_local_audio_within_limit(audio_b64: str) -> None:
         )
 
 
+_GARBAGE_FALLBACK_MSG = (
+    "本地昇腾模型未能理解这段音频（输出异常）：已自动重试仍未成功，"
+    "请再试一次；多次失败可改用云端后端"
+    "（临时注释 .env 中 ASCEND_OMNI_WS_URL）"
+)
+
+
 def _flatten_history(history: list[dict] | None) -> str:
     """把多轮历史摊平成一段文本。
 
@@ -249,12 +264,15 @@ def _looks_like_canned_reply(text: str) -> bool:
 
 
 def _looks_like_garbage(text: str) -> bool:
-    """判断模型输出是否为 "?" 占主体的乱码（A3 偶发，长上下文时更常见）。"""
+    """判断模型输出是否为 "?" 乱码（A3 偶发，长上下文时更常见）。
+
+    判定标准：问号 ≥5 个（即使夹杂少量中文）或问号占比 >30%。
+    """
     text = (text or "").strip()
     if not text:
         return True
     q = text.count("?") + text.count("？")
-    return q / max(1, len(text)) > 0.3
+    return q >= 5 or q / max(1, len(text)) > 0.3
 
 
 def _clean_transcript(text: str) -> str:
@@ -279,27 +297,36 @@ def _clean_transcript(text: str) -> str:
 async def transcribe_audio(audio_b64: str, timeout: float = 120) -> str:
     """把音频转成文字（本地与云端统一走该路径时，仅云端用于理解前置）。
 
-    本地长音频先按 20 秒分片、每片独立会话转写（绕开 whisper 越界崩溃），
-    再拼接各片清洗后的文本。
+    本地长音频先按 12 秒分片、每片独立会话转写（绕开 whisper 越界崩溃），
+    再拼接各片清洗后的文本；输出为 "?" 乱码时自动重试，避免把问号给用户。
     """
     if ASCEND_OMNI_WS_URL:
         _ensure_local_audio_within_limit(audio_b64)
-    parts: list[str] = []
-    for chunk in _split_pcm_b64(audio_b64):
-        result = await RealtimeClient().chat(
-            messages=[{"role": "user", "content": [
-                {"type": "text", "text": TRANSCRIBE_INSTRUCTION},
-                {"type": "audio", "data": chunk},
-            ]}],
-            max_new_tokens=1024,
-            omni_mode=True,
-            tts_enabled=False,
-            timeout=timeout,
-        )
-        cleaned = _clean_transcript(result.text or "")
-        if cleaned:
-            parts.append(cleaned)
-    return "\n".join(parts)
+    chunks = _split_pcm_b64(audio_b64)
+    for _attempt in range(3):
+        parts: list[str] = []
+        for chunk in chunks:
+            try:
+                result = await RealtimeClient().chat(
+                    messages=[{"role": "user", "content": [
+                        {"type": "text", "text": TRANSCRIBE_INSTRUCTION},
+                        {"type": "audio", "data": chunk},
+                    ]}],
+                    max_new_tokens=1024,
+                    omni_mode=True,
+                    tts_enabled=False,
+                    timeout=timeout,
+                )
+            except RealtimeError:
+                continue
+            cleaned = _clean_transcript(result.text or "")
+            if cleaned:
+                parts.append(cleaned)
+        text = "\n".join(parts)
+        if text and not (_looks_like_garbage(text)
+                         or _looks_like_canned_reply(text)):
+            return text
+    raise RealtimeError(_GARBAGE_FALLBACK_MSG, "parse_error")
 
 
 async def _merge_text_groups(
@@ -354,6 +381,9 @@ async def understand_audio(
     history 为可选的多轮上下文（[{role, content}, ...]）：本地会拼在音频消息
     之前；云端会拼在转写文本之前，让"边听边答"也能记住前面的对话。
     云端返回的结果会带上转写文本（result.transcript），供调用方存入历史。
+
+    本地路径带"问号守卫"：模型输出 "?" 乱码时自动重试（最多 3 次），
+    仍失败则抛友好错误，绝不把问号串返回给界面。
     """
     client = RealtimeClient()
     history = list(history or [])
@@ -361,76 +391,17 @@ async def understand_audio(
         _ensure_local_audio_within_limit(audio_b64)
         chunks = _split_pcm_b64(audio_b64)
         history_text = _flatten_history(history)
-        context = instruction
-        if history_text:
-            context += (
-                "\n\n【历史对话】\n" + history_text
-                + "\n\n【当前】请结合上面的历史与当前语音，直接给出回答。"
-            )
-        if len(chunks) == 1:
-            return await client.chat(
-                messages=[{"role": "user", "content": [
-                    {"type": "text", "text": context},
-                    {"type": "audio", "data": chunks[0]},
-                ]}],
-                system_prompt=system_prompt,
-                max_new_tokens=max_new_tokens,
-                omni_mode=True,
-                tts_enabled=tts_enabled,
-                timeout=timeout,
-            )
-        # 长音频分片：每片独立会话（避免 whisper 越界崩溃），
-        # 再分层合并（每层每组 ≤3 段，避免单次合并提示过长导致乱码）。
-        # 分片与中间合并用小 token 预算（只产出简明片段），
-        # 最终合并才用调用方预算，避免 50 token/s 下每片生成过长。
-        chunk_budget = min(max_new_tokens, 128)
-        merge_budget = min(max_new_tokens, 256)
-        partials: list[str] = []
-        for chunk in chunks:
+        for _attempt in range(3):
             try:
-                partial = await client.chat(
-                    messages=[{"role": "user", "content": [
-                        {"type": "text", "text": instruction},
-                        {"type": "audio", "data": chunk},
-                    ]}],
-                    system_prompt=system_prompt,
-                    max_new_tokens=chunk_budget,
-                    omni_mode=True,
-                    tts_enabled=False,
-                    timeout=timeout,
-                )
-                if (partial.text or "").strip():
-                    cleaned_partial = partial.text.strip()
-                    # 过滤劣化分片：A3 偶发输出 "?"、客套/模板回复，
-                    # 混进合并链会带崩最终结果（实测 17 片时必现）。
-                    if ("?" in cleaned_partial[:20]
-                            or _looks_like_canned_reply(cleaned_partial)):
-                        continue
-                    partials.append(cleaned_partial)
+                result = await _understand_audio_local(
+                    client, chunks, history_text, instruction, system_prompt,
+                    max_new_tokens, timeout, tts_enabled)
             except RealtimeError:
                 continue
-        if not partials:
-            raise RealtimeError("音频分片处理未返回有效内容", "parse_error")
-        texts = partials
-        while len(texts) > 1:
-            groups = [
-                texts[i:i + 3] for i in range(0, len(texts), 3)
-            ]
-            texts = await _merge_text_groups(
-                groups, instruction, client,
-                merge_budget, timeout, system_prompt)
-        merge_prompt = texts[0]
-        if history_text:
-            merge_prompt += "\n\n【历史对话】\n" + history_text
-            return await client.chat(
-                messages=[{"role": "user", "content": merge_prompt}],
-                system_prompt=system_prompt,
-                max_new_tokens=max_new_tokens,
-                omni_mode=False,
-                tts_enabled=tts_enabled,
-                timeout=timeout,
-            )
-        return RealtimeChatResult(text=merge_prompt)
+            if not (_looks_like_garbage(result.text)
+                    or _looks_like_canned_reply(result.text)):
+                return result
+        raise RealtimeError(_GARBAGE_FALLBACK_MSG, "parse_error")
     transcript = await transcribe_audio(audio_b64, timeout)
     if not transcript:
         raise RealtimeError("未能识别语音内容", "parse_error")
@@ -450,3 +421,90 @@ async def understand_audio(
     )
     result.transcript = transcript
     return result
+
+
+async def _understand_audio_local(
+    client: RealtimeClient,
+    chunks: list[str],
+    history_text: str,
+    instruction: str,
+    system_prompt: str | None,
+    max_new_tokens: int,
+    timeout: float,
+    tts_enabled: bool,
+) -> RealtimeChatResult:
+    """本地昇腾路径：单段直听 / 长音频分片 + 分层合并。"""
+    if len(chunks) == 1:
+        context = instruction
+        if history_text:
+            context += (
+                "\n\n【历史对话】\n" + history_text
+                + "\n\n【当前】请结合上面的历史与当前语音，直接给出回答。"
+            )
+        return await client.chat(
+            messages=[{"role": "user", "content": [
+                {"type": "text", "text": context},
+                {"type": "audio", "data": chunks[0]},
+            ]}],
+            system_prompt=system_prompt,
+            max_new_tokens=max_new_tokens,
+            omni_mode=True,
+            tts_enabled=tts_enabled,
+            timeout=timeout,
+        )
+    # 长音频分片：每片独立会话（避免 whisper 越界崩溃），
+    # 再分层合并（每层每组 ≤3 段，避免单次合并提示过长导致乱码）。
+    # 分片与中间合并用小 token 预算（只产出简明片段），
+    # 最终合并才用调用方预算，避免 50 token/s 下每片生成过长。
+    chunk_budget = min(max_new_tokens, 128)
+    merge_budget = min(max_new_tokens, 256)
+    partials: list[str] = []
+    for chunk in chunks:
+        try:
+            partial = await client.chat(
+                messages=[{"role": "user", "content": [
+                    {"type": "text", "text": instruction},
+                    {"type": "audio", "data": chunk},
+                ]}],
+                system_prompt=system_prompt,
+                max_new_tokens=chunk_budget,
+                omni_mode=True,
+                tts_enabled=False,
+                timeout=timeout,
+            )
+            if (partial.text or "").strip():
+                cleaned_partial = partial.text.strip()
+                # 过滤劣化分片：A3 偶发输出 "?"、客套/模板回复，
+                # 混进合并链会带崩最终结果（实测 17 片时必现）。
+                if ("?" in cleaned_partial[:20]
+                        or _looks_like_canned_reply(cleaned_partial)):
+                    continue
+                partials.append(cleaned_partial)
+        except RealtimeError:
+            continue
+    if not partials:
+        raise RealtimeError(
+            "音频分片处理未返回有效内容（本地昇腾未听懂该音频，"
+            "请重试或改用云端后端）",
+            "parse_error",
+        )
+    texts = partials
+    while len(texts) > 1:
+        groups = [
+            texts[i:i + 3] for i in range(0, len(texts), 3)
+        ]
+        texts = await _merge_text_groups(
+            groups, instruction, client,
+            merge_budget, timeout, system_prompt)
+    merge_prompt = texts[0]
+    if history_text:
+        merge_prompt += "\n\n【历史对话】\n" + history_text
+        return await client.chat(
+            messages=[{"role": "user", "content": merge_prompt}],
+            system_prompt=system_prompt,
+            max_new_tokens=max_new_tokens,
+            omni_mode=False,
+            tts_enabled=tts_enabled,
+            timeout=timeout,
+        )
+    return RealtimeChatResult(text=merge_prompt)
