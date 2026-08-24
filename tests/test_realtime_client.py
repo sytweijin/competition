@@ -536,6 +536,39 @@ async def test_realtime_chat_tts_failure_retries_text_only(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_realtime_chat_polite_reply_not_rejected(monkeypatch):
+    """抽屉文字对话：模型回"你好，有什么可以帮您"等正常承接不应 502。"""
+    import app.web.routers.realtime as realtime_router
+    import app.services.omni_chat as omni_chat
+
+    monkeypatch.setattr(
+        realtime_router, "MAP_REALTIME_API_KEY", "test-key")
+    monkeypatch.setattr(
+        realtime_router, "ASCEND_OMNI_WS_URL",
+        "ws://127.0.0.1:28099/backend")
+    monkeypatch.setattr(
+        omni_chat, "ASCEND_OMNI_WS_URL", "ws://127.0.0.1:28099/backend")
+
+    async def fake_chat(self, **kwargs):
+        return RealtimeChatResult(text="你好！有什么问题我可以帮您解答吗？")
+
+    monkeypatch.setattr(
+        realtime_router.RealtimeClient, "chat", fake_chat)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/realtime/chat",
+            json={"message": "你好"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["reply"] == "你好！有什么问题我可以帮您解答吗？"
+
+
+@pytest.mark.asyncio
 async def test_voice_chat_route_returns_reply(monkeypatch):
     """直接语音对话：录音作为音频消息发给 MiniCPM-o，返回文本回答。"""
     import app.web.routers.realtime as realtime_router
@@ -581,6 +614,46 @@ async def test_voice_chat_route_returns_reply(monkeypatch):
     assert True in captured["omni_mode"]  # 音频转写/理解调用走 omni
     assert captured["tts"] == [False, False]
     assert any(captured["sys"])  # 主对话调用带系统提示词
+
+
+@pytest.mark.asyncio
+async def test_voice_chat_polite_reply_accepted_local(monkeypatch):
+    """本地语音对话：模型回客套问候是正常承接，不应被判为异常。"""
+    import app.web.routers.realtime as realtime_router
+    import app.services.omni_chat as omni_chat
+    import app.services.media_analysis as media
+
+    monkeypatch.setattr(
+        realtime_router, "MAP_REALTIME_API_KEY", "test-key")
+    monkeypatch.setattr(
+        realtime_router, "ASCEND_OMNI_WS_URL",
+        "ws://127.0.0.1:28099/backend")
+    monkeypatch.setattr(
+        omni_chat, "ASCEND_OMNI_WS_URL", "ws://127.0.0.1:28099/backend")
+
+    def fake_decode(content):
+        return b"pcm-bytes"
+
+    async def fake_chat(self, **kwargs):
+        return RealtimeChatResult(text="你好！有什么问题我可以帮您解答吗？")
+
+    monkeypatch.setattr(media, "_decode_audio_to_pcm16k", fake_decode)
+    monkeypatch.setattr(
+        realtime_router.RealtimeClient, "chat", fake_chat)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/realtime/voice-chat",
+            files={"file": ("voice.webm", b"fake-audio", "audio/webm")},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["reply"] == "你好！有什么问题我可以帮您解答吗？"
+    assert payload["backend"] == "local"
 
 
 @pytest.mark.asyncio
@@ -767,6 +840,10 @@ def test_looks_like_canned_reply_rejects_assistant_smalltalk():
         "Hi! It's great to connect with you. I'm here to help.")
     assert not _looks_like_canned_reply("下周一完成调研")
     assert not _looks_like_canned_reply("你好，我叫小红")
+    # 对话场景的正常问候承接（完整疑问句）不算客套回复
+    assert not _looks_like_canned_reply("你好！有什么问题我可以帮您解答吗？")
+    # 确认式客套（未执行指令）仍判为异常
+    assert _looks_like_canned_reply("你好，请问有什么可以帮您")
 
 
 def test_looks_like_garbage_flags_question_runs():

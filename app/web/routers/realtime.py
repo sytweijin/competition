@@ -230,6 +230,7 @@ async def realtime_voice_chat(
             max_new_tokens=MAP_REALTIME_MAX_TOKENS,
             tts_enabled=tts_enabled,
             history=history_list,
+            allow_polite=True,
         )
     except RealtimeError as exc:
         if tts_enabled:
@@ -241,6 +242,7 @@ async def realtime_voice_chat(
                     max_new_tokens=MAP_REALTIME_MAX_TOKENS,
                     tts_enabled=False,
                     history=history_list,
+                    allow_polite=True,
                 )
             except RealtimeError as retry_exc:
                 raise HTTPException(
@@ -822,8 +824,9 @@ async def realtime_chat(req: RealtimeChatRequest):
 
     # 本地 A3 偶发输出全 "?" 乱码（长上下文时更常见）：去掉摊平的长上下文，
     # 用裸问句重试一次，提升抽屉对话的演示稳定性。
-    from app.services.omni_chat import (
-        _looks_like_canned_reply, _looks_like_garbage)
+    # 文字对话场景不做"客套回复"拦截：模型回"你好，有什么可以帮您"是正常
+    # 承接，只有乱码才需要重试/报错。
+    from app.services.omni_chat import _looks_like_garbage
     if (ASCEND_OMNI_WS_URL and _looks_like_garbage(result.text)
             and bare_last_content is not None):
         try:
@@ -836,8 +839,7 @@ async def realtime_chat(req: RealtimeChatRequest):
             )
         except RealtimeError:
             pass
-    if ASCEND_OMNI_WS_URL and (_looks_like_garbage(result.text)
-                               or _looks_like_canned_reply(result.text)):
+    if ASCEND_OMNI_WS_URL and _looks_like_garbage(result.text):
         raise HTTPException(
             status_code=502,
             detail="本地昇腾模型输出异常（未能理解该问题）：已切换通用模型回答",

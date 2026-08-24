@@ -250,9 +250,13 @@ def _looks_like_canned_reply(text: str) -> bool:
     text = (text or "").strip()
     if not text:
         return True
-    if text.startswith(("你好", "您好")) and any(
-            token in text for token in ("帮", "请问", "需要")):
-        return True
+    if text.startswith(("你好", "您好")):
+        # 对话场景下"你好！有什么问题我可以帮您解答吗？"这类以完整疑问句
+        # （"吗/么"结尾）承接的问候是正常回复；只有"你好，请问有什么可以
+        # 帮您"这类确认式客套（模型未执行指令）才算异常。
+        if not text.rstrip("！!。.？? \t").endswith(("吗", "么")):
+            if any(token in text for token in ("帮", "请问", "需要")):
+                return True
     lowered = text.lower()
     if lowered.startswith(("hello", "hi there", "i'm ", "i am ",
                            "as an ai", "it seems like you", "here's")):
@@ -376,12 +380,15 @@ async def understand_audio(
     timeout: float = 180,
     tts_enabled: bool = False,
     history: list[dict] | None = None,
+    allow_polite: bool = False,
 ):
     """让模型理解一段音频：本地直接听音频，云端先转写再文字理解。
 
     history 为可选的多轮上下文（[{role, content}, ...]）：本地会拼在音频消息
     之前；云端会拼在转写文本之前，让"边听边答"也能记住前面的对话。
     云端返回的结果会带上转写文本（result.transcript），供调用方存入历史。
+    allow_polite=True 时跳过"客套回复"判定（语音对话场景：模型回
+    "你好，有什么可以帮您"是正常承接），只保留乱码守卫。
 
     本地路径带"问号守卫"：模型输出 "?" 乱码时自动重试（最多 3 次），
     仍失败则抛友好错误，绝不把问号串返回给界面。
@@ -400,7 +407,8 @@ async def understand_audio(
             except RealtimeError:
                 continue
             if not (_looks_like_garbage(result.text)
-                    or _looks_like_canned_reply(result.text)):
+                    or (_looks_like_canned_reply(result.text)
+                        and not allow_polite)):
                 return result
         raise RealtimeError(_GARBAGE_FALLBACK_MSG, "parse_error")
     transcript = await transcribe_audio(audio_b64, timeout)

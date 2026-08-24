@@ -437,6 +437,12 @@ async def project_chat(req: ChatRequest):
     if hasattr(result, "error_type"):
         tasks = req.plan.plan.tasks if req.plan else (req.draft.tasks if req.draft else [])
         total = sum(task.estimated_hours for task in tasks)
+        if not req.plan and not req.draft:
+            return {"reply": (
+                "当前模型服务暂时不可用，且尚未生成方案。"
+                "请先在首页填写项目信息并生成任务草案，"
+                "模型恢复后我就能基于同一份方案回答你的问题。"
+            )}
         preview = "；".join(
             f"{task.name}（{task.estimated_hours:g}h，建议{task.suggested_people}人）"
             for task in tasks[:8])
