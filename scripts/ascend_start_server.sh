@@ -16,4 +16,5 @@ exec ./build/bin/llama-omni-server \
     --host "$HOST" \
     --port "$PORT" \
     -c "$CTX" \
-    -ngl "$NGL"
+    -ngl "$NGL" \
+    -fa off
