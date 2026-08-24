@@ -248,6 +248,15 @@ def _looks_like_canned_reply(text: str) -> bool:
     )
 
 
+def _looks_like_garbage(text: str) -> bool:
+    """判断模型输出是否为 "?" 占主体的乱码（A3 偶发，长上下文时更常见）。"""
+    text = (text or "").strip()
+    if not text:
+        return True
+    q = text.count("?") + text.count("？")
+    return q / max(1, len(text)) > 0.3
+
+
 def _clean_transcript(text: str) -> str:
     """去掉云端转写可能附带的模型确认语/客套尾巴，只保留用户原话。"""
     text = (text or "").strip()

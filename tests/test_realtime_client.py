@@ -788,6 +788,45 @@ async def test_understand_audio_local_merges_chunks(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_realtime_chat_local_garbage_retries_with_bare_question(monkeypatch):
+    """本地 A3 输出全问号乱码时，去掉长上下文用裸问句重试一次。"""
+    import app.web.routers.realtime as realtime_router
+
+    monkeypatch.setattr(
+        realtime_router, "ASCEND_OMNI_WS_URL",
+        "ws://127.0.0.1:28099/backend")
+    calls = []
+
+    async def fake_chat(self, **kwargs):
+        calls.append(kwargs.get("messages") or [])
+        if len(calls) == 1:
+            return RealtimeChatResult(text="????????????????????")
+        return RealtimeChatResult(text="你叫小红。")
+
+    monkeypatch.setattr(
+        realtime_router.RealtimeClient, "chat", fake_chat)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        resp = await client.post("/api/realtime/chat", json={
+            "messages": [
+                {"role": "user", "content": "【当前方案快照】\n项目：测试"},
+                {"role": "assistant", "content": "好的，我已了解。"},
+                {"role": "user", "content": "我叫什么名字？"},
+            ],
+            "system_prompt": "你是协作分工助手。",
+            "max_new_tokens": 64,
+        })
+
+    assert resp.status_code == 200
+    assert resp.json()["reply"] == "你叫小红。"
+    assert len(calls) == 2
+    assert calls[1][0]["content"] == "我叫什么名字？"
+
+
+@pytest.mark.asyncio
 async def test_voice_requirement_returns_understanding(monkeypatch):
     """语音需求理解：云端转写后理解，返回需求要点而非原话。"""
     import app.services.media_analysis as media

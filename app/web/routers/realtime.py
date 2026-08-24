@@ -752,6 +752,7 @@ async def realtime_chat(req: RealtimeChatRequest):
             detail="messages 或 message 至少需要一项",
         )
 
+    bare_last_content = None
     if ASCEND_OMNI_WS_URL and len(messages) > 1:
         # 本地 A3 会忽略分条多轮消息（实测"我是小红→我叫什么名字"仍答
         # "我是助手"）；把前文摊平成单条上下文，和语音记忆同一套兼容写法。
@@ -764,6 +765,7 @@ async def realtime_chat(req: RealtimeChatRequest):
         ])
         content = last.get("content")
         if history_text and isinstance(content, str):
+            bare_last_content = content
             last = dict(last, content=(
                 f"【对话上下文】\n{history_text}\n\n"
                 f"【当前问题】\n{content}"
@@ -799,6 +801,22 @@ async def realtime_chat(req: RealtimeChatRequest):
             tts_failed = True
         else:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    # 本地 A3 偶发输出全 "?" 乱码（长上下文时更常见）：去掉摊平的长上下文，
+    # 用裸问句重试一次，提升抽屉对话的演示稳定性。
+    from app.services.omni_chat import _looks_like_garbage
+    if (ASCEND_OMNI_WS_URL and _looks_like_garbage(result.text)
+            and bare_last_content is not None):
+        try:
+            result = await client.chat(
+                messages=[{"role": "user", "content": bare_last_content}],
+                system_prompt=req.system_prompt,
+                max_new_tokens=req.max_new_tokens or MAP_REALTIME_MAX_TOKENS,
+                tts_enabled=False,
+                enable_thinking=req.enable_thinking,
+            )
+        except RealtimeError:
+            pass
 
     model = "llama.cpp-omni" if ASCEND_OMNI_WS_URL else MAP_REALTIME_MODEL
     backend = "local" if ASCEND_OMNI_WS_URL else "map"
