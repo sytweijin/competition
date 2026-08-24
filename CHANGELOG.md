@@ -295,6 +295,14 @@ JSON 拆解/答辩/知识问答）走 MiniCPM-o Realtime（本地 A3 或云端 M
 `app/web/routers/realtime.py`、`app/web/static/app.js`、
 `app/web/templates/index.html`（app.js 缓存哈希更新）、`tests/test_realtime_client.py`。
 
+**同步修改（2026-08-24 追加七 · 交付配置模板清理）：** `.env.example` 中残留
+DeepSeek/DashScope 占位配置，评审视角易被误解为使用其他模型。已改为参赛交付模板：
+① 顶部加合规说明（`APP_MODEL_MODE=minicpm` + `APP_ALLOW_EXTERNAL_MODELS=0`
+下不创建任何外部模型客户端）；② `LLM_*` 与 `APP_VISION_*/APP_ASR_*` 改为空值并
+标注"仅 legacy 开发调试模式，交付版本无需配置"；③ 保留 MiniCPM-o Realtime
+（云端/本地 A3）为参赛唯一模型通道。运行时行为不变（合规模式本来就不调用
+DeepSeek/DashScope），仅清理配置模板与文档痕迹。涉及 `.env.example`。
+
 ---
 ## v7.0 —— 视频理解：会议录像边看边听 + 多模态演示闭环（2026-08-22）
 
