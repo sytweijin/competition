@@ -22,9 +22,10 @@ MAX_PERFORMANCE_SIZE = 60 * 1024 * 1024
 
 PERFORMANCE_PROMPT = (
     "这是用户答辩练习录像的第{n}帧画面。"
-    "请分析这帧中用户的面部表情与整体状态：是否自信、自然、紧张；"
-    "眼神、表情、姿态等细节。用中文给出简短观察（2 句话以内），"
-    "如果画面中看不清人脸，请如实说明。"
+    "请只针对答辩者的神情与表现状态进行分析：是否自信、自然、紧张，"
+    "眼神是否专注、表情与姿态是否得体。"
+    "不要描述画面里的物品、背景、场景或照片内容，不要复述画面中出现的文字。"
+    "用中文给出简短观察（2 句话以内）；如果画面中看不清人脸，请如实说明。"
 )
 
 INTERVIEW_TURN_INSTRUCTION = (
@@ -124,7 +125,8 @@ async def realtime_transcribe(file: UploadFile = File(...)):
             hint += "：本地昇腾后端未连接，请确认 llama-omni-server 已启动"
         raise HTTPException(status_code=502, detail=f"{hint}（{exc}）")
     from app.services.omni_chat import _looks_like_canned_reply
-    if _looks_like_canned_reply(text):
+    from app.services.omni_chat import _looks_like_garbage
+    if _looks_like_canned_reply(text) or _looks_like_garbage(text):
         hint = "语音识别暂不可用"
         if ASCEND_OMNI_WS_URL:
             hint += ("：本地昇腾把转写指令当成了对话，未返回用户原话，"
@@ -499,6 +501,7 @@ async def realtime_interview_turn(
     reply = ""
     summary = ""
     audio_hollow = False
+    audio_error = ""
     if audio:
         audio_b64 = base64.b64encode(audio).decode("utf-8")
         from app.services.omni_chat import (
@@ -532,7 +535,10 @@ async def realtime_interview_turn(
                     f"（约 {_AUDIO_CHUNK_SECONDS} 秒）：请缩短回答，"
                     "或改用云端后端（临时注释 .env 中 ASCEND_OMNI_WS_URL）",
                 ) from exc
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
+            # 音频理解失败但录像有画面：标记空转，交给帧观察兜底，
+            # 避免"能看画面却整轮报错"。
+            audio_hollow = True
+            audio_error = str(exc)
 
     observations: list[str] = []
     for index, frame in enumerate(frames, 1):
@@ -555,7 +561,9 @@ async def realtime_interview_turn(
         )
 
     if audio_hollow and not observations:
-        hint = "评委未能听懂本次语音/视频回答（本地昇腾可能把音频当成了对话，或未捕获到内容）"
+        hint = audio_error or (
+            "评委未能听懂本次语音/视频回答"
+            "（本地昇腾可能把音频当成了对话，或未捕获到内容）")
         if ASCEND_OMNI_WS_URL:
             hint += "：请重试，或改用云端后端（临时注释 .env 中 ASCEND_OMNI_WS_URL）"
         raise HTTPException(status_code=502, detail=hint)
@@ -592,6 +600,7 @@ async def realtime_meeting(file: UploadFile = File(...)):
     tasks: list[dict] = []
     risks = ""
     text = ""
+    audio_error = ""
     if audio:
         audio_b64 = base64.b64encode(audio).decode("utf-8")
         from app.services.omni_chat import understand_audio
@@ -606,9 +615,12 @@ async def realtime_meeting(file: UploadFile = File(...)):
             text = (result.text or "").strip()
             summary, tasks, risks = _parse_meeting_text(text)
         except RealtimeError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
+            # 音频理解失败但有画面：保留错误信息，尝试仅凭画面整理；
+            # 纯录音则直接报错，避免静默返回"未能整理出要点"。
+            audio_error = str(exc)
 
     visual: list[str] = []
+    from app.services.omni_chat import _looks_like_garbage
     for index, frame in enumerate(frames, 1):
         parts = [
             {"type": "text",
@@ -619,13 +631,16 @@ async def realtime_meeting(file: UploadFile = File(...)):
         try:
             obs = await asyncio.to_thread(
                 _run_realtime_media_chat, parts, 500, False, 120)
-            if obs and obs.strip():
+            if obs and obs.strip() and not _looks_like_garbage(obs):
                 visual.append(f"第 {index} 帧：{obs.strip()}")
         except Exception:
             continue
 
-    if not audio and visual:
-        # 无声轨录屏：把画面理解交给模型再整理成结构化会议结果
+    if audio_error and not visual:
+        raise HTTPException(status_code=502, detail=audio_error)
+
+    if visual and (not audio or audio_error):
+        # 无声轨录屏 / 音频理解失败：把画面理解交给模型再整理成结构化会议结果
         try:
             result = await RealtimeClient().chat(
                 messages=[{"role": "user", "content": (
@@ -700,8 +715,10 @@ async def realtime_performance(file: UploadFile = File(...)):
     answer = ""
     if audio:
         try:
+            # 传入原始文件字节（含音轨的视频/纯音频），内部统一解码；
+            # 不能传已解码 PCM（会被当作媒体文件二次解码而必然失败）。
             answer = await asyncio.to_thread(
-                audio_to_written_answer, "answer.webm", audio)
+                audio_to_written_answer, "answer.webm", raw)
         except Exception as exc:
             answer = ""
             msg = str(exc)

@@ -202,6 +202,8 @@ def _realtime_audio_transcribe_text(filename: str, content: bytes) -> str:
     """用 MiniCPM-o Realtime 直接转写常见音频文件（长音频自动分片防崩溃）。"""
     from app.services.omni_chat import (
         _LOCAL_AUDIO_MAX_SECONDS,
+        _looks_like_canned_reply,
+        _looks_like_garbage,
         _pcm_duration_seconds,
         _split_pcm_b64,
     )
@@ -227,10 +229,13 @@ def _realtime_audio_transcribe_text(filename: str, content: bytes) -> str:
             {"type": "audio", "data": chunk},
         ]
         text = _run_realtime_media_chat(content_parts, 2000, True).strip()
-        if text:
+        if text and not (_looks_like_garbage(text)
+                         or _looks_like_canned_reply(text)):
             parts_out.append(text)
     if not parts_out:
-        raise ValueError("MiniCPM-o Realtime 未返回转写文本")
+        raise ValueError(
+            "MiniCPM-o Realtime 未返回有效转写文本"
+            "（输出乱码或把转写指令当成了对话）")
     return "\n".join(parts_out)
 
 

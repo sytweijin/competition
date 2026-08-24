@@ -52,6 +52,28 @@ def test_chat_messages_minicpm_routes_to_realtime(monkeypatch, minicpm_mode):
     assert captured["omni"] is False
 
 
+def test_chat_text_minicpm_routes_to_realtime(monkeypatch, minicpm_mode):
+    """合规模式下 chat_text（答辩问题生成）也必须走 MiniCPM-o Realtime。"""
+    import app.services.realtime_client as rt
+
+    captured = {}
+
+    async def fake_chat(self, **kwargs):
+        captured["sys"] = kwargs.get("system_prompt")
+        captured["messages"] = kwargs.get("messages")
+        captured["omni"] = kwargs.get("omni_mode")
+        return RealtimeChatResult(text="请介绍你的项目创新点。")
+
+    monkeypatch.setattr(rt.RealtimeClient, "chat", fake_chat)
+    client = LLMClient()
+    result = client.chat_text(
+        "你是答辩评委", "请生成 10-15 道答辩问题", temperature=0.6)
+    assert result == "请介绍你的项目创新点。"
+    assert "你是答辩评委" in captured["sys"]
+    assert captured["messages"][0]["content"] == "请生成 10-15 道答辩问题"
+    assert captured["omni"] is False
+
+
 def test_chat_structured_minicpm_parses_json(monkeypatch, minicpm_mode):
     import app.services.realtime_client as rt
 

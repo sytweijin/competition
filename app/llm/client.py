@@ -672,6 +672,26 @@ class LLMClient:
         if not self._enabled and self._client is None:
             return AgentError(agent="LLMClient", error_type="auth_error", message="LLM_API_KEY 未配置，跳过调用", recoverable=False)
         record_logical_llm_call()
+        if self._mode == "minicpm":
+            # 合规模式：MiniCPM-o Realtime（本地 A3 / 云端），
+            # 不创建外部模型客户端，与 chat_messages 同一路由。
+            try:
+                return self._realtime_text(
+                    system_prompt,
+                    [{"role": "user", "content": user_prompt}],
+                    temperature,
+                    LLM_MAX_TOKENS,
+                )
+            except Exception as exc:
+                err_type = _classify_error(exc)
+                logger.error("MiniCPM-o text call failed (%s): %s",
+                             err_type, exc)
+                return AgentError(
+                    agent="LLMClient",
+                    error_type=err_type,
+                    message=str(exc),
+                    recoverable=(err_type != "auth_error"),
+                )
         try:
             with physical_llm_call():
                 resp = self._client.chat.completions.create(

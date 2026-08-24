@@ -44,7 +44,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="协作分工智能体", version="5.76", lifespan=lifespan)
+app = FastAPI(title="协作分工智能体", version="7.1", lifespan=lifespan)
 request_metrics.mark_started(datetime.now(timezone.utc).isoformat())
 
 # 全局异常处理器：意外错误不暴露代码堆栈，返回 JSON 错误信息

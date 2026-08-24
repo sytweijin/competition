@@ -165,6 +165,77 @@ JSON 拆解/答辩/知识问答）走 MiniCPM-o Realtime（本地 A3 或云端 M
 实测 MiniCPM-o 文本完成 AI 任务拆解（约 15 秒、5 项任务、零兜底），
 抽屉文字/图片分析链路正常；全量测试 330 → 334 passed。
 
+**同步修改（2026-08-24 追加四 · 深度审查修复）：** 用户要求"再深入审查一遍，
+发现的 bug 在本对话修"。逐链路审代码后修复 4 处真实缺陷，新增 5 个回归用例
+（334 → 339 passed）：
+
+#### 1. 合规模式下"答辩模拟-生成问题"必然失败（P0）
+1. **问题：** `LLMClient.chat_text` 在 `APP_MODEL_MODE=minicpm` 时 `self._client` 为
+`None`，`/api/interview`（答辩模拟第一步"生成 10-15 道问题"）直接抛
+`AttributeError`，前端把错误文本当成第一个问题展示。
+2. **修改前：** `chat_text` 只处理 legacy 分支，直接 `self._client.chat.completions.create(...)`。
+3. **修改后：** 在 `chat_text` 开头加 minicpm 分支，与 `chat_messages` 一致走
+`_realtime_text`（本地 A3 / 云端 Realtime），失败时按 `_classify_error` 返回 `AgentError`。
+4. **为什么这样改：** 合规模式下不允许创建外部模型客户端，但 `chat_text` 漏掉了
+"走 MiniCPM-o" 的路由，成为唯一没接合规通道的文本入口；统一路由后行为与其余入口一致。
+5. **收益：** ① 答辩模拟在 A3/云端 MiniCPM-o 下可正常生成问题；② 新增回归用例
+`test_chat_text_minicpm_routes_to_realtime` 防止再次漏改。
+
+**涉及文件：** `app/llm/client.py`、`tests/test_llm_client_minicpm.py`。
+
+#### 2. 答辩录像"回答转写"二次解码必然失败（P1）
+1. **问题：** `realtime_performance` 把已解码的 PCM 字节再次传给
+`audio_to_written_answer`（内部会 `_decode_audio_to_pcm16k` 当作媒体文件解码），
+实测必然抛 `InvalidDataError`，`answer` 恒为空，仅剩表情分析可用。
+2. **修改前：** `audio_to_written_answer("answer.webm", audio)`（`audio` 是
+`extract_audio_pcm16k` 的产物）。
+3. **修改后：** 改为传入原始上传字节：
+`audio_to_written_answer("answer.webm", raw)`，由函数内部统一解码。
+4. **为什么这样改：** 同一份数据只能解码一次；把"已解码 PCM"当媒体文件再开一次
+`av.open` 必然失败。传入原始文件（含音轨的视频或纯音频）语义正确。
+5. **收益：** ① 答辩录像链路"表情分析 + 回答转写"两条输出都能返回；
+② 新增 `test_realtime_performance_passes_raw_file_to_written_answer`
+锁死"必须传原始字节"的约定。
+
+**涉及文件：** `app/web/routers/realtime.py`、`tests/test_realtime_client.py`。
+
+#### 3. 转写接口乱码泄露 + 文件分析转写污染（P1）
+1. **问题：** `/realtime/transcribe` 只校验客套回复，没校验 "?" 乱码；
+`_realtime_audio_transcribe_text` 逐片转写时也会把乱码/客套片拼进结果，
+用户会在输入框/需求分析里看到一串问号。
+2. **修改前：** 两处都只判断"非空"即采纳。
+3. **修改后：** ① `realtime_transcribe` 增加 `_looks_like_garbage` 校验，命中返回 502
+提示重试/换云端；② `_realtime_audio_transcribe_text` 逐片过滤乱码与客套片，
+全部无效时抛"未返回有效转写文本"，由上层走 ASR 兜底或明确报错。
+4. **为什么这样改：** 问号守卫在对话/会议链路已有，转写链路是漏网点；
+统一"宁可报错也不展示乱码"的策略。
+5. **收益：** ① 语音转写不再把 "?" 串交给用户；② 文件分析里的音频转写不再污染需求文本；
+③ 新增 `test_realtime_transcribe_garbage_returns_502`。
+
+**涉及文件：** `app/web/routers/realtime.py`、`app/services/media_analysis.py`、
+`tests/test_realtime_client.py`。
+
+#### 4. 答辩/会议音频失败时放弃已有画面（P1）＋ 表现观察提示词强化（P2）
+1. **问题：** 答辩语音/视频回合与会议旁听里，只要音频理解失败（A3 未听懂/超时），
+即便录像抽帧成功也直接 502，浪费了已有的视觉信息；另外 `PERFORMANCE_PROMPT`
+约束不足，模型会去描述照片画面而非点评答辩者神情。
+2. **修改前：** `except RealtimeError: raise HTTPException(502)`；
+`PERFORMANCE_PROMPT` 仅写"分析面部表情与整体状态"。
+3. **修改后：** ① 答辩回合音频失败时置 `audio_hollow`，帧观察成功就返回
+"📹 表现观察"结果，无帧可看才 502（保留原始错误信息）；② 会议旁听音频失败但有画面时，
+自动走"仅凭画面整理"分支，纯录音失败才 502；③ 会议帧观察丢弃乱码帧；
+④ `PERFORMANCE_PROMPT` 明确"不要描述画面里的物品/背景/场景/文字，
+只针对答辩者神情、眼神、姿态"。
+4. **为什么这样改：** 音频与视觉是两条可独立工作的模态，一条失败不应拖垮另一条；
+提示词需要把"观察对象"与"禁止内容"双向写清，模型才不会跑偏。
+5. **收益：** ① 答辩/会议演示在 A3 音频识别不稳时仍能给出画面侧结果，少一次空转报错；
+② 表现观察更聚焦答辩者状态；③ 新增两个音频失败→视觉兜底的回归用例。
+
+**涉及文件：** `app/web/routers/realtime.py`、`tests/test_realtime_client.py`。
+
+**打磨（P3）：** `app/main.py` 的 FastAPI `version` 元数据由过期值 `5.76` 对齐为 `7.1`
+（`/api/health` 早已上报 7.1），仅元数据同步，不涉及产品版本号变化。
+
 ---
 ## v7.0 —— 视频理解：会议录像边看边听 + 多模态演示闭环（2026-08-22）
 

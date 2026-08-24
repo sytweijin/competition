@@ -471,6 +471,34 @@ async def test_realtime_transcribe_error_returns_502(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_realtime_transcribe_garbage_returns_502(monkeypatch):
+    """转写接口命中 "?" 乱码时必须返回 502，绝不把问号串展示给用户。"""
+    import app.web.routers.realtime as realtime_router
+    import app.services.media_analysis as media
+
+    monkeypatch.setattr(
+        realtime_router, "MAP_REALTIME_API_KEY", "test-key")
+    monkeypatch.setattr(
+        realtime_router, "ASCEND_OMNI_WS_URL", "")
+
+    def fake_transcribe(filename, content, labeled):
+        return "????????????"
+
+    monkeypatch.setattr(media, "audio_transcribe_text", fake_transcribe)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/realtime/transcribe",
+            files={"file": ("voice.webm", b"fake-audio", "audio/webm")},
+        )
+
+    assert response.status_code == 502
+
+
+@pytest.mark.asyncio
 async def test_realtime_chat_tts_failure_retries_text_only(monkeypatch):
     """TTS 导致会话关闭时应自动降级为纯文本重试，对话不中断。"""
     import app.web.routers.realtime as realtime_router
@@ -1162,6 +1190,52 @@ async def test_realtime_performance_without_frames(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_realtime_performance_passes_raw_file_to_written_answer(monkeypatch):
+    """答辩录像的回答转写必须传入原始文件字节，而不是已解码 PCM。"""
+    import app.web.routers.realtime as realtime_router
+    import app.services.media_analysis as media
+
+    monkeypatch.setattr(
+        realtime_router, "MAP_REALTIME_API_KEY", "test-key")
+    monkeypatch.setattr(
+        realtime_router, "ASCEND_OMNI_WS_URL", "")
+    captured = {}
+
+    def fake_frames(content, max_frames):
+        return [b"JPEG1"]
+
+    def fake_audio(content):
+        return b"already-decoded-pcm"
+
+    def fake_run(parts, max_tokens, omni_mode, timeout=180):
+        return "表情自然"
+
+    def fake_written(filename, content):
+        captured["filename"] = filename
+        captured["content"] = content
+        return "我的回答内容"
+
+    monkeypatch.setattr(media, "extract_video_frames", fake_frames)
+    monkeypatch.setattr(media, "extract_audio_pcm16k", fake_audio)
+    monkeypatch.setattr(media, "_run_realtime_media_chat", fake_run)
+    monkeypatch.setattr(media, "audio_to_written_answer", fake_written)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/realtime/performance",
+            files={"file": ("answer.webm", b"fake-video", "video/webm")},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["answer"] == "我的回答内容"
+    assert captured["content"] == b"fake-video"
+
+
+@pytest.mark.asyncio
 async def test_interview_turn_parses_summary_and_reply(monkeypatch):
     """答辩直接语音对话：评委听懂音频后返回 摘要 + 点评/追问。"""
     import app.web.routers.realtime as realtime_router
@@ -1280,6 +1354,106 @@ async def test_interview_turn_hollow_reply_returns_502(monkeypatch):
 
     assert response.status_code == 502
     assert "未能听懂" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_interview_turn_audio_failure_falls_back_to_frames(monkeypatch):
+    """音频理解失败但录像有画面时，应返回帧表现观察而不是整轮 502。"""
+    import app.web.routers.realtime as realtime_router
+    import app.services.media_analysis as media
+    import app.services.omni_chat as omni_chat
+
+    monkeypatch.setattr(
+        realtime_router, "MAP_REALTIME_API_KEY", "test-key")
+    monkeypatch.setattr(
+        realtime_router, "ASCEND_OMNI_WS_URL", "")
+    monkeypatch.setattr(omni_chat, "ASCEND_OMNI_WS_URL", "")
+
+    def fake_frames(content, max_frames):
+        return [b"JPEG1", b"JPEG2"]
+
+    def fake_audio(content):
+        return b"pcm"
+
+    async def fake_chat(self, **kwargs):
+        raise RealtimeError("本地昇腾未听懂音频", "parse_error")
+
+    def fake_run(parts, max_tokens, omni_mode, timeout=180):
+        return "眼神专注，表情自然"
+
+    monkeypatch.setattr(media, "extract_video_frames", fake_frames)
+    monkeypatch.setattr(media, "extract_audio_pcm16k", fake_audio)
+    monkeypatch.setattr(
+        realtime_router.RealtimeClient, "chat", fake_chat)
+    monkeypatch.setattr(media, "_run_realtime_media_chat", fake_run)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/realtime/interview-turn",
+            files={"file": ("answer.webm", b"fake-video", "video/webm")},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "📹 表现观察" in payload["reply"]
+    assert "第 1 帧" in payload["reply"]
+    assert payload["summary"] == ""
+
+
+@pytest.mark.asyncio
+async def test_meeting_audio_failure_falls_back_to_visual(monkeypatch):
+    """会议音频理解失败但录像有画面时，应仅凭画面整理而不报错。"""
+    import app.web.routers.realtime as realtime_router
+    import app.services.media_analysis as media
+    import app.services.omni_chat as omni_chat
+
+    monkeypatch.setattr(
+        realtime_router, "MAP_REALTIME_API_KEY", "test-key")
+    monkeypatch.setattr(
+        realtime_router, "ASCEND_OMNI_WS_URL", "")
+    monkeypatch.setattr(omni_chat, "ASCEND_OMNI_WS_URL", "")
+
+    def fake_frames(content, max_frames):
+        return [b"JPEG1"]
+
+    def fake_audio(content):
+        return b"pcm"
+
+    async def fake_chat(self, **kwargs):
+        if kwargs.get("omni_mode"):
+            raise RealtimeError("转写失败", "parse_error")
+        return RealtimeChatResult(
+            text="【总结】\n画面显示讨论排期\n"
+                 "【任务】\n- 撰写报告 | 张三 | 周五\n"
+                 "【风险】\n无")
+
+    def fake_run(parts, max_tokens, omni_mode, timeout=180):
+        return "屏幕显示甘特图与排期讨论"
+
+    monkeypatch.setattr(media, "extract_video_frames", fake_frames)
+    monkeypatch.setattr(media, "extract_audio_pcm16k", fake_audio)
+    monkeypatch.setattr(
+        realtime_router.RealtimeClient, "chat", fake_chat)
+    monkeypatch.setattr(media, "_run_realtime_media_chat", fake_run)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/realtime/meeting",
+            files={"file": ("meeting.webm", b"fake-video", "video/webm")},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "画面显示讨论排期" in payload["summary"]
+    assert payload["tasks"][0]["name"] == "撰写报告"
+    assert payload["has_video"] is True
+    assert "甘特图" in payload["visual"]
 
 
 @pytest.mark.asyncio
