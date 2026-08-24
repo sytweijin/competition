@@ -178,12 +178,13 @@ class RealtimeClient:
         connect_kwargs = {
             "open_timeout": min(30, wait),
             "max_size": 8 * 1024 * 1024,
+        }
+        if self.local_ws_url:
             # 本地 llama-omni-server 推理/转写较慢时，websockets 默认 20s
             # keepalive ping 会超时并主动断开（1011），表现为"连接已关闭"；
-            # 禁用客户端 ping，由服务端自行维持连接（见昇腾部署指南 §7.2）。
-            "ping_interval": None,
-            "ping_timeout": None,
-        }
+            # 仅本地禁用客户端 ping（见昇腾部署指南 §7.2），云端保持默认。
+            connect_kwargs["ping_interval"] = None
+            connect_kwargs["ping_timeout"] = None
         if headers:
             connect_kwargs["additional_headers"] = headers
 

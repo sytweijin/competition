@@ -212,7 +212,9 @@ def _realtime_audio_transcribe_text(filename: str, content: bytes) -> str:
             "（处理时间过长）："
             f"请分段（每段 ≤{_AUDIO_CHUNK_SECONDS} 秒）上传，或改用云端后端")
     parts_out: list[str] = []
-    for chunk in _split_pcm_b64(b64):
+    chunks = (
+        _split_pcm_b64(b64) if ASCEND_OMNI_WS_URL else [b64])
+    for chunk in chunks:
         content_parts = [
             {"type": "text", "text": (
                 "这是用户的语音输入。请直接转写用户说出的原话："

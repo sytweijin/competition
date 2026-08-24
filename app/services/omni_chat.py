@@ -302,7 +302,8 @@ async def transcribe_audio(audio_b64: str, timeout: float = 120) -> str:
     """
     if ASCEND_OMNI_WS_URL:
         _ensure_local_audio_within_limit(audio_b64)
-    chunks = _split_pcm_b64(audio_b64)
+    chunks = (
+        _split_pcm_b64(audio_b64) if ASCEND_OMNI_WS_URL else [audio_b64])
     for _attempt in range(3):
         parts: list[str] = []
         for chunk in chunks:
