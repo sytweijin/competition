@@ -18,8 +18,9 @@ from openai import OpenAI
 from pydantic import BaseModel, ValidationError
 
 from app.config import (
-    LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, LLM_MAX_RETRIES, LLM_TIMEOUT,
-    LLM_PREFER_PLAIN, LLM_MAX_TOKENS, LLM_DISABLE_THINKING,
+    APP_MODEL_MODE, ASCEND_OMNI_WS_URL, LLM_API_KEY, LLM_BASE_URL,
+    LLM_DISABLE_THINKING, LLM_MAX_RETRIES, LLM_MAX_TOKENS, LLM_MODEL,
+    LLM_PREFER_PLAIN, LLM_TIMEOUT, MAP_REALTIME_API_KEY,
 )
 from app.models.schemas import AgentError
 from app.performance import (
@@ -78,16 +79,79 @@ class LLMClient:
 
     def __init__(self, model: Optional[str] = None):
         self.model = model or LLM_MODEL
-        self._enabled = bool(LLM_API_KEY)
-        self._prefer_plain = LLM_PREFER_PLAIN
-        # 禁用 SDK 隐式重试；否则应用层 12s 超时会被默认 2 次重试放大到 30s+。
-        self._client = (
-            OpenAI(
-                api_key=LLM_API_KEY, base_url=LLM_BASE_URL,
-                max_retries=0,
+        self._mode = APP_MODEL_MODE
+        if self._mode == "minicpm":
+            # 合规模式（创新应用赛道要求不得使用其他模型）：
+            # 仅调用 MiniCPM-o 4.5（本地 A3 或云端 ModelBest Realtime），
+            # 不创建任何外部模型客户端。
+            self._enabled = bool(MAP_REALTIME_API_KEY or ASCEND_OMNI_WS_URL)
+            self._prefer_plain = True
+            self._client = None
+        else:
+            self._enabled = bool(LLM_API_KEY)
+            self._prefer_plain = LLM_PREFER_PLAIN
+            # 禁用 SDK 隐式重试；否则应用层超时会被默认重试放大。
+            self._client = (
+                OpenAI(
+                    api_key=LLM_API_KEY, base_url=LLM_BASE_URL,
+                    max_retries=0,
+                )
+                if self._enabled else None
             )
-            if self._enabled else None
-        )
+
+    def _realtime_text(
+        self,
+        system_prompt: str,
+        messages: list[dict],
+        temperature: float = 0.7,
+        max_tokens: int | None = None,
+        timeout: float | None = None,
+    ) -> str:
+        """合规模式：通过 MiniCPM-o Realtime 文本接口调用（本地 A3 / 云端）。"""
+        import asyncio
+
+        from app.services.omni_chat import (
+            _flatten_history, _looks_like_canned_reply, _looks_like_garbage)
+        from app.services.realtime_client import RealtimeClient, RealtimeError
+
+        history = list(messages or [])
+        if len(history) > 1:
+            # 本地 A3 忽略分条多轮消息：摊平历史，和抽屉对话同一套兼容写法。
+            *prev, last = history
+            ctx = _flatten_history(prev)
+            content = last.get("content")
+            if ctx and isinstance(content, str):
+                history = [{"role": "user", "content": (
+                    f"【对话上下文】\n{ctx}\n\n【当前问题】\n{content}")}]
+
+        async def _call() -> str:
+            result = await RealtimeClient().chat(
+                messages=history,
+                system_prompt=system_prompt,
+                max_new_tokens=max_tokens or LLM_MAX_TOKENS,
+                omni_mode=False,
+                tts_enabled=False,
+                timeout=timeout or LLM_TIMEOUT,
+            )
+            text = (result.text or "").strip()
+            if _looks_like_garbage(text) or _looks_like_canned_reply(text):
+                raise ValueError("MiniCPM-o 输出异常（乱码/客套回复），请重试")
+            return text
+
+        try:
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                # 无运行中事件循环：直接 run。
+                return asyncio.run(_call())
+            # 已在事件循环内（异步路由直接调用）：换线程跑，避免
+            # "asyncio.run() cannot be called from a running event loop"。
+            import concurrent.futures
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                return pool.submit(asyncio.run, _call()).result()
+        except RealtimeError as exc:
+            raise ValueError(str(exc)) from exc
 
     def _vendor_options(self) -> dict:
         """仅为 DeepSeek V4 结构化业务调用补充厂商参数。"""
@@ -104,9 +168,10 @@ class LLMClient:
         max_retries: int = LLM_MAX_RETRIES,
     ) -> T | AgentError:
         """记录一次完整逻辑调用，并执行分类重试策略。"""
-        if not self._enabled and self._client is None:
+        if not self._enabled:
+            label = "MiniCPM-o" if self._mode == "minicpm" else "LLM_API_KEY"
             return AgentError(agent="LLMClient", error_type="auth_error",
-                              message="LLM_API_KEY 未配置，跳过 LLM 调用",
+                              message=f"{label} 未配置，跳过 LLM 调用",
                               recoverable=False)
         record_logical_llm_call()
         with observe_logical_llm_call() as observation:
@@ -132,6 +197,19 @@ class LLMClient:
         普通 create + 手动 JSON 提取 + model_validate_json。
         """
         observation = current_llm_observation()
+        if self._mode == "minicpm":
+            # 合规模式：MiniCPM-o 文本 → 手动 JSON 提取 + 验证，
+            # 复用现有 JSON 修复逻辑，保证结构化输出可用。
+            try:
+                return self._try_plain_validate_minicpm(
+                    system_prompt, user_prompt, response_model, temperature)
+            except Exception as exc:
+                return AgentError(
+                    agent="LLMClient",
+                    error_type=_classify_error(exc),
+                    message=f"MiniCPM-o 调用失败：{exc}",
+                    recoverable=True,
+                )
         if self._prefer_plain:
             try:
                 return self._try_plain_validate(
@@ -279,6 +357,28 @@ class LLMClient:
                 break
         # 两次都失败（含一次截断重试）；抛出以走上层兜底。
         raise ValueError("LLM 返回的 JSON 经校验与本地修复均不可用（可能仍未完整）")
+
+    def _try_plain_validate_minicpm(self, system_prompt, user_prompt,
+                                    response_model, temperature) -> T:
+        """合规模式：MiniCPM-o 文本 → 手动 JSON 提取 + 验证 + 本地修复。"""
+        enhanced_system = (
+            system_prompt
+            + "\n\n重要：你必须输出合法 JSON，不要包含 markdown 代码块标记。"
+        )
+        raw = self._realtime_text(
+            enhanced_system,
+            [{"role": "user", "content": user_prompt}],
+            temperature=temperature,
+            max_tokens=LLM_MAX_TOKENS,
+        )
+        extracted = self._extract_json(raw)
+        try:
+            return response_model.model_validate_json(extracted)
+        except (ValidationError, ValueError):
+            repaired = self._repair_response(extracted, response_model)
+            if repaired is not None:
+                return repaired
+            raise ValueError("MiniCPM-o 返回的 JSON 经校验与本地修复仍不可用")
 
     def _call_with_timeout_retry(self, messages, budget, temperature,
                                  max_retries: int = 2):
@@ -607,9 +707,27 @@ class LLMClient:
         messages 为 [{role:'user'|'assistant', content:'...'}] 列表，
         方法内部自动在头部插入 system prompt。
         """
-        if not self._enabled and self._client is None:
-            return AgentError(agent="LLMClient", error_type="auth_error", message="LLM_API_KEY 未配置，跳过调用", recoverable=False)
+        if not self._enabled:
+            label = "MiniCPM-o" if self._mode == "minicpm" else "LLM_API_KEY"
+            return AgentError(agent="LLMClient", error_type="auth_error",
+                              message=f"{label} 未配置，跳过调用",
+                              recoverable=False)
         record_logical_llm_call()
+        if self._mode == "minicpm":
+            try:
+                return self._realtime_text(
+                    system_prompt, messages, temperature,
+                    max_tokens, timeout)
+            except Exception as exc:
+                err_type = _classify_error(exc)
+                logger.error("MiniCPM-o messages call failed (%s): %s",
+                             err_type, exc)
+                return AgentError(
+                    agent="LLMClient",
+                    error_type=err_type,
+                    message=str(exc),
+                    recoverable=(err_type != "auth_error"),
+                )
         try:
             full_messages = [{"role": "system", "content": system_prompt}] + messages
             kwargs = {
@@ -646,12 +764,28 @@ class LLMClient:
     ):
         """按 OpenAI 标准流式返回文本片段，降低首字等待。"""
         if not self._enabled:
+            label = "MiniCPM-o" if self._mode == "minicpm" else "LLM_API_KEY"
             yield AgentError(
                 agent="LLMClient",
                 error_type="auth_error",
-                message="LLM_API_KEY 未配置，跳过调用",
+                message=f"{label} 未配置，跳过调用",
                 recoverable=False,
             )
+            return
+        if self._mode == "minicpm":
+            # 合规模式暂不支持流式：一次性返回 MiniCPM-o 文本。
+            try:
+                text = self._realtime_text(
+                    system_prompt, messages, temperature,
+                    max_tokens, timeout)
+                yield text
+            except Exception as exc:
+                yield AgentError(
+                    agent="LLMClient",
+                    error_type=_classify_error(exc),
+                    message=str(exc),
+                    recoverable=True,
+                )
             return
         try:
             kwargs = {

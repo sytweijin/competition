@@ -25,6 +25,19 @@ def _disable_real_media_calls(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _force_legacy_llm_mode(monkeypatch):
+    """测试默认走 legacy（DeepSeek 模拟）路径，避免合规模式发起真实调用。"""
+    import app.config as config
+    import app.llm.client as llm_client
+    import app.services.media_analysis as media
+
+    monkeypatch.setattr(config, "APP_MODEL_MODE", "legacy")
+    monkeypatch.setattr(llm_client, "APP_MODEL_MODE", "legacy")
+    monkeypatch.setattr(config, "APP_ALLOW_EXTERNAL_MODELS", True)
+    monkeypatch.setattr(media, "APP_ALLOW_EXTERNAL_MODELS", True)
+
+
+@pytest.fixture(autouse=True)
 def _stub_reporter_for_recompute(request):
     """让编辑/重算链路里的 ReporterAgent.run 返回固定报告，不打网络。
 

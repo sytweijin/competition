@@ -5,9 +5,9 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.config import (
-    APP_ASR_API_KEY, APP_ASR_MODEL, APP_VISION_API_KEY, APP_VISION_MODEL,
-    ASCEND_OMNI_WS_URL, LLM_API_KEY, LLM_BASE_URL, LLM_MODEL,
-    MAP_REALTIME_API_KEY, MEMORY_DIR, S3_BUCKET, STORAGE_BACKEND,
+    APP_ASR_API_KEY, APP_ASR_MODEL, APP_MODEL_MODE, APP_VISION_API_KEY,
+    APP_VISION_MODEL, ASCEND_OMNI_WS_URL, LLM_API_KEY, LLM_BASE_URL,
+    LLM_MODEL, MAP_REALTIME_API_KEY, MEMORY_DIR, S3_BUCKET, STORAGE_BACKEND,
 )
 from app.metrics import request_metrics
 from app.models.schemas import FullPlan
@@ -90,13 +90,17 @@ async def auth_me(request: Request):
 
 @router.get("/health")
 async def health():
+    llm_configured = (
+        bool(LLM_API_KEY and LLM_BASE_URL and LLM_MODEL)
+        if APP_MODEL_MODE != "minicpm"
+        else bool(MAP_REALTIME_API_KEY or ASCEND_OMNI_WS_URL)
+    )
     return {
         "status": "ok",
         "version": "7.1",
         "checks": {
             "storage": MEMORY_DIR.exists(),
-            "llm_configured": bool(
-                LLM_API_KEY and LLM_BASE_URL and LLM_MODEL),
+            "llm_configured": llm_configured,
             "vision_model_configured": bool(
                 APP_VISION_MODEL and APP_VISION_API_KEY),
             "asr_model_configured": bool(
@@ -112,8 +116,13 @@ async def health():
 @router.get("/ready")
 def readiness():
     """严格就绪检查：正式部署缺少模型、鉴权或持久存储时返回 503。"""
+    llm_configured = (
+        bool(LLM_API_KEY and LLM_BASE_URL and LLM_MODEL)
+        if APP_MODEL_MODE != "minicpm"
+        else bool(MAP_REALTIME_API_KEY or ASCEND_OMNI_WS_URL)
+    )
     checks = {
-        "llm_configured": bool(LLM_API_KEY and LLM_BASE_URL and LLM_MODEL),
+        "llm_configured": llm_configured,
         "durable_storage_configured": STORAGE_BACKEND == "s3" and bool(S3_BUCKET),
         "durable_storage_reachable": False,
     }

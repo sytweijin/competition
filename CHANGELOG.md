@@ -153,6 +153,18 @@ AUTO 模式关闭 / 评测套件，**不覆盖**"多帧视觉退化"与"音频�
 不适用；② 启动脚本 `ascend_start_server.sh` 按上游 CANN 建议追加 `-fa off`
 （实测不能消除偶发乱码/客套，应用层守卫继续兜底，CANN 下更安全）。
 
+**同步修改（2026-08-24 追加三 · 合规化改造）：** 创新应用赛道 Checklist 要求
+"应用基于 MiniCPM-o 4.5 开发，不得使用其他模型"。新增 `APP_MODEL_MODE`
+（默认 `minicpm`）与 `APP_ALLOW_EXTERNAL_MODELS`（默认禁用）开关：
+① `LLMClient` 在合规模式下**不创建 DeepSeek 客户端**，所有文本调用（对话/结构化
+JSON 拆解/答辩/知识问答）走 MiniCPM-o Realtime（本地 A3 或云端 ModelBest），
+复用现有 JSON 提取/本地修复逻辑，并带历史摊平与乱码/客套守卫；
+② DashScope 视觉/语音兜底在合规模式硬禁用（`_client`/ASR 入口直接报错）；
+③ `/api/health`、`/api/ready` 的 `llm_configured` 按模式判定（minicpm 看 realtime）；
+④ 测试环境固定 legacy 隔离真实调用，新增 minicpm 模式 4 个单元用例；
+实测 MiniCPM-o 文本完成 AI 任务拆解（约 15 秒、5 项任务、零兜底），
+抽屉文字/图片分析链路正常；全量测试 330 → 334 passed。
+
 ---
 ## v7.0 —— 视频理解：会议录像边看边听 + 多模态演示闭环（2026-08-22）
 

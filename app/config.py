@@ -31,8 +31,14 @@ APP_ASR_TRANSCRIPTION_MODE = os.getenv(
 # 默认3次结构化尝试（parse_error 不重试）
 LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "3"))
 # 单次请求超时（秒）。deepseek-v4-flash 等推理模型思考耗时长、首字延迟高，
-# 35s 会频繁触发超时；默认提到 180s，避免“请求未返回就被掐断”误判为 JSON 错误。
+# 35s 会频繁触发超时；默认提到 180s，避免"请求未返回就被掐断"误判为 JSON 错误。
 LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "180"))
+# 模型模式：minicpm（合规，仅使用 MiniCPM-o 4.5）/ legacy（开发用 DeepSeek）。
+# 创新应用赛道要求"不得使用其他模型"，参赛版本必须为 minicpm。
+APP_MODEL_MODE = os.getenv("APP_MODEL_MODE", "minicpm").lower()
+# 是否允许外部模型兜底（DashScope 视觉/语音）。合规参赛版本必须为 "0"。
+APP_ALLOW_EXTERNAL_MODELS = os.getenv(
+    "APP_ALLOW_EXTERNAL_MODELS", "0").lower() in ("1", "true", "yes")
 LLM_PREFER_PLAIN = os.getenv("LLM_PREFER_PLAIN", "false").lower() in ("1", "true", "yes")
 # DeepSeek V4 默认开启 thinking；结构化业务 Agent 显式关闭可避免长推理占用
 # 输出预算并触发非流式连接提前中断。其他模型不发送该厂商私有参数。

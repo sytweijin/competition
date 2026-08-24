@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 import httpx
 
 from app.config import (
+    APP_ALLOW_EXTERNAL_MODELS,
     APP_ASR_API_KEY, APP_ASR_BASE_URL, APP_ASR_MODEL,
     APP_ASR_TRANSCRIPTION_MODE,
     APP_VISION_API_KEY, APP_VISION_BASE_URL, APP_VISION_MODEL,
@@ -27,6 +28,8 @@ DASHSCOPE_ASR_URL = (
 
 
 def _client(api_key: str, base_url: str):
+    if not APP_ALLOW_EXTERNAL_MODELS:
+        raise ValueError("外部模型已禁用（合规模式仅使用 MiniCPM-o 4.5）")
     from openai import OpenAI
     kwargs = {"api_key": api_key}
     if base_url:
@@ -367,6 +370,8 @@ def ocr_scanned_pdf(filename: str, content: bytes) -> str:
 
 def _dashscope_native_transcribe(filename: str, content: bytes) -> str:
     """调用 DashScope 原生 ASR endpoint，供 qwen-audio-* 系列使用。"""
+    if not APP_ALLOW_EXTERNAL_MODELS:
+        raise ValueError("外部模型已禁用（合规模式仅使用 MiniCPM-o 4.5）")
     data_uri = (
         f"data:{_audio_mime(filename)};base64,"
         f"{base64.b64encode(content).decode('utf-8')}"
@@ -424,6 +429,8 @@ def _asr_transcription_mode() -> str:
 
 def _asr_transcribe_text(filename: str, content: bytes) -> str:
     """调用专业 ASR 模型（如 DashScope qwen-audio）返回逐字转写文本。"""
+    if not APP_ALLOW_EXTERNAL_MODELS:
+        raise ValueError("外部模型已禁用（合规模式仅使用 MiniCPM-o 4.5）")
     if not (APP_ASR_API_KEY and APP_ASR_MODEL):
         raise ValueError("未配置语音转写模型（APP_ASR_MODEL）")
     mode = _asr_transcription_mode()
