@@ -453,3 +453,12 @@ async def test_export_markdown_returns_text(client):
     resp = await client.post("/api/export/markdown", json=full_plan)
     assert resp.status_code == 200
     assert len(resp.text) > 50
+
+
+def test_download_disposition_encodes_chinese_filename():
+    """中文文件名导出：Content-Disposition 必须兼容 latin-1（RFC 5987）。"""
+    header = web_routes._download_disposition("审计测试方案.json.md")
+    assert header.startswith('attachment; filename="')
+    assert "filename*=UTF-8''" in header
+    assert "%E5%AE%A1%E8%AE%A1" in header  # “审计” 的 UTF-8 百分号编码
+    header.encode("latin-1")  # 可被 HTTP 头编码，不再触发 500

@@ -123,6 +123,14 @@ async def realtime_transcribe(file: UploadFile = File(...)):
         if ASCEND_OMNI_WS_URL:
             hint += "：本地昇腾后端未连接，请确认 llama-omni-server 已启动"
         raise HTTPException(status_code=502, detail=f"{hint}（{exc}）")
+    from app.services.omni_chat import _looks_like_canned_reply
+    if _looks_like_canned_reply(text):
+        hint = "语音识别暂不可用"
+        if ASCEND_OMNI_WS_URL:
+            hint += ("：本地昇腾把转写指令当成了对话，未返回用户原话，"
+                     "请重试或改用云端后端"
+                     "（临时注释 .env 中 ASCEND_OMNI_WS_URL）")
+        raise HTTPException(status_code=502, detail=hint)
     if not text.strip():
         raise HTTPException(status_code=502, detail="未能识别到语音内容")
     source = (
@@ -153,6 +161,14 @@ async def realtime_dictate(file: UploadFile = File(...)):
         if ASCEND_OMNI_WS_URL:
             hint += "：本地昇腾后端未连接，请确认 llama-omni-server 已启动"
         raise HTTPException(status_code=502, detail=f"{hint}（{exc}）")
+    from app.services.omni_chat import _looks_like_canned_reply
+    if _looks_like_canned_reply(text):
+        hint = "语音整理暂不可用"
+        if ASCEND_OMNI_WS_URL:
+            hint += ("：本地昇腾未返回整理结果（模型可能把指令当成了对话），"
+                     "请重试或改用云端后端"
+                     "（临时注释 .env 中 ASCEND_OMNI_WS_URL）")
+        raise HTTPException(status_code=502, detail=hint)
     if not text.strip():
         raise HTTPException(status_code=502, detail="未能整理出回答内容")
     return {"text": text}
@@ -231,6 +247,18 @@ async def realtime_voice_chat(
         else:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
+    transcript = result.transcript or ""
+    if ASCEND_OMNI_WS_URL and not transcript:
+        # 本地 A3 不返回转写文本：补一次转写，供前端把真实内容写进历史；
+        # 转写不可靠（客套回复/幻觉）时保持空，前端回退 "[语音消息]" 占位。
+        try:
+            from app.services.omni_chat import (
+                _looks_like_canned_reply, transcribe_audio)
+            candidate = await transcribe_audio(audio_b64, timeout=60)
+            if candidate and not _looks_like_canned_reply(candidate):
+                transcript = candidate
+        except Exception:
+            transcript = ""
     try:
         wav_base64 = (
             result.audio_wav_base64
@@ -240,7 +268,7 @@ async def realtime_voice_chat(
     backend = "local" if ASCEND_OMNI_WS_URL else "map"
     return {
         "reply": result.text,
-        "transcript": result.transcript,
+        "transcript": transcript,
         "audio_wav_base64": wav_base64,
         "tts_failed": tts_failed,
         "backend": backend,
@@ -281,6 +309,14 @@ async def realtime_voice_requirement(file: UploadFile = File(...)):
     except RealtimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     text = (result.text or "").strip()
+    from app.services.omni_chat import _looks_like_canned_reply
+    if _looks_like_canned_reply(text):
+        raise HTTPException(
+            status_code=502,
+            detail="语音需求理解失败：本地昇腾未返回有效需求要点"
+            "（模型可能把指令当成了对话），请重试或改用云端后端"
+            "（临时注释 .env 中 ASCEND_OMNI_WS_URL）",
+        )
     if not text:
         raise HTTPException(status_code=502, detail="未能理解语音需求")
     return {"text": text}
@@ -462,9 +498,11 @@ async def realtime_interview_turn(
     ]
     reply = ""
     summary = ""
+    audio_hollow = False
     if audio:
         audio_b64 = base64.b64encode(audio).decode("utf-8")
-        from app.services.omni_chat import understand_audio
+        from app.services.omni_chat import (
+            _AUDIO_CHUNK_SECONDS, understand_audio)
 
         try:
             result = await understand_audio(
@@ -475,7 +513,25 @@ async def realtime_interview_turn(
                 history=history_list,
             )
             summary, reply = _parse_turn_text(result.text)
+            # 本地 A3 常把音频当对话而非听懂内容：输出"用户尚未提供回答内容"
+            # 等空转文本。命中即标记，等待画面观察是否兜底。
+            hollow_markers = (
+                "尚未提供", "未提供", "没有听到", "未听到",
+                "无法判断", "无法识别", "没有收到", "没有捕获",
+            )
+            if not (summary or reply) or any(
+                    marker in (summary + " " + reply)
+                    for marker in hollow_markers):
+                audio_hollow = True
         except RealtimeError as exc:
+            if (getattr(exc, "error_type", "") == "validation_error"
+                    and "超过" in str(exc)):
+                raise HTTPException(
+                    status_code=502,
+                    detail="答辩录音/录像的音频超过本地昇腾单次处理上限"
+                    f"（约 {_AUDIO_CHUNK_SECONDS} 秒）：请缩短回答，"
+                    "或改用云端后端（临时注释 .env 中 ASCEND_OMNI_WS_URL）",
+                ) from exc
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     observations: list[str] = []
@@ -497,6 +553,12 @@ async def realtime_interview_turn(
             (reply + "\n\n📹 表现观察：\n" + "\n".join(observations))
             .strip()
         )
+
+    if audio_hollow and not observations:
+        hint = "评委未能听懂本次语音/视频回答（本地昇腾可能把音频当成了对话，或未捕获到内容）"
+        if ASCEND_OMNI_WS_URL:
+            hint += "：请重试，或改用云端后端（临时注释 .env 中 ASCEND_OMNI_WS_URL）"
+        raise HTTPException(status_code=502, detail=hint)
 
     return {"reply": reply, "summary": summary}
 
@@ -599,6 +661,7 @@ async def realtime_performance(file: UploadFile = File(...)):
         extract_audio_pcm16k,
         extract_video_frames,
     )
+    from app.services.omni_chat import _AUDIO_CHUNK_SECONDS
 
     raw = await file.read(MAX_PERFORMANCE_SIZE + 1)
     if len(raw) > MAX_PERFORMANCE_SIZE:
@@ -640,7 +703,15 @@ async def realtime_performance(file: UploadFile = File(...)):
                 audio_to_written_answer, "answer.webm", audio)
         except Exception as exc:
             answer = ""
-            warning = warning or f"回答转写失败：{type(exc).__name__}"
+            msg = str(exc)
+            if "超过" in msg and ASCEND_OMNI_WS_URL:
+                warning = warning or (
+                    "答辩录像音频超过本地昇腾单次处理上限"
+                    f"（约 {_AUDIO_CHUNK_SECONDS} 秒），回答转写已跳过："
+                    "请缩短回答或改用云端后端"
+                    "（临时注释 .env 中 ASCEND_OMNI_WS_URL）")
+            else:
+                warning = warning or f"回答转写失败：{type(exc).__name__}"
     if not answer and not analysis:
         warning = warning or "未能提取到回答与画面，请重试或缩短录制时长"
 
@@ -680,6 +751,24 @@ async def realtime_chat(req: RealtimeChatRequest):
             status_code=400,
             detail="messages 或 message 至少需要一项",
         )
+
+    if ASCEND_OMNI_WS_URL and len(messages) > 1:
+        # 本地 A3 会忽略分条多轮消息（实测"我是小红→我叫什么名字"仍答
+        # "我是助手"）；把前文摊平成单条上下文，和语音记忆同一套兼容写法。
+        from app.services.omni_chat import _flatten_history
+
+        *prev, last = messages
+        history_text = _flatten_history([
+            m for m in prev
+            if m.get("role") in ("user", "assistant")
+        ])
+        content = last.get("content")
+        if history_text and isinstance(content, str):
+            last = dict(last, content=(
+                f"【对话上下文】\n{history_text}\n\n"
+                f"【当前问题】\n{content}"
+            ))
+            messages = [last]
 
     client = RealtimeClient()
     tts_failed = False

@@ -9,6 +9,7 @@ import re
 from collections import defaultdict
 from datetime import date, datetime
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
 from fastapi.responses import JSONResponse, Response
@@ -460,6 +461,19 @@ def _safe_filepath(filename: str) -> Path:
     return fp
 
 
+def _download_disposition(name: str) -> str:
+    """构造兼容中文文件名的 Content-Disposition（RFC 5987 filename*）。
+
+    HTTP 头只支持 latin-1，中文文件名直接放 filename 会触发
+    UnicodeEncodeError 导致 500；用 filename*=UTF-8'' 百分号编码即可。
+    """
+    ascii_fallback = (
+        name.encode("ascii", "replace").decode("ascii") or "download")
+    return (
+        f'attachment; filename="{ascii_fallback}"; '
+        f"filename*=UTF-8''{quote(name)}"
+    )
+
 
 class RunRequest(BaseModel):
     course: CourseInfo
@@ -878,7 +892,8 @@ async def export_plan(request: Request, filename: str, fmt: str = "markdown"):
         content_type = "text/markdown; charset=utf-8" if fmt == "markdown" else "text/plain; charset=utf-8"
         ext = ".md" if fmt == "markdown" else ".txt"
         return Response(content=md, media_type=content_type,
-                        headers={"Content-Disposition": f'attachment; filename="{filename}{ext}"'})
+                        headers={"Content-Disposition": _download_disposition(
+                            f"{filename}{ext}")})
     except HTTPException:
         raise
 

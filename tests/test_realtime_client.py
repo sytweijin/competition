@@ -658,7 +658,7 @@ async def test_voice_chat_carries_history_and_returns_transcript(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_understand_audio_local_carries_history(monkeypatch):
-    """本地昇腾路径：历史消息拼在音频消息之前。"""
+    """本地昇腾路径：历史摊平进文本上下文（A3 忽略分条消息，摊平实测有效）。"""
     import app.services.omni_chat as omni
     import app.services.realtime_client as rt
 
@@ -679,9 +679,112 @@ async def test_understand_audio_local_carries_history(monkeypatch):
         ])
     assert result.text == "本地回答"
     msgs = captured["messages"]
-    assert [m["role"] for m in msgs] == ["user", "assistant", "user"]
-    assert msgs[-1]["content"][0]["type"] == "text"
-    assert msgs[-1]["content"][1]["data"] == "YXVkaW8="
+    assert [m["role"] for m in msgs] == ["user"]
+    parts = msgs[0]["content"]
+    assert parts[0]["type"] == "text"
+    assert "上一轮用户" in parts[0]["text"]
+    assert "上一轮回答" in parts[0]["text"]
+    assert parts[1]["type"] == "audio"
+    assert parts[1]["data"] == "YXVkaW8="
+
+
+def test_split_pcm_b64_chunks_long_audio():
+    """本地长音频按 12 秒上限分片（无静音点时固定切分），避免崩溃。"""
+    import base64
+    from app.services.omni_chat import _split_pcm_b64
+
+    raw = b"\x00\x00\x00\x00" * (45 * 16000)
+    b64 = base64.b64encode(raw).decode("ascii")
+    chunks = _split_pcm_b64(b64)
+    assert len(chunks) == 4
+    decoded = b"".join(base64.b64decode(c) for c in chunks)
+    assert decoded == raw
+    assert all(
+        len(base64.b64decode(c)) <= 12 * 16000 * 4 for c in chunks)
+    assert len(_split_pcm_b64(base64.b64encode(b"abc").decode())) == 1
+
+
+def test_split_pcm_b64_prefers_silence_cuts():
+    """有静音断句时按句子切分，而不是固定间隔切断句子。"""
+    import base64
+    import math
+    import numpy as np
+    from app.services.omni_chat import _split_pcm_b64
+
+    sr = 16000
+    # 7 段语音（各 3 秒 500Hz 正弦）+ 7 段 1 秒静音 + 尾段 3 秒 → 31 秒
+    # 超过 12 秒上限才触发分片；贪心分组应得 3 片（10.5+10.5+10 秒）
+    def tone(seconds):
+        n = int(sr * seconds)
+        t = np.arange(n) / sr
+        return (0.05 * np.sin(2 * math.pi * 500 * t)).astype("<f4").tobytes()
+
+    silence = b"\x00\x00\x00\x00" * (sr * 1)
+    raw = (tone(3) + silence) * 7 + tone(3)
+    chunks = _split_pcm_b64(base64.b64encode(raw).decode("ascii"))
+    assert len(chunks) == 3
+    assert b"".join(base64.b64decode(c) for c in chunks) == raw
+
+
+def test_looks_like_canned_reply_rejects_assistant_smalltalk():
+    from app.services.omni_chat import _looks_like_canned_reply
+
+    assert _looks_like_canned_reply("")
+    assert _looks_like_canned_reply(
+        "你好！很高兴为你提供帮助。请告诉我你具体需要什么。")
+    assert _looks_like_canned_reply("我是由阿里云开发的语言模型。")
+    assert _looks_like_canned_reply(
+        "Hello! It seems like you might have made a mistake.")
+    assert not _looks_like_canned_reply("下周一完成调研")
+    assert not _looks_like_canned_reply("你好，我叫小红")
+
+
+def test_flatten_history_skips_placeholder():
+    from app.services.omni_chat import _flatten_history
+
+    text = _flatten_history([
+        {"role": "user", "content": "我是小红"},
+        {"role": "assistant", "content": "好的，小红你好"},
+        {"role": "user", "content": "[语音消息]"},
+    ])
+    assert "我是小红" in text
+    assert "好的，小红你好" in text
+    assert "[语音消息]" not in text
+
+
+@pytest.mark.asyncio
+async def test_understand_audio_local_merges_chunks(monkeypatch):
+    """本地长音频：分片后走合并步骤，合并提示含分片结果与原始要求。"""
+    import base64
+    import app.services.omni_chat as omni
+    import app.services.realtime_client as rt
+
+    calls = []
+
+    async def fake_chat(self, **kwargs):
+        calls.append(kwargs.get("messages"))
+        return RealtimeChatResult(text="分片回答")
+
+    monkeypatch.setattr(
+        omni, "ASCEND_OMNI_WS_URL", "ws://127.0.0.1:28099/backend")
+    monkeypatch.setattr(rt.RealtimeClient, "chat", fake_chat)
+
+    raw = b"\x00\x00\x00\x00" * (58 * 16000)  # 58 秒 → 5 片（守卫内）
+    b64 = base64.b64encode(raw).decode("ascii")
+    chunks = omni._split_pcm_b64(b64)
+    await omni.understand_audio(b64, "", "请整理会议", max_new_tokens=128)
+    # 期望调用数 = 分片数 + 分层合并次数（每层每组 ≤3）
+    merge_calls = 0
+    n = len(chunks)
+    while n > 1:
+        groups = (n + 2) // 3
+        merge_calls += groups
+        n = groups
+    assert len(calls) == len(chunks) + merge_calls
+    merge_msg = calls[-1][0]["content"]
+    assert "分片处理的结果" in merge_msg
+    assert "原始任务要求" in merge_msg
+    assert "请整理会议" in merge_msg
 
 
 @pytest.mark.asyncio
@@ -1044,6 +1147,41 @@ async def test_interview_turn_video_adds_observations(monkeypatch):
     assert "追问内容" in payload["reply"]
     assert "📹 表现观察" in payload["reply"]
     assert "第 1 帧" in payload["reply"]
+
+
+@pytest.mark.asyncio
+async def test_interview_turn_hollow_reply_returns_502(monkeypatch):
+    """答辩语音回合空转（评委未听懂）应返回 502 明确提示而非空转结果。"""
+    import app.web.routers.realtime as realtime_router
+    import app.services.media_analysis as media
+
+    def fake_frames(content, max_frames):
+        return []
+
+    def fake_audio(content):
+        return b"pcm"
+
+    async def fake_chat(self, **kwargs):
+        return RealtimeChatResult(
+            text="用户尚未提供具体的回答内容，无法判断其是否正面回答了问题。")
+
+    monkeypatch.setattr(media, "extract_video_frames", fake_frames)
+    monkeypatch.setattr(media, "extract_audio_pcm16k", fake_audio)
+    monkeypatch.setattr(
+        realtime_router.RealtimeClient, "chat", fake_chat)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/realtime/interview-turn",
+            data={"system_prompt": "你是答辩评委"},
+            files={"file": ("voice.webm", b"fake-audio", "audio/webm")},
+        )
+
+    assert response.status_code == 502
+    assert "未能听懂" in response.json()["detail"]
 
 
 @pytest.mark.asyncio

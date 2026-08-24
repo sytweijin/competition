@@ -196,21 +196,37 @@ def extract_audio_pcm16k(content: bytes) -> bytes | None:
 
 
 def _realtime_audio_transcribe_text(filename: str, content: bytes) -> str:
-    """用 MiniCPM-o Realtime 直接转写常见音频文件。"""
+    """用 MiniCPM-o Realtime 直接转写常见音频文件（长音频自动分片防崩溃）。"""
+    from app.services.omni_chat import (
+        _LOCAL_AUDIO_MAX_SECONDS,
+        _pcm_duration_seconds,
+        _split_pcm_b64,
+    )
+
     pcm = _decode_audio_to_pcm16k(content)
     b64 = base64.b64encode(pcm).decode("utf-8")
-    content_parts = [
-        {"type": "text", "text": (
-            "这是用户的语音输入。请直接转写用户说出的原话："
-            "不要思考过程，不要解释，不要复述，不要补充或确认，"
-            "只输出用户说的话本身。"
-        )},
-        {"type": "audio", "data": b64},
-    ]
-    text = _run_realtime_media_chat(content_parts, 2000, True).strip()
-    if not text:
+    if ASCEND_OMNI_WS_URL and _pcm_duration_seconds(
+            b64) > _LOCAL_AUDIO_MAX_SECONDS:
+        raise ValueError(
+            f"本地昇腾后端暂不支持超过 {_LOCAL_AUDIO_MAX_SECONDS} 秒的音频"
+            "（处理时间过长）："
+            f"请分段（每段 ≤{_AUDIO_CHUNK_SECONDS} 秒）上传，或改用云端后端")
+    parts_out: list[str] = []
+    for chunk in _split_pcm_b64(b64):
+        content_parts = [
+            {"type": "text", "text": (
+                "这是用户的语音输入。请直接转写用户说出的原话："
+                "不要思考过程，不要解释，不要复述，不要补充或确认，"
+                "只输出用户说的话本身。"
+            )},
+            {"type": "audio", "data": chunk},
+        ]
+        text = _run_realtime_media_chat(content_parts, 2000, True).strip()
+        if text:
+            parts_out.append(text)
+    if not parts_out:
         raise ValueError("MiniCPM-o Realtime 未返回转写文本")
-    return text
+    return "\n".join(parts_out)
 
 
 def _labeled_transcription(text: str, filename: str, labeled: bool) -> str:
@@ -232,6 +248,20 @@ def audio_to_written_answer(filename: str, content: bytes) -> str:
     """把用户口述的回答整理成书面文字（理解后成文，非逐字转写）。"""
     pcm = _decode_audio_to_pcm16k(content)
     b64 = base64.b64encode(pcm).decode("utf-8")
+    if ASCEND_OMNI_WS_URL:
+        # 本地昇腾：统一走 understand_audio（长音频分片 + 独立会话），
+        # 避免 whisper 越界把整个 A3 服务打崩。
+        import asyncio
+
+        from app.services.omni_chat import understand_audio
+
+        result = asyncio.run(understand_audio(
+            b64, "", WRITTEN_ANSWER_INSTRUCTION,
+            max_new_tokens=2000, timeout=180, tts_enabled=False))
+        text = (result.text or "").strip()
+        if not text:
+            raise ValueError("未返回整理后的回答")
+        return text
     parts = [
         {"type": "text", "text": WRITTEN_ANSWER_INSTRUCTION},
         {"type": "audio", "data": b64},
