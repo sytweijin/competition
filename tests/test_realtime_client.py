@@ -654,6 +654,62 @@ async def test_voice_chat_polite_reply_accepted_local(monkeypatch):
     payload = response.json()
     assert payload["reply"] == "你好！有什么问题我可以帮您解答吗？"
     assert payload["backend"] == "local"
+    # 两段式返回的宽松转写也写入 transcript，供前端存入历史
+    assert payload["transcript"] == "你好！有什么问题我可以帮您解答吗？"
+
+
+@pytest.mark.asyncio
+async def test_understand_audio_local_text_two_stage_memory(monkeypatch):
+    """本地语音对话两段式：宽松转写 + 纯文本回答，历史进 system prompt。"""
+    import app.services.omni_chat as omni_chat
+    import app.services.realtime_client as rt
+
+    monkeypatch.setattr(
+        omni_chat, "ASCEND_OMNI_WS_URL", "ws://127.0.0.1:28099/backend")
+    calls = []
+
+    async def fake_chat(self, **kwargs):
+        calls.append(kwargs)
+        if kwargs.get("omni_mode"):
+            # 第一段转写：A3 把转写指令当对话回应，文本含用户关键信息
+            return RealtimeChatResult(
+                text="你好，小红！很高兴认识你。有什么我可以帮你的吗？")
+        if len(calls) == 2:
+            # 第二段纯文本回答：结合历史稳定作答
+            return RealtimeChatResult(text="你叫小红。")
+        # 第三段记忆抽取：提取用户个人信息
+        return RealtimeChatResult(text="用户的名字是：小红。")
+
+    monkeypatch.setattr(rt.RealtimeClient, "chat", fake_chat)
+
+    audio_b64 = base64.b64encode(b"pcm-bytes").decode("utf-8")
+    result = await omni_chat.understand_audio(
+        audio_b64,
+        "你是协作分工助手",
+        "用户正在用语音与你对话，请直接回答。",
+        max_new_tokens=256,
+        history=[
+            {"role": "user", "content": "[语音] 我叫小红"},
+            {"role": "assistant", "content": "你好，小红！很高兴认识你。"},
+        ],
+        allow_polite=True,
+        prefer_text_answer=True,
+    )
+    assert result.text == "你叫小红。"
+    assert result.transcript == "你好，小红！很高兴认识你。有什么我可以帮你的吗？"
+    assert result.memory == "用户的名字是：小红。"
+    assert len(calls) == 3
+    assert calls[0]["omni_mode"] is True
+    assert calls[1]["omni_mode"] is False
+    assert calls[2]["omni_mode"] is False
+    sys_prompt = calls[1]["system_prompt"] or ""
+    assert "【历史对话】" in sys_prompt
+    assert "小红" in sys_prompt
+    user_text = calls[1]["messages"][0]["content"]
+    assert "用户刚才在语音中说" in user_text
+    assert "你的名字是" in user_text
+    extract_text = calls[2]["messages"][0]["content"]
+    assert "用户的名字是" in extract_text
 
 
 @pytest.mark.asyncio
@@ -853,6 +909,31 @@ def test_looks_like_garbage_flags_question_runs():
     assert _looks_like_garbage("会议要点：????????????")
     assert not _looks_like_garbage("会议要点：今天下午三点召开项目组会。")
     assert not _looks_like_garbage("还有问题吗？请随时告诉我。")
+
+
+def test_looks_like_self_intro_filters_model_intro():
+    """转写输出为"模型自我介绍"时应丢弃，不能当用户原话存历史。"""
+    from app.services.omni_chat import _looks_like_self_intro
+
+    assert _looks_like_self_intro(
+        "我叫通义千问。你可以叫我通义。有什么我可以帮你的吗？")
+    assert _looks_like_self_intro(
+        "我是MiniCPM，一个由面壁智能科技研发的AI助手。你可以叫我小面。")
+    assert not _looks_like_self_intro("你好，小红！很高兴认识你")
+    assert not _looks_like_self_intro("我叫小红")
+
+
+def test_transcript_conflict_with_memory():
+    """转写声称的名字与既有记忆矛盾时判为幻觉，不能覆盖记忆。"""
+    from app.services.omni_chat import _transcript_claims_other_name
+
+    assert _transcript_claims_other_name(
+        "你好，我叫小明。你叫什么名字呢？", "小红")
+    assert _transcript_claims_other_name("我叫通义千问。", "小红")
+    assert _transcript_claims_other_name("你叫什么名字？", "小红")
+    assert not _transcript_claims_other_name("我叫小红", "小红")
+    assert not _transcript_claims_other_name("你好，小红！很高兴认识你", "小红")
+    assert not _transcript_claims_other_name("我叫小红", "")
 
 
 def test_flatten_history_skips_placeholder():

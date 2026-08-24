@@ -231,6 +231,7 @@ async def realtime_voice_chat(
             tts_enabled=tts_enabled,
             history=history_list,
             allow_polite=True,
+            prefer_text_answer=True,
         )
     except RealtimeError as exc:
         if tts_enabled:
@@ -243,6 +244,7 @@ async def realtime_voice_chat(
                     tts_enabled=False,
                     history=history_list,
                     allow_polite=True,
+                    prefer_text_answer=True,
                 )
             except RealtimeError as retry_exc:
                 raise HTTPException(
@@ -252,17 +254,6 @@ async def realtime_voice_chat(
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     transcript = result.transcript or ""
-    if ASCEND_OMNI_WS_URL and not transcript:
-        # 本地 A3 不返回转写文本：补一次转写，供前端把真实内容写进历史；
-        # 转写不可靠（客套回复/幻觉）时保持空，前端回退 "[语音消息]" 占位。
-        try:
-            from app.services.omni_chat import (
-                _looks_like_canned_reply, transcribe_audio)
-            candidate = await transcribe_audio(audio_b64, timeout=60)
-            if candidate and not _looks_like_canned_reply(candidate):
-                transcript = candidate
-        except Exception:
-            transcript = ""
     try:
         wav_base64 = (
             result.audio_wav_base64
@@ -273,6 +264,7 @@ async def realtime_voice_chat(
     return {
         "reply": result.text,
         "transcript": transcript,
+        "memory": result.memory or "",
         "audio_wav_base64": wav_base64,
         "tts_failed": tts_failed,
         "backend": backend,

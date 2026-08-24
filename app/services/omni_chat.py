@@ -95,6 +95,18 @@ _EN_CANNED_PATTERNS = (
     "please let me know",
 )
 
+MEMORY_EXTRACT_INSTRUCTION = (
+    "以下是助手与用户的语音对话片段（语音识别结果可能不准确，仅供参考）。\n"
+    "助手回应/转写中出现的对用户的称呼（如\"小红\"\"Xiaohong\"）通常就是"
+    "用户的名字。请提取用户的名字或称呼（中文或英文均可），"
+    "只输出\"用户的名字是：<名字>\"；确实无法确定就输出\"无\"。不要解释。"
+)
+
+VOICE_NAME_REFERENCE_NOTE = (
+    "\n如果用户问\"我叫什么名字\"\"我的名字\"等，指的是用户自己的名字，"
+    "请用\"你的名字是：<名字>\"这种格式直接回答，不要自我介绍。"
+)
+
 
 def _split_pcm_b64(
     audio_b64: str,
@@ -228,6 +240,34 @@ _GARBAGE_FALLBACK_MSG = (
     "（临时注释 .env 中 ASCEND_OMNI_WS_URL）"
 )
 
+_MEMORY_NAME_RE = re.compile(r"用户的名字是：([^。\n]+)")
+
+
+def _memory_name(history_text: str | None) -> str:
+    """从历史/记忆中提取已知的"用户的名字"。"""
+    match = _MEMORY_NAME_RE.search(history_text or "")
+    return match.group(1).strip() if match else ""
+
+
+def _transcript_claims_other_name(transcript: str, known_name: str) -> bool:
+    """转写文本是否声称了一个与既有记忆不同的名字（模型幻觉）。"""
+    transcript = transcript or ""
+    known_name = known_name.strip()
+    if not known_name or not transcript:
+        return False
+    claims = re.findall(
+        r"我(?:叫|的名字是|是)[：: ]*([^\s，。！!？?；;、]{1,12})",
+        transcript,
+    )
+    for claim in claims:
+        claim = claim.strip()
+        if claim and known_name not in claim and claim not in known_name:
+            return True
+    # 转写里出现"你叫什么名字"等反问，说明模型把转写指令当对话
+    if "你叫什么名字" in transcript or "你的名字是" in transcript:
+        return True
+    return False
+
 
 def _flatten_history(history: list[dict] | None) -> str:
     """把多轮历史摊平成一段文本。
@@ -241,7 +281,12 @@ def _flatten_history(history: list[dict] | None) -> str:
         role = "用户" if message.get("role") == "user" else "助手"
         content = str(message.get("content") or "").strip()
         if content and content != "[语音消息]":
-            items.append(f"{role}：{content}")
+            if content.startswith("【记忆】"):
+                # 记忆条目不作为对话回显，标记为独立记忆，避免模型
+                # 把"助手：【记忆】…"当成上一轮对话内容复述出来。
+                items.append("记忆：" + content[len("【记忆】"):].strip())
+            else:
+                items.append(f"{role}：{content}")
     return "\n".join(items)
 
 
@@ -265,6 +310,26 @@ def _looks_like_canned_reply(text: str) -> bool:
         any(pattern in text for pattern in _CANNED_REPLY_PATTERNS)
         or any(pattern in lowered for pattern in _EN_CANNED_PATTERNS)
     )
+
+
+def _looks_like_self_intro(text: str) -> bool:
+    """判断转写输出是否为"模型自我介绍"而非用户原话。
+
+    本地 A3 对"我叫什么名字"这类语音常回应式自我介绍
+    （"我叫通义千问，是…研发的模型。你可以叫我通义"），
+    若把它当用户内容会覆盖记忆（实测第二轮答"你的名字是：通义"）。
+    """
+    text = (text or "").strip()
+    if not text:
+        return False
+    lowered = text.lower()
+    markers = (
+        "语言模型", "大模型", "ai 助手", "ai助手", "人工智能",
+        "研发", "你可以叫我", "你可以称呼我",
+        "我是由", "我是一款", "我是一个人工智能",
+    )
+    return any(marker in text or marker in lowered
+               for marker in markers)
 
 
 def _looks_like_garbage(text: str) -> bool:
@@ -381,6 +446,7 @@ async def understand_audio(
     tts_enabled: bool = False,
     history: list[dict] | None = None,
     allow_polite: bool = False,
+    prefer_text_answer: bool = False,
 ):
     """让模型理解一段音频：本地直接听音频，云端先转写再文字理解。
 
@@ -389,6 +455,11 @@ async def understand_audio(
     云端返回的结果会带上转写文本（result.transcript），供调用方存入历史。
     allow_polite=True 时跳过"客套回复"判定（语音对话场景：模型回
     "你好，有什么可以帮您"是正常承接），只保留乱码守卫。
+    prefer_text_answer=True 时本地也走"先转写、再纯文本回答"两段式
+    （语音对话专用）：本地 A3 直接听音频回答时容易忽略文本历史、
+    自我指代混乱（"我叫小红→我叫什么名字"仍答"我叫助手"）；
+    先宽松转写（接受模型的回应式文本，其中已含用户关键信息），
+    再让文本链路结合历史回答，记忆与回答稳定性显著提升。
 
     本地路径带"问号守卫"：模型输出 "?" 乱码时自动重试（最多 3 次），
     仍失败则抛友好错误，绝不把问号串返回给界面。
@@ -401,9 +472,14 @@ async def understand_audio(
         history_text = _flatten_history(history)
         for _attempt in range(3):
             try:
-                result = await _understand_audio_local(
-                    client, chunks, history_text, instruction, system_prompt,
-                    max_new_tokens, timeout, tts_enabled)
+                if prefer_text_answer:
+                    result = await _understand_audio_local_text(
+                        client, chunks, history_text, instruction,
+                        system_prompt, max_new_tokens, timeout, tts_enabled)
+                else:
+                    result = await _understand_audio_local(
+                        client, chunks, history_text, instruction,
+                        system_prompt, max_new_tokens, timeout, tts_enabled)
             except RealtimeError:
                 continue
             if not (_looks_like_garbage(result.text)
@@ -430,6 +506,126 @@ async def understand_audio(
     )
     result.transcript = transcript
     return result
+
+
+async def _understand_audio_local_text(
+    client: RealtimeClient,
+    chunks: list[str],
+    history_text: str,
+    instruction: str,
+    system_prompt: str | None,
+    max_new_tokens: int,
+    timeout: float,
+    tts_enabled: bool,
+) -> RealtimeChatResult:
+    """本地语音对话专用：先宽松转写，再纯文本回答（记忆稳定）。
+
+    实测本地 A3 直接"听音频回答"时，会把当前音频当唯一输入、忽略文本历史
+    （"我叫小红→我叫什么名字"仍答"我叫助手"），且把"转写指令"当成对话
+    回应（输出"你好，小红！很高兴认识你"而不是用户原话）。
+    因此两段式处理：① 转写阶段宽松接受非乱码输出（回应式文本也保留，
+    其中已含用户关键信息）；② 回答阶段走纯文本，把历史放进 system prompt
+    （A3 对 system prompt 遵循度高），文本链路记忆与回答稳定。
+    """
+    parts: list[str] = []
+    for chunk in chunks:
+        try:
+            partial = await client.chat(
+                messages=[{"role": "user", "content": [
+                    {"type": "text", "text": TRANSCRIBE_INSTRUCTION},
+                    {"type": "audio", "data": chunk},
+                ]}],
+                max_new_tokens=512,
+                omni_mode=True,
+                tts_enabled=False,
+                timeout=timeout,
+            )
+            cleaned = _clean_transcript(partial.text or "")
+            # 宽松接受：非空、非乱码、非"模型自我介绍"即保留
+            # （A3 常输出"你好，小红！…"式回应文本，其中包含用户关键信息，
+            # 不能像严格转写那样丢弃；但"我叫通义千问…"这类自我介绍是
+            # 模型回应而非用户原话，丢弃以免覆盖记忆）。
+            if cleaned and not _looks_like_garbage(cleaned) \
+                    and not _looks_like_self_intro(cleaned):
+                parts.append(cleaned)
+        except RealtimeError:
+            continue
+    transcript = "\n".join(parts)
+
+    # 记忆冲突保护：转写声称的名字与既有记忆矛盾时，视为模型幻觉
+    # （A3 对"我叫什么名字"常编造"我叫小明/通义"等），丢弃转写，
+    # 让回答阶段以历史记忆为准，避免幻觉覆盖真实记忆。
+    known_name = _memory_name(history_text)
+    if _transcript_claims_other_name(transcript, known_name):
+        transcript = ""
+
+    merged_system = (system_prompt or "").strip()
+    if history_text:
+        merged_system = (
+            merged_system
+            + "\n\n【历史对话】\n" + history_text
+            + "\n\n请结合上面的历史记忆回答用户当前的问题。"
+        ).strip()
+    user_text = (
+        instruction
+        + "\n用户刚才在语音中说："
+        + (transcript or "（语音未能识别，请根据上下文推断用户意图）")
+        + VOICE_NAME_REFERENCE_NOTE
+    )
+    result = await client.chat(
+        messages=[{"role": "user", "content": user_text}],
+        system_prompt=merged_system or None,
+        max_new_tokens=max_new_tokens,
+        omni_mode=False,
+        tts_enabled=tts_enabled,
+        timeout=timeout,
+    )
+    result.transcript = transcript
+    result.memory = await _extract_user_memory(
+        client, history_text, transcript, result.text, timeout)
+    return result
+
+
+async def _extract_user_memory(
+    client: RealtimeClient,
+    history_text: str,
+    transcript: str,
+    reply: str,
+    timeout: float,
+) -> str:
+    """从语音对话中抽取用户个人信息（纯文本，供下一轮注入记忆）。
+
+    本地 A3 的"转写"常输出回应式文本（如"你好，小红！…"），模型回答也
+    不稳定；文本链路抽取比依赖逐字转写可靠（实测能从"你好，小红！"稳定
+    提取出"用户的名字是：小红"）。
+    """
+    try:
+        # 记忆冲突保护：当前转写若与既有记忆矛盾（模型幻觉），
+        # 直接沿用旧记忆，不让幻觉污染前端记忆。
+        known_name = _memory_name(history_text)
+        if _transcript_claims_other_name(transcript, known_name):
+            return f"用户的名字是：{known_name}"
+        excerpt = "\n".join(
+            part for part in (history_text, transcript, reply) if part)
+        if not excerpt:
+            return ""
+        prompt = (
+            MEMORY_EXTRACT_INSTRUCTION
+            + "\n\n对话片段：\n" + excerpt[:2000]
+        )
+        result = await client.chat(
+            messages=[{"role": "user", "content": prompt}],
+            max_new_tokens=128,
+            omni_mode=False,
+            tts_enabled=False,
+            timeout=timeout,
+        )
+        memory = (result.text or "").strip()
+        if memory in ("无", "无。", "暂无", "没有", ""):
+            return ""
+        return memory
+    except RealtimeError:
+        return ""
 
 
 async def _understand_audio_local(

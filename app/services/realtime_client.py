@@ -35,6 +35,7 @@ class RealtimeChatResult:
     session_id: str = ""
     response_id: str = ""
     transcript: str = ""
+    memory: str = ""
     _wav_cache: str = field(default="", repr=False, init=False)
 
     @property
