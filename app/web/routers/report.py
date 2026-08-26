@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
@@ -173,6 +174,14 @@ def _task_members_detail(
                 return str(act[key])
         return ""
 
+    def member_photos(name: str) -> list[str]:
+        """该成员全部交付物照片（按上传顺序），支持一人多张。"""
+        return [
+            str(act["photo"])
+            for act in activities
+            if act.get("member") == name and act.get("photo")
+        ]
+
     members = []
     for name in sorted(_task_member_names(plan, task)):
         role = (
@@ -193,6 +202,7 @@ def _task_members_detail(
             "actual_hours": member_hours.get(name),
             "note": latest_value(name, "note"),
             "photo": latest_value(name, "photo"),
+            "photos": member_photos(name),
             "awaiting_confirm": awaiting,
             "ts": (act or {}).get("ts") or 0,
         })
@@ -608,9 +618,10 @@ async def report_photo(
     ext = Path(file.filename or "photo.jpg").suffix.lower()
     if ext not in (".jpg", ".jpeg", ".png", ".webp"):
         ext = ".jpg"
+    # 时间戳 + uuid 双保险：同一秒内连续上传（或并发上传）也不会互相覆盖
     attach_path = ATTACH_DIR / (
         f"{filename.replace('.json', '')}_{safe_id}_"
-        f"{int(time.time())}{ext}"
+        f"{int(time.time())}_{uuid.uuid4().hex[:6]}{ext}"
     )
     attach_path.write_bytes(raw)
     note = f"交付物照片已上传（{attach_path.name}）"
@@ -629,20 +640,35 @@ async def report_photo(
 
 
 @router.get("/report/attachment")
-def report_attachment(token: str, task_id: str):
-    """查看任务交付物照片：仅任务成员可用，且只服务该任务记录过的附件。"""
+def report_attachment(token: str, task_id: str, photo: str = ""):
+    """查看任务交付物照片：仅任务成员可用，且只服务该任务记录过的附件。
+
+    photo 参数可指定具体照片文件名（支持一人多张）；缺省返回最近一张，
+    保持旧调用兼容。
+    """
     entry = get_report_token(token)
     if not entry:
         raise HTTPException(status_code=404, detail="汇报链接无效或已过期")
     filename, _member = _authorize(entry, task_id)
-    photo_name = ""
-    for act in reversed(get_report_activities(filename, task_id)):
-        if act.get("photo"):
-            photo_name = act["photo"]
-            break
+    activities = get_report_activities(filename, task_id)
+    allowed = {
+        str(act["photo"])
+        for act in activities
+        if act.get("photo")
+    }
+    if photo:
+        photo_name = photo
+    else:
+        photo_name = ""
+        for act in reversed(activities):
+            if act.get("photo"):
+                photo_name = str(act["photo"])
+                break
     if not photo_name:
         raise HTTPException(status_code=404, detail="该任务暂无交付物照片")
     safe = Path(photo_name).name
+    if safe not in allowed:
+        raise HTTPException(status_code=404, detail="交付物照片不存在")
     path = ATTACH_DIR / safe
     if not path.exists():
         raise HTTPException(status_code=404, detail="交付物文件不存在")

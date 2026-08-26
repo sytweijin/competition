@@ -238,6 +238,53 @@ async def test_report_photo_marks_completed(saved_plan):
 
 
 @pytest.mark.asyncio
+async def test_report_photo_keeps_multiple_photos(saved_plan):
+    """同一成员同一任务可上传多张交付物照片，互不覆盖且都可查看。"""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        token = await _make_token(client)
+        names = []
+        for index in range(2):
+            resp = await client.post(
+                "/api/report/photo",
+                data={"token": token, "task_id": "T1"},
+                files={"file": (
+                    f"photo{index}.png",
+                    b"\x89PNG\r\n\x1a\n",
+                    "image/png",
+                )},
+            )
+            assert resp.status_code == 200
+            names.append(resp.json()["photo"])
+
+        # 两次上传应生成两个不同文件
+        assert len(set(names)) == 2
+
+        st = (await client.get(
+            "/api/report/state", params={"token": token})).json()
+        task = next(t for t in st["tasks"] if t["id"] == "T1")
+        owner_row = next(
+            m for m in task["members"] if m["name"] == "张三")
+        assert owner_row["photos"] == names
+
+        # 每张照片都能通过 photo 参数单独访问
+        for name in names:
+            resp = await client.get(
+                "/api/report/attachment",
+                params={"token": token, "task_id": "T1", "photo": name},
+            )
+            assert resp.status_code == 200
+
+    for name in names:
+        try:
+            (MEMORY_DIR / "attachments" / name).unlink()
+        except OSError:
+            pass
+
+
+@pytest.mark.asyncio
 async def test_report_rejects_non_member_and_bad_token(saved_plan):
     transport = ASGITransport(app=app)
     async with AsyncClient(

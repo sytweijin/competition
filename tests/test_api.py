@@ -109,6 +109,34 @@ async def test_analyze_files_returns_per_file_statuses(client, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_analyze_files_caches_same_content(client, monkeypatch):
+    """同一文件重复上传只提取一次，避免语音/拍照需求反复全量重读。"""
+    import app.file_analysis as file_analysis
+    import app.web.routes as routes
+
+    calls = {"n": 0}
+    real_extract = file_analysis.extract_text
+
+    def counting_extract(filename, content):
+        calls["n"] += 1
+        return real_extract(filename, content)
+
+    monkeypatch.setattr(file_analysis, "extract_text", counting_extract)
+    monkeypatch.setattr(routes, "_FILE_TEXT_CACHE", {})
+
+    files = [
+        ("files", ("需求.txt", "项目：校园调研，需提交调研报告", "text/plain")),
+    ]
+    for _ in range(2):
+        resp = await client.post(
+            "/api/analyze-files", files=files, data={"background": ""})
+        assert resp.status_code == 200
+        assert resp.json()["files"][0]["status"] == "ok"
+
+    assert calls["n"] == 1
+
+
+@pytest.mark.asyncio
 async def test_report_is_generated_only_on_explicit_request(client, monkeypatch):
     from app.agents.reporter import ReporterAgent
     from app.models.schemas import ReportOutput

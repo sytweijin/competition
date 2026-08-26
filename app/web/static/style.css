@@ -6594,3 +6594,29 @@ th {
   color: var(--primary);
   font-weight: 650;
 }
+
+/* 答辩语音/拍照需求理解后的去向选择条 */
+.defense-input-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
+  font-size: 13px;
+  color: #475569;
+}
+
+.defense-input-confirm .defense-confirm-text {
+  flex: 1 1 100%;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.defense-input-confirm .btn {
+  flex: 1 1 auto;
+  min-width: 88px;
+}

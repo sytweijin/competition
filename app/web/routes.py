@@ -3,9 +3,11 @@ FastAPI 路由（A5：简易只读 Web + B2 Memory + B4 动态编辑）
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
+import threading
 from collections import defaultdict
 from datetime import date, datetime
 from pathlib import Path
@@ -57,6 +59,31 @@ from app.web.routers.system import router as system_router
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+# 文件需求分析的进程内缓存：同一内容（按 sha1）只做一次真实的
+# 图片理解 / 音频转写 / PDF 提取。此前每新增一个语音/拍照需求，
+# 前端都会把全部文件重新上传并重新识别一遍，旧文件白白再跑一轮模型。
+_FILE_TEXT_CACHE: dict[str, str] = {}
+_FILE_TEXT_CACHE_LOCK = threading.Lock()
+_FILE_TEXT_CACHE_MAX = 200
+
+
+def _cached_extract_text(filename: str, raw: bytes) -> str:
+    """提取文件文本，命中内容哈希缓存时直接复用，不重复调用视觉/语音模型。"""
+    key = hashlib.sha1(raw).hexdigest() + "|" + filename
+    with _FILE_TEXT_CACHE_LOCK:
+        cached = _FILE_TEXT_CACHE.get(key)
+        if cached is not None:
+            return cached
+    from app.file_analysis import extract_text
+
+    text = extract_text(filename, raw)
+    with _FILE_TEXT_CACHE_LOCK:
+        if len(_FILE_TEXT_CACHE) >= _FILE_TEXT_CACHE_MAX:
+            # 简单淘汰：缓存超限时整体清空，避免内存无界增长
+            _FILE_TEXT_CACHE.clear()
+        _FILE_TEXT_CACHE[key] = text
+    return text
+
 # 聚合按业务域拆分的子路由；保留本模块作为外部兼容入口。
 router.include_router(system_router)
 router.include_router(export_router)
@@ -75,7 +102,7 @@ def _file_status(text: str) -> str:
 @router.post("/analyze-files")
 async def analyze_files(files: list[UploadFile] = File(...), background: str = Form("")):
     """提取文件文字后汇总分析；仅记录文件元数据，不落盘、不输出原文日志。"""
-    from app.file_analysis import MAX_FILE_SIZE, analyze_locally, extract_text
+    from app.file_analysis import MAX_FILE_SIZE, analyze_locally
     texts, metadata, errors = [], [], []
     for upload in files[:8]:
         raw = await upload.read(MAX_FILE_SIZE + 1)
@@ -87,7 +114,8 @@ async def analyze_files(files: list[UploadFile] = File(...), background: str = F
             })
             continue
         try:
-            text = await asyncio.to_thread(extract_text, upload.filename or "upload", raw)
+            text = await asyncio.to_thread(
+                _cached_extract_text, upload.filename or "upload", raw)
             texts.append(text)
             metadata.append({
                 "name": upload.filename,
