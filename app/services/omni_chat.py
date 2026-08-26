@@ -333,15 +333,59 @@ def _looks_like_self_intro(text: str) -> bool:
 
 
 def _looks_like_garbage(text: str) -> bool:
-    """判断模型输出是否为 "?" 乱码（A3 偶发，长上下文时更常见）。
+    """判断模型输出是否为乱码或退化文本（A3 偶发，长上下文时更常见）。
 
-    判定标准：问号 ≥5 个（即使夹杂少量中文）或问号占比 >30%。
+    判定标准：连续问号串 ≥4 个（A3 乱码形态）或问号占比 >30%；
+    或输出退化成"复读机"（ironironiron… / inininin… 等无限重复）。
+    注意不能按"问号总数 ≥5"判定——合法的多问题列表（答辩问题、追问）
+    本身就有 5+ 个问号，按总数会被误杀成"AI 生成失败"。
     """
     text = (text or "").strip()
     if not text:
         return True
     q = text.count("?") + text.count("？")
-    return q >= 5 or q / max(1, len(text)) > 0.3
+    max_run = max(
+        (len(m.group(0)) for m in re.finditer(r"[?？]{2,}", text)),
+        default=0,
+    )
+    if max_run >= 4 or q / max(1, len(text)) > 0.3:
+        return True
+    return _looks_like_repetition(text)
+
+
+def _looks_like_repetition(text: str) -> bool:
+    """检测模型退化成"复读机"的输出（如 ironironiron… / inininin…）。
+
+    三类特征任一命中即判为退化：
+    1. 整段由同一短单元无间隔循环（ironironiron / 好的好的好的好的…）；
+    2. 去空格后字符多样性极低（整段只有几个字符反复出现）；
+    3. 同一词重复 ≥6 次且占全文 60% 以上（iron iron iron …）。
+    """
+    text = (text or "").strip()
+    if not text:
+        return False
+    compact = re.sub(r"\s+", "", text.lower())
+    if not compact:
+        return False
+    # 1) 单一短单元整段循环；长度门槛避免误伤短笑声/短叠词
+    for unit_len in range(2, min(8, len(compact) // 4 + 1)):
+        unit = compact[:unit_len]
+        if unit and compact == unit * (len(compact) // unit_len) \
+                and len(compact) >= max(16, unit_len * 4):
+            return True
+    # 2) 字符多样性极低：长文本只有几个字符反复出现
+    if len(compact) >= 40:
+        unique = len(set(compact))
+        if unique <= 6 and unique / len(compact) < 0.15:
+            return True
+    # 3) 空格分隔的同一词高频重复且占全文过半
+    words = re.findall(r"[a-z\u4e00-\u9fff]{2,}", text.lower())
+    if words:
+        from collections import Counter
+        top, count = Counter(words).most_common(1)[0]
+        if count >= 6 and count * len(top) >= len(compact) * 0.6:
+            return True
+    return False
 
 
 def _clean_transcript(text: str) -> str:

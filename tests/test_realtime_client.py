@@ -946,6 +946,32 @@ def test_looks_like_garbage_flags_question_runs():
     assert not _looks_like_garbage("还有问题吗？请随时告诉我。")
 
 
+def test_looks_like_garbage_flags_repetition_loops():
+    """模型退化成复读机（ironironiron…）必须被识别为乱码，不能展示给用户。"""
+    from app.services.omni_chat import _looks_like_garbage
+
+    assert _looks_like_garbage("iron" * 60)
+    assert _looks_like_garbage("ironin" * 40)
+    assert _looks_like_garbage("in" * 80)
+    assert _looks_like_garbage("iron iron iron iron iron iron iron iron")
+    assert _looks_like_garbage("的" * 50)
+    # 正常内容不应误伤
+    assert not _looks_like_garbage(
+        "请根据你提交的答辩材料说明这项成果最核心的创新点是什么？")
+    assert not _looks_like_garbage(
+        "为什么选择A？为什么选择B？为什么选择C？为什么选择D？为什么选择E？")
+    assert not _looks_like_garbage("哈哈哈哈")
+    assert not _looks_like_garbage(
+        "好的，我来总结会议要点：成员分工明确，排期符合预期，"
+        "下周三前完成初稿并提交审核。")
+    # 合法多问题列表不应被"问号总数"误杀；真正的 A3 乱码是连续问号串
+    assert not _looks_like_garbage(
+        "1. 为什么选择A？\n2. 为什么选择B？\n3. 为什么选择C？\n"
+        "4. 为什么选择D？\n5. 为什么选择E？\n6. 为什么选择F？")
+    assert _looks_like_garbage("好的？？？？然后？？？？")
+    assert _looks_like_garbage("？？\n？？\n？？")
+
+
 def test_looks_like_self_intro_filters_model_intro():
     """转写输出为"模型自我介绍"时应丢弃，不能当用户原话存历史。"""
     from app.services.omni_chat import _looks_like_self_intro
