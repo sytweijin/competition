@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
@@ -607,7 +608,10 @@ async def report_photo(
     ext = Path(file.filename or "photo.jpg").suffix.lower()
     if ext not in (".jpg", ".jpeg", ".png", ".webp"):
         ext = ".jpg"
-    attach_path = ATTACH_DIR / f"{filename.replace('.json', '')}_{safe_id}{ext}"
+    attach_path = ATTACH_DIR / (
+        f"{filename.replace('.json', '')}_{safe_id}_"
+        f"{int(time.time())}{ext}"
+    )
     attach_path.write_bytes(raw)
     note = f"交付物照片已上传（{attach_path.name}）"
     plan = _load_plan(filename)

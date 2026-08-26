@@ -3,8 +3,10 @@
 import asyncio
 import base64
 import json
+import logging
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.config import (
@@ -14,6 +16,8 @@ from app.config import (
     MAP_REALTIME_MODEL,
 )
 from app.services.realtime_client import RealtimeClient, RealtimeError
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -491,7 +495,7 @@ async def realtime_interview_turn(
         if isinstance(m, dict)
         and m.get("role") in ("user", "assistant")
         and m.get("content")
-    ]
+    ][-16:]
     reply = ""
     summary = ""
     audio_hollow = False
@@ -565,12 +569,24 @@ async def realtime_interview_turn(
     return {"reply": reply, "summary": summary}
 
 
-@router.post("/realtime/meeting")
-async def realtime_meeting(file: UploadFile = File(...)):
-    """会议旁听：听会议录音/看会议录像，整理要点、任务（负责人/截止）与风险。
+def _sse_headers() -> dict:
+    """SSE 响应头：禁用代理缓冲，避免增量被攒住一次性下发。"""
+    return {
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+        "Connection": "keep-alive",
+    }
 
-    录像链路与答辩一致：抽帧看画面 + 抽音频听内容，边看边听整理会议；
-    纯录音走音频理解；无声轨的录屏视频仅凭画面理解整理。
+
+def _sse(payload: dict) -> str:
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+async def _meeting_analysis(raw: bytes, emit=None) -> dict:
+    """会议分析核心逻辑（供普通 JSON 与 SSE 流式两个端点共用）。
+
+    emit 为可选的进度回调（async callable: emit(message)），
+    流式端点用它逐阶段上报进度，普通端点不传即无感知。
     """
     from app.services.media_analysis import (
         _run_realtime_media_chat,
@@ -579,16 +595,22 @@ async def realtime_meeting(file: UploadFile = File(...)):
     )
     from app.services.realtime_client import RealtimeClient, RealtimeError
 
-    raw = await file.read(MAX_PERFORMANCE_SIZE + 1)
-    if len(raw) > MAX_PERFORMANCE_SIZE:
-        raise HTTPException(status_code=413, detail="录音/录像文件超过 60MB 限制")
+    async def _emit(message: str):
+        if emit is not None:
+            await emit(message)
+
+    await _emit("正在抽取视频画面…")
     try:
         frames = await asyncio.to_thread(extract_video_frames, raw, 3)
     except Exception:
         frames = []
+    await _emit("正在提取音频…")
     audio = await asyncio.to_thread(extract_audio_pcm16k, raw)
     if not audio and not frames:
-        raise HTTPException(status_code=400, detail="未从录音/录像中提取到音频或画面")
+        raise HTTPException(
+            status_code=400,
+            detail="未从录音/录像中提取到音频或画面",
+        )
 
     summary = ""
     tasks: list[dict] = []
@@ -599,6 +621,7 @@ async def realtime_meeting(file: UploadFile = File(...)):
         audio_b64 = base64.b64encode(audio).decode("utf-8")
         from app.services.omni_chat import understand_audio
 
+        await _emit("正在听会议音频…")
         try:
             result = await understand_audio(
                 audio_b64,
@@ -615,6 +638,8 @@ async def realtime_meeting(file: UploadFile = File(...)):
 
     visual: list[str] = []
     from app.services.omni_chat import _looks_like_garbage
+    if frames:
+        await _emit(f"正在理解 {len(frames)} 帧画面…")
     for index, frame in enumerate(frames, 1):
         parts = [
             {"type": "text",
@@ -635,6 +660,7 @@ async def realtime_meeting(file: UploadFile = File(...)):
 
     if visual and (not audio or audio_error):
         # 无声轨录屏 / 音频理解失败：把画面理解交给模型再整理成结构化会议结果
+        await _emit("正在整理会议纪要…")
         try:
             result = await RealtimeClient().chat(
                 messages=[{"role": "user", "content": (
@@ -656,6 +682,63 @@ async def realtime_meeting(file: UploadFile = File(...)):
         "has_video": bool(frames),
         "raw": text[:2000],
     }
+
+
+@router.post("/realtime/meeting")
+async def realtime_meeting(file: UploadFile = File(...)):
+    """会议旁听：听会议录音/看会议录像，整理要点、任务（负责人/截止）与风险。
+
+    录像链路与答辩一致：抽帧看画面 + 抽音频听内容，边看边听整理会议；
+    纯录音走音频理解；无声轨的录屏视频仅凭画面理解整理。
+    """
+    raw = await file.read(MAX_PERFORMANCE_SIZE + 1)
+    if len(raw) > MAX_PERFORMANCE_SIZE:
+        raise HTTPException(status_code=413, detail="录音/录像文件超过 60MB 限制")
+    return await _meeting_analysis(raw)
+
+
+@router.post("/realtime/meeting/stream")
+async def realtime_meeting_stream(file: UploadFile = File(...)):
+    """会议旁听流式版：逐阶段上报进度，末尾返回 done（结构化会议结果）。
+
+    与普通端点共享同一套分析逻辑，只是把"正在抽帧/正在听音频/正在看画面"
+    等进度实时推给前端，1-3 分钟的处理不再让用户干等。
+    """
+    raw = await file.read(MAX_PERFORMANCE_SIZE + 1)
+    if len(raw) > MAX_PERFORMANCE_SIZE:
+        raise HTTPException(status_code=413, detail="录音/录像文件超过 60MB 限制")
+
+    async def event_gen():
+        queue: asyncio.Queue = asyncio.Queue()
+
+        async def emit(message: str):
+            await queue.put({"type": "progress", "message": message})
+
+        async def run():
+            try:
+                data = await _meeting_analysis(raw, emit=emit)
+                await queue.put({"type": "done", "data": data})
+            except HTTPException as exc:
+                await queue.put({"type": "error", "detail": str(exc.detail)})
+            except Exception:
+                logger.exception("会议流式分析失败")
+                await queue.put({"type": "error", "detail": "会议分析失败，请重试"})
+            finally:
+                await queue.put(None)
+
+        task = asyncio.create_task(run())
+        try:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+                yield _sse(item)
+        finally:
+            if not task.done():
+                task.cancel()
+
+    return StreamingResponse(
+        event_gen(), media_type="text/event-stream", headers=_sse_headers())
 
 
 @router.post("/realtime/performance")
@@ -834,7 +917,7 @@ async def realtime_chat(req: RealtimeChatRequest):
     if ASCEND_OMNI_WS_URL and _looks_like_garbage(result.text):
         raise HTTPException(
             status_code=502,
-            detail="本地昇腾模型输出异常（未能理解该问题）：已切换通用模型回答",
+            detail="本地昇腾模型输出异常（未能理解该问题），请重试或改用云端后端",
         )
 
     model = "llama.cpp-omni" if ASCEND_OMNI_WS_URL else MAP_REALTIME_MODEL
@@ -854,3 +937,157 @@ async def realtime_chat(req: RealtimeChatRequest):
         "audio_wav_base64": wav_base64,
         "tts_failed": tts_failed,
     }
+
+
+@router.post("/realtime/chat/stream")
+async def realtime_chat_stream(req: RealtimeChatRequest):
+    """SSE 流式对话：文本增量实时推送，末尾返回 done（含 TTS 音频）。
+
+    与 /realtime/chat 语义一致（本地摊平历史、乱码重试、TTS 降级），
+    只是把模型输出按增量推给前端，消除"攒完才显示"的等待感。
+    """
+    if not (MAP_REALTIME_API_KEY or ASCEND_OMNI_WS_URL):
+        raise HTTPException(
+            status_code=503,
+            detail="MAP_REALTIME_API_KEY 或 ASCEND_OMNI_WS_URL 未配置",
+        )
+    messages = list(req.messages)
+    if req.message.strip():
+        messages.append({"role": "user", "content": req.message})
+    if not messages:
+        raise HTTPException(
+            status_code=400,
+            detail="messages 或 message 至少需要一项",
+        )
+
+    bare_last_content = None
+    if ASCEND_OMNI_WS_URL and len(messages) > 1:
+        from app.services.omni_chat import _flatten_history
+
+        *prev, last = messages
+        history_text = _flatten_history([
+            m for m in prev
+            if m.get("role") in ("user", "assistant")
+        ])
+        content = last.get("content")
+        if history_text and isinstance(content, str):
+            bare_last_content = content
+            last = dict(last, content=(
+                f"【对话上下文】\n{history_text}\n\n"
+                f"【当前问题】\n{content}"
+            ))
+            messages = [last]
+
+    async def event_gen():
+        queue: asyncio.Queue = asyncio.Queue()
+
+        async def on_delta(chunk: str):
+            await queue.put({"type": "delta", "delta": chunk})
+
+        async def run():
+            from app.services.omni_chat import _looks_like_garbage
+
+            client = RealtimeClient()
+            tts_failed = False
+            try:
+                result = await client.chat(
+                    messages=messages,
+                    system_prompt=req.system_prompt,
+                    max_new_tokens=(
+                        req.max_new_tokens or MAP_REALTIME_MAX_TOKENS),
+                    tts_enabled=req.tts_enabled,
+                    enable_thinking=req.enable_thinking,
+                    on_text_delta=on_delta,
+                )
+            except RealtimeError as exc:
+                if req.tts_enabled:
+                    try:
+                        await queue.put({
+                            "type": "info",
+                            "message": "语音生成暂不可用，已返回文字回答",
+                        })
+                        result = await client.chat(
+                            messages=messages,
+                            system_prompt=req.system_prompt,
+                            max_new_tokens=(
+                                req.max_new_tokens or MAP_REALTIME_MAX_TOKENS),
+                            tts_enabled=False,
+                            enable_thinking=req.enable_thinking,
+                            on_text_delta=on_delta,
+                        )
+                        tts_failed = True
+                    except RealtimeError as retry_exc:
+                        await queue.put({
+                            "type": "error", "detail": str(retry_exc),
+                        })
+                        return
+                else:
+                    await queue.put({"type": "error", "detail": str(exc)})
+                    return
+
+            # 本地 A3 偶发输出全 "?"：去摊平长上下文、用裸问句重试一次
+            if (ASCEND_OMNI_WS_URL and _looks_like_garbage(result.text)
+                    and bare_last_content is not None):
+                await queue.put({"type": "reset"})
+                try:
+                    result = await client.chat(
+                        messages=[{"role": "user", "content": bare_last_content}],
+                        system_prompt=req.system_prompt,
+                        max_new_tokens=(
+                            req.max_new_tokens or MAP_REALTIME_MAX_TOKENS),
+                        tts_enabled=False,
+                        enable_thinking=req.enable_thinking,
+                        on_text_delta=on_delta,
+                    )
+                except RealtimeError:
+                    pass
+            if ASCEND_OMNI_WS_URL and _looks_like_garbage(result.text):
+                await queue.put({
+                    "type": "error",
+                    "detail": (
+                        "本地昇腾模型输出异常（未能理解该问题），"
+                        "请重试或改用云端后端"
+                    ),
+                })
+                return
+
+            try:
+                wav_base64 = (
+                    result.audio_wav_base64
+                    if (req.tts_enabled and not tts_failed) else "")
+            except ValueError as exc:
+                await queue.put({"type": "error", "detail": str(exc)})
+                return
+            await queue.put({
+                "type": "done",
+                "reply": result.text,
+                "model": (
+                    "llama.cpp-omni" if ASCEND_OMNI_WS_URL
+                    else MAP_REALTIME_MODEL),
+                "backend": "local" if ASCEND_OMNI_WS_URL else "map",
+                "audio_wav_base64": wav_base64,
+                "tts_failed": tts_failed,
+            })
+
+        async def _run_wrapped():
+            # 无论正常完成、提前 return 还是异常，都放结束哨兵，
+            # 避免 event_gen 永久等待导致连接挂起。
+            try:
+                await run()
+            finally:
+                await queue.put(None)
+
+        task = asyncio.create_task(_run_wrapped())
+        try:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+                yield _sse(item)
+            await task
+        finally:
+            if not task.done():
+                task.cancel()
+
+    return StreamingResponse(
+        event_gen(), media_type="text/event-stream", headers=_sse_headers())

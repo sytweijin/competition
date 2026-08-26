@@ -48,6 +48,26 @@ async def test_health(client):
 
 
 @pytest.mark.asyncio
+async def test_ready_ok_with_local_storage(client, monkeypatch):
+    """local 存储后端下 /api/ready 应判定存储可用（200），不再恒 503。"""
+    import app.config as config
+    import app.web.routers.system as system
+
+    monkeypatch.setattr(config, "APP_MODEL_MODE", "minicpm")
+    monkeypatch.setattr(system, "APP_MODEL_MODE", "minicpm")
+    monkeypatch.setattr(system, "MAP_REALTIME_API_KEY", "test-key")
+    monkeypatch.setattr(system, "ASCEND_OMNI_WS_URL", "")
+    monkeypatch.setattr(config, "STORAGE_BACKEND", "local")
+    monkeypatch.setattr(system, "STORAGE_BACKEND", "local")
+    resp = await client.get("/api/ready")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "ready"
+    assert data["storage_backend"] == "local"
+    assert data["checks"]["storage_ok"] is True
+
+
+@pytest.mark.asyncio
 async def test_request_metrics_endpoint_tracks_requests(client):
     await client.get("/api/health")
     resp = await client.get("/api/metrics")

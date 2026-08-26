@@ -7,6 +7,7 @@
 
 import asyncio
 import base64
+import inspect
 import json
 import logging
 import struct
@@ -160,6 +161,7 @@ class RealtimeClient:
         enable_thinking: bool = False,
         omni_mode: bool = False,
         timeout: float | None = None,
+        on_text_delta=None,
     ) -> RealtimeChatResult:
         if not self.local_ws_url and not self.api_key:
             raise RealtimeError(
@@ -229,9 +231,14 @@ class RealtimeClient:
                     ):
                         kind = event.get("kind")
                         if kind in (None, "text"):
-                            result.text += str(
-                                event.get("text") or event.get("delta") or ""
-                            )
+                            chunk = str(
+                                event.get("text") or event.get("delta") or "")
+                            if chunk:
+                                result.text += chunk
+                                if on_text_delta is not None:
+                                    maybe = on_text_delta(chunk)
+                                    if inspect.isawaitable(maybe):
+                                        await maybe
                         elif kind == "audio":
                             result.audio_chunks.append(str(
                                 event.get("audio")

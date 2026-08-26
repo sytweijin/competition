@@ -33,6 +33,11 @@ def _force_legacy_llm_mode(monkeypatch):
 
     monkeypatch.setattr(config, "APP_MODEL_MODE", "legacy")
     monkeypatch.setattr(llm_client, "APP_MODEL_MODE", "legacy")
+    # 打桩一个非空 key，让 legacy 模式的 LLMClient mock 用例可复现：
+    # 不再依赖 .env / 环境变量（参赛交付 .env 中 LLM_API_KEY 为空），
+    # AGENTS.md 的全量测试基线在任何干净环境都能直接跑通。
+    monkeypatch.setattr(config, "LLM_API_KEY", "test-key")
+    monkeypatch.setattr(llm_client, "LLM_API_KEY", "test-key")
     monkeypatch.setattr(config, "APP_ALLOW_EXTERNAL_MODELS", True)
     monkeypatch.setattr(media, "APP_ALLOW_EXTERNAL_MODELS", True)
 

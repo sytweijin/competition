@@ -1,5 +1,6 @@
 """MiniCPM-o Realtime 客户端与 API 路由测试（不发起真实网络连接）。"""
 
+import asyncio
 import json
 import base64
 import io
@@ -94,6 +95,40 @@ async def test_chat_follows_realtime_event_sequence(monkeypatch):
     assert input_event["input"]["omni_mode"] is False
     assert input_event["input"]["messages"] == [
         {"role": "user", "content": "测试"}]
+
+
+@pytest.mark.asyncio
+async def test_chat_streams_text_deltas(monkeypatch):
+    """on_text_delta 回调应逐段收到文本增量，最终文本完整拼接。"""
+    events = [
+        {"type": "session.queue_done"},
+        {"type": "session.created"},
+        {"type": "response.output.delta", "kind": "text", "text": "你好，"},
+        {"type": "response.output.delta", "kind": "text", "text": "世界"},
+        {"type": "response.done", "text": "你好，世界", "reason": "turn_end"},
+    ]
+    fake = FakeWebSocket(events)
+
+    def fake_connect(uri, **kwargs):
+        return FakeConnector(fake)
+
+    monkeypatch.setattr(
+        realtime_client.config, "MAP_REALTIME_API_KEY", "test-key")
+    monkeypatch.setattr(
+        realtime_client.config, "ASCEND_OMNI_WS_URL", "")
+    monkeypatch.setattr(realtime_client.websockets, "connect", fake_connect)
+
+    deltas = []
+
+    async def on_delta(chunk: str):
+        deltas.append(chunk)
+
+    result = await RealtimeClient().chat(
+        messages=[{"role": "user", "content": "测试"}],
+        on_text_delta=on_delta,
+    )
+    assert deltas == ["你好，", "世界"]
+    assert result.text == "你好，世界"
 
 
 @pytest.mark.asyncio
@@ -1234,8 +1269,16 @@ def test_extract_video_frames_returns_jpegs():
     container.close()
 
     frames = extract_video_frames(buf.getvalue(), max_frames=4)
-    assert 1 <= len(frames) <= 4
+    assert len(frames) == 4
     assert frames[0][:2] == b"\xff\xd8"  # JPEG SOI 标记
+    # 短视频按「首帧+中间均匀+末帧」取满 4 帧，且各帧内容应不同
+    from PIL import Image
+    averages = []
+    for frame in frames:
+        image = Image.open(io.BytesIO(frame)).convert("L")
+        data = image.tobytes()
+        averages.append(sum(data) / len(data))
+    assert len({round(value) for value in averages}) >= 2
 
 
 def test_parse_turn_text():
@@ -1612,6 +1655,189 @@ async def test_meeting_audio_failure_falls_back_to_visual(monkeypatch):
     assert payload["tasks"][0]["name"] == "撰写报告"
     assert payload["has_video"] is True
     assert "甘特图" in payload["visual"]
+
+
+@pytest.mark.asyncio
+async def test_realtime_chat_stream_sse(monkeypatch):
+    """SSE 流式对话：delta 增量 + done 事件按序下发。"""
+    import app.web.routers.realtime as realtime_router
+
+    monkeypatch.setattr(
+        realtime_router, "MAP_REALTIME_API_KEY", "test-key")
+    monkeypatch.setattr(
+        realtime_router, "ASCEND_OMNI_WS_URL", "")
+
+    async def fake_chat(self, **kwargs):
+        on_delta = kwargs.get("on_text_delta")
+        if on_delta is not None:
+            await on_delta("你")
+            await on_delta("好")
+        return RealtimeChatResult(
+            text="你好", session_id="s1", response_id="r1")
+
+    monkeypatch.setattr(realtime_router.RealtimeClient, "chat", fake_chat)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        async with client.stream(
+            "POST", "/api/realtime/chat/stream",
+            json={"message": "你好"},
+        ) as resp:
+            assert resp.status_code == 200
+            assert "text/event-stream" in resp.headers["content-type"]
+            body = ""
+            async for chunk in resp.aiter_bytes():
+                body += chunk.decode("utf-8")
+
+    assert '"type": "delta"' in body
+    assert '"delta": "你"' in body
+    assert '"delta": "好"' in body
+    assert '"type": "done"' in body
+    assert '"reply": "你好"' in body
+    assert '"backend": "map"' in body
+
+
+@pytest.mark.asyncio
+async def test_realtime_chat_stream_local_garbage_retry(monkeypatch):
+    """本地 A3 乱码时：先发 reset 清屏，再用裸问句流式重试并正常 done。"""
+    import app.web.routers.realtime as realtime_router
+
+    monkeypatch.setattr(realtime_router, "MAP_REALTIME_API_KEY", "")
+    monkeypatch.setattr(
+        realtime_router, "ASCEND_OMNI_WS_URL",
+        "ws://127.0.0.1:28099/backend")
+
+    calls = []
+
+    async def fake_chat(self, **kwargs):
+        calls.append(kwargs.get("messages"))
+        on_delta = kwargs.get("on_text_delta")
+        if len(calls) == 1:
+            if on_delta is not None:
+                await on_delta("??")
+            return RealtimeChatResult(text="????????")
+        if on_delta is not None:
+            await on_delta("好的")
+        return RealtimeChatResult(text="好的，没问题")
+
+    monkeypatch.setattr(realtime_router.RealtimeClient, "chat", fake_chat)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        async with client.stream(
+            "POST", "/api/realtime/chat/stream",
+            json={
+                "messages": [
+                    {"role": "user", "content": "我是小红"},
+                    {"role": "assistant", "content": "好的小红"},
+                    {"role": "user", "content": "我叫什么名字"},
+                ],
+            },
+        ) as resp:
+            assert resp.status_code == 200
+            body = ""
+            async for chunk in resp.aiter_bytes():
+                body += chunk.decode("utf-8")
+
+    assert '"type": "reset"' in body
+    assert '"type": "done"' in body
+    assert "好的，没问题" in body
+    assert len(calls) == 2
+    # 第二次请求应只带裸问句（去掉摊平的长上下文），与旧 /chat 一致
+    assert calls[1][0]["content"] == "我叫什么名字"
+
+
+@pytest.mark.asyncio
+async def test_realtime_meeting_stream_progress_and_done(monkeypatch):
+    """会议旁听流式版：progress 进度事件 + done 结构化结果。"""
+    import app.web.routers.realtime as realtime_router
+    import app.services.media_analysis as media
+    import app.services.omni_chat as omni_chat
+
+    monkeypatch.setattr(
+        realtime_router, "MAP_REALTIME_API_KEY", "test-key")
+    monkeypatch.setattr(
+        realtime_router, "ASCEND_OMNI_WS_URL", "")
+    monkeypatch.setattr(omni_chat, "ASCEND_OMNI_WS_URL", "")
+
+    def fake_frames(content, max_frames):
+        return [b"JPEG1"]
+
+    def fake_audio(content):
+        return b"pcm"
+
+    async def fake_chat(self, **kwargs):
+        if kwargs.get("omni_mode"):
+            return RealtimeChatResult(text="会议转写文本")
+        return RealtimeChatResult(
+            text="【总结】\n确认排期与分工\n"
+                 "【任务】\n- 撰写报告 | 张三 | 周五\n"
+                 "【风险】\n无")
+
+    def fake_run(parts, max_tokens, omni_mode, timeout=180):
+        return "屏幕显示甘特图与排期"
+
+    monkeypatch.setattr(media, "extract_video_frames", fake_frames)
+    monkeypatch.setattr(media, "extract_audio_pcm16k", fake_audio)
+    monkeypatch.setattr(
+        realtime_router.RealtimeClient, "chat", fake_chat)
+    monkeypatch.setattr(media, "_run_realtime_media_chat", fake_run)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        async with client.stream(
+            "POST", "/api/realtime/meeting/stream",
+            files={"file": ("meeting.webm", b"fake-video", "video/webm")},
+        ) as resp:
+            assert resp.status_code == 200
+            assert "text/event-stream" in resp.headers["content-type"]
+            body = ""
+            async for chunk in resp.aiter_bytes():
+                body += chunk.decode("utf-8")
+
+    assert '"type": "progress"' in body
+    assert "正在听会议音频" in body
+    assert '"type": "done"' in body
+    assert "确认排期与分工" in body
+    assert "撰写报告" in body
+
+
+@pytest.mark.asyncio
+async def test_realtime_meeting_stream_error_event(monkeypatch):
+    """会议流式分析内部异常时下发 error 事件并正常收尾，不挂起、不静默断流。"""
+    import app.web.routers.realtime as realtime_router
+
+    monkeypatch.setattr(
+        realtime_router, "MAP_REALTIME_API_KEY", "test-key")
+    monkeypatch.setattr(
+        realtime_router, "ASCEND_OMNI_WS_URL", "")
+
+    async def boom(raw, emit=None):
+        raise RuntimeError("内部故障")
+
+    monkeypatch.setattr(realtime_router, "_meeting_analysis", boom)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        async with client.stream(
+            "POST", "/api/realtime/meeting/stream",
+            files={"file": ("meeting.webm", b"fake-video", "video/webm")},
+        ) as resp:
+            assert resp.status_code == 200
+            body = ""
+            async for chunk in resp.aiter_bytes():
+                body += chunk.decode("utf-8")
+
+    assert '"type": "error"' in body
+    assert "会议分析失败" in body
 
 
 @pytest.mark.asyncio

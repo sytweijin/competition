@@ -121,24 +121,39 @@ def readiness():
         if APP_MODEL_MODE != "minicpm"
         else bool(MAP_REALTIME_API_KEY or ASCEND_OMNI_WS_URL)
     )
-    checks = {
-        "llm_configured": llm_configured,
-        "durable_storage_configured": STORAGE_BACKEND == "s3" and bool(S3_BUCKET),
-        "durable_storage_reachable": False,
-    }
-    if checks["durable_storage_configured"]:
+    checks = {"llm_configured": llm_configured}
+    if STORAGE_BACKEND == "s3" and bool(S3_BUCKET):
+        checks["durable_storage_configured"] = True
+        checks["durable_storage_reachable"] = False
         try:
             storage = get_object_storage()
             checks["durable_storage_reachable"] = bool(
                 storage and storage.check())
         except Exception:
             checks["durable_storage_reachable"] = False
-    ready = all(checks.values())
+        checks["storage_ok"] = checks["durable_storage_reachable"]
+    else:
+        # local 后端：memory 目录可写即视为存储可用（演示/比赛默认形态），
+        # 避免 /api/ready 在默认配置下永远 503、被误当成部署故障。
+        checks["durable_storage_configured"] = False
+        try:
+            MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+            probe = MEMORY_DIR / ".ready_probe"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink()
+            checks["local_storage_writable"] = True
+        except Exception:
+            checks["local_storage_writable"] = False
+        checks["storage_ok"] = checks["local_storage_writable"]
+    # durable_storage_configured 只是信息性标识（区分 s3/local），
+    # 是否就绪只看「模型可用 + 存储可用」两项。
+    ready = checks["llm_configured"] and checks["storage_ok"]
     return JSONResponse(
         status_code=200 if ready else 503,
         content={
             "status": "ready" if ready else "not_ready",
             "version": "7.1",
+            "storage_backend": STORAGE_BACKEND,
             "checks": checks,
         },
     )

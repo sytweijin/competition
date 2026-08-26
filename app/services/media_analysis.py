@@ -136,9 +136,12 @@ def _decode_audio_to_pcm16k(content: bytes) -> bytes:
 def extract_video_frames(
     content: bytes, max_frames: int = 4, max_width: int = 640,
 ) -> list[bytes]:
-    """从视频中均匀抽取若干帧，返回 JPEG bytes 列表（流式采样，不整段载入内存）。
+    """从视频中抽取若干帧，返回 JPEG bytes 列表（流式采样，不整段载入内存）。
 
-    用于答辩录像的表情分析：只取时间轴上均匀分布的几帧，控制模型输入量。
+    短视频（≤2400 帧，约 80 秒 @30fps）按「首帧 + 中间均匀 + 末帧」取满
+    max_frames，保证开头/结尾的关键内容（课题引入、结论展示、白板收尾）不被
+    均匀采样漏掉；长视频退化为均匀步长采样，避免为了取末帧而全量解码。
+    用于答辩录像的表情分析与会议录像的画面理解。
     """
     import io
 
@@ -157,14 +160,30 @@ def extract_video_frames(
                     if stream.duration and rate else None
                 )
             )
-            step = max(1, (total // max_frames)) if total else 1
+            if total and total > 1 and total <= 2400 and max_frames > 1:
+                # 首帧 + 中间均匀 + 末帧：目标索引集合去重后按序解码
+                targets = sorted({
+                    min(total - 1, round(total * i / (max_frames - 1)))
+                    for i in range(max_frames)
+                })
+            else:
+                targets = None
             picked = []
             count = 0
             for frame in container.decode(stream):
-                if count % step == 0 and (total or len(picked) < max_frames):
+                if targets is not None:
+                    if count in targets:
+                        picked.append(frame)
+                        if len(picked) >= len(targets):
+                            break
+                elif total:
+                    step = max(1, total // max_frames)
+                    if count % step == 0 and len(picked) < max_frames:
+                        picked.append(frame)
+                        if len(picked) >= max_frames:
+                            break
+                elif len(picked) < max_frames:
                     picked.append(frame)
-                    if total and len(picked) >= max_frames:
-                        break
                 count += 1
         finally:
             container.close()
@@ -201,6 +220,7 @@ def extract_audio_pcm16k(content: bytes) -> bytes | None:
 def _realtime_audio_transcribe_text(filename: str, content: bytes) -> str:
     """用 MiniCPM-o Realtime 直接转写常见音频文件（长音频自动分片防崩溃）。"""
     from app.services.omni_chat import (
+        _AUDIO_CHUNK_SECONDS,
         _LOCAL_AUDIO_MAX_SECONDS,
         _looks_like_canned_reply,
         _looks_like_garbage,

@@ -698,9 +698,16 @@ async def _understand_audio_local(
         groups = [
             texts[i:i + 3] for i in range(0, len(texts), 3)
         ]
+        # 只有最终合并才用完整预算（无历史时）；中间层用小预算避免单次
+        # 生成过长。有历史时最终合并由下方带历史的完整预算调用承担。
+        final_level = len(groups) == 1
+        level_budget = (
+            max_new_tokens if (final_level and not history_text)
+            else merge_budget
+        )
         texts = await _merge_text_groups(
             groups, instruction, client,
-            merge_budget, timeout, system_prompt)
+            level_budget, timeout, system_prompt)
     merge_prompt = texts[0]
     if history_text:
         merge_prompt += "\n\n【历史对话】\n" + history_text

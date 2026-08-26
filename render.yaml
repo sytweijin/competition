@@ -11,6 +11,8 @@ services:
         value: 3.12.11
       - key: APP_ADMIN_TOKEN
         generateValue: true
+      - key: APP_HTTPS
+        value: "0"
       - key: LLM_API_KEY
         sync: false
       - key: LLM_BASE_URL

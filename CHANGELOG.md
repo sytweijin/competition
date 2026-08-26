@@ -303,6 +303,200 @@ DeepSeek/DashScope 占位配置，评审视角易被误解为使用其他模型�
 （云端/本地 A3）为参赛唯一模型通道。运行时行为不变（合规模式本来就不调用
 DeepSeek/DashScope），仅清理配置模板与文档痕迹。涉及 `.env.example`。
 
+**同步修改（2026-08-24 追加八 · 全面审查修复）：** 对全仓库做一次对照比赛要求与
+实际落地的深度审查后，一次性修复 5 处健壮性缺陷、1 处安全缺陷与 3 处打磨项：
+测试套件不再依赖 `LLM_API_KEY`、前端转义函数补双引号、两处误导性"已切换通用模型"
+文案、本地超长音频报错 NameError、长音频最终合并预算与注释一致、`/api/ready`
+local 存储不再恒 503、答辩语音回合历史截断、交付物照片不再互相覆盖、重复 `init()`
+清理与文档/部署基线同步。全量测试 344 → 345 passed；`app.js?v=` → `c618538f`。
+
+#### 1. 测试套件环境依赖：无 `LLM_API_KEY` 时 15 个用例失败（P1）
+1. **问题：** 参赛交付 `.env` 中 `LLM_API_KEY` 为空，而 `tests/test_review_fixes.py`、
+`tests/test_agent_benchmark.py` 的 mock 用例在 `LLMClient()` 构造后 `_enabled=False`，
+`chat_structured` 直接返回 auth_error，mock 根本走不到；AGENTS.md 的"必须 319 passed"
+在干净环境无法复现，且基线数字已过期（实际 344）。
+2. **修改前：** `conftest._force_legacy_llm_mode` 只 patch 了 `APP_MODEL_MODE` 与
+`APP_ALLOW_EXTERNAL_MODELS`，未处理 `LLM_API_KEY`。
+3. **修改后：** `conftest.py` 在 legacy 打桩中追加
+   `monkeypatch.setattr(config, "LLM_API_KEY", "test-key")` 与
+   `monkeypatch.setattr(llm_client, "LLM_API_KEY", "test-key")`；
+   AGENTS.md 基线同步为 345 passed，`docs/复现文档.md` 的 293 passed 同步为 345。
+4. **为什么这样改：** 用例本身测试的是"SDK 返回形态/重试策略"，不是"无 key 的
+auth_error 分支"（该分支由 test_api 的兜底用例单独覆盖并显式置空 key）；在夹具层
+给一个非空 key，才能让 mock 路径在任何环境都可复现。
+5. **收益：** ① 无 `.env` 的干净 checkout 直接 `pytest tests/ -q` 全绿；
+② 验证基线不再随本地密钥配置漂移；③ 文档数字与实际对齐。
+
+#### 2. 前端 `esc()` 不转义双引号，属性注入 XSS（P1）
+1. **问题：** `esc()` 只经 innerHTML 序列化文本节点，`"` 不会被转义，却大量用于
+`value="'+esc(...)+'"`、`title="'+esc(...)+'"` 等属性上下文；成员名/技能标签/任务名
+含 `"` 即可突破属性边界注入事件处理器。
+2. **修改前：** `function esc(value){var d=document.createElement('div');d.textContent=value==null?'':String(value);return d.innerHTML}`
+3. **修改后：**
+   `function esc(value){var d=document.createElement('div');d.textContent=value==null?'':String(value);return d.innerHTML.replace(/"/g,'&quot;').replace(/'/g,'&#39;')}`
+4. **为什么这样改：** 文本上下文里 `&quot;`/`&#39;` 渲染回引号不改变显示，属性上下文
+里则不会再被浏览器当作属性定界符；一处修复覆盖全部 esc() 调用点。
+5. **收益：** ① 消除属性注入 XSS；② 所有既有渲染位置显示不变；③ `node --check` 通过。
+
+#### 3. 合规模式下"已切换通用模型"误导文案（P1）
+1. **问题：** `APP_MODEL_MODE=minicpm` 时不存在通用模型，但前端
+`sendChat` 的提示与后端 `realtime_chat` 的 502 detail 仍写"已切换通用模型回答"，
+实际只是重试同一条 MiniCPM-o 链路，用户会被误导。
+2. **修改前：** 前端 `showNotice('MiniCPM-o 暂不可用，已切换通用模型：'+err.message)`；
+后端 `detail="…：已切换通用模型回答"`。
+3. **修改后：** 前端改为 `'MiniCPM-o 响应异常，已自动重试；若仍失败可稍后再试：'`；
+后端改为 `"本地昇腾模型输出异常（未能理解该问题），请重试或改用云端后端"`。
+4. **为什么这样改：** 诚实描述兜底行为（重试/报错），避免评审或用户误以为系统
+偷偷调用了其他模型，反而违背"不得使用其他模型"的合规承诺。
+5. **收益：** ① 文案与真实行为一致；② 合规边界不被误解；③ 演示时提示可操作。
+
+#### 4. 本地超长音频报错引用未导入常量（P2）
+1. **问题：** `media_analysis._realtime_audio_transcribe_text` 的超限文案引用了
+`_AUDIO_CHUNK_SECONDS`，但本地 import 列表未包含，触发分支时抛 NameError，
+被上层吞成"语音模型调用失败（NameError）"误导排查。
+2. **修改前：** `from app.services.omni_chat import (_LOCAL_AUDIO_MAX_SECONDS, …)`，
+随后 f-string 使用 `_AUDIO_CHUNK_SECONDS`。
+3. **修改后：** import 列表补上 `_AUDIO_CHUNK_SECONDS`。
+4. **为什么这样改：** 常量已在 omni_chat 模块定义，缺导入是纯遗漏；补上后错误文案
+正确显示"每段 ≤12 秒"。
+5. **收益：** ① 超限提示准确可操作；② 不再出现 NameError 掩盖真实原因。
+
+#### 5. 长音频无历史时最终合并预算与注释不一致（P2）
+1. **问题：** CHANGELOG 声称"只有最终合并用完整预算"，但 `_understand_audio_local`
+在无历史时直接把最后一轮 256 token 预算的合并结果返回，长会议摘要可能被压缩。
+2. **修改前：** `while len(texts) > 1: texts = await _merge_text_groups(…, merge_budget, …)`
+3. **修改后：** 每层合并前判断 `final_level = len(groups) == 1`，无历史时最终层用
+`max_new_tokens`（完整预算），有历史时仍由带历史的完整预算调用承担最终合并。
+4. **为什么这样改：** 中间层小预算控制单次生成长度与超时，最终层完整预算保证
+合并结果不被截断，行为与既有注释/文档一致。
+5. **收益：** ① 长会议最终摘要完整度提升；② 调用次数不变（回归用例仍通过）。
+
+#### 6. `/api/ready` 在 local 存储下恒 503（P2）
+1. **问题：** readiness 把 `durable_storage_configured` 绑定 S3，默认
+`STORAGE_BACKEND=local` 时 `all(checks.values())` 恒 False，任何把 `/api/ready`
+当健康检查的部署都会被误判为故障。
+2. **修改前：** `ready = all(checks.values())`，其中 `durable_storage_configured=False`。
+3. **修改后：** 仅 `ready = checks["llm_configured"] and checks["storage_ok"]`；
+local 分支探测 memory 目录可写作为 `local_storage_writable`，响应体新增
+`storage_backend` 字段，`durable_storage_configured` 保留为信息性标识。
+4. **为什么这样改：** S3 是可选增强不是就绪前提；local 目录可写即演示/比赛形态的
+持久化成立，readiness 应反映真实可服务状态。
+5. **收益：** ① local 部署下 `/api/ready` 正确返回 200；② s3 语义不变；
+③ 新增回归用例覆盖。
+
+#### 7. 答辩语音回合历史未截断（P2）
+1. **问题：** `realtime_interview_turn` 全量透传 history，长对话会把上下文撑爆，
+语音对话路径已截 16 条，这里漏了。
+2. **修改前：** `history_list = [ …过滤… ]`（无截断）。
+3. **修改后：** 过滤后追加 `[-16:]`。
+4. **为什么这样改：** 与 voice-chat 的记忆策略对齐，控制上下文长度与超时。
+5. **收益：** ① 答辩多轮不会因历史过长劣化；② 两处语音链路行为一致。
+
+#### 8. 同任务交付物照片互相覆盖（P2）
+1. **问题：** `report_photo` 按"方案+任务"固定文件名写盘，第二个成员/第二次上传
+会覆盖前一张交付物照片。
+2. **修改前：** `attach_path = ATTACH_DIR / f"{filename…}_{safe_id}{ext}"`
+3. **修改后：** 文件名追加 `int(time.time())` 时间戳，同一任务可保留多张照片。
+4. **为什么这样改：** 照片是成员交付证据，按时间区分文件名即可避免互相覆盖，
+`report_attachment` 读取最近一张的既有逻辑不变。
+5. **收益：** ① 多成员交付物各自保留；② 已上传照片不再静默丢失。
+
+#### 9. 打磨：重复 `init()`、部署与文档基线（P3）
+1. **问题：** `app.js` 重复声明两份 `function init()`（后一份覆盖前一份，死代码）；
+`render.yaml` 未显式关闭 `APP_HTTPS`，Render 实例会在容器内多绑一个无人访问的
+8443 自签名监听；测试基线文档数字过期（AGENTS.md 319 / 复现文档 293 /
+项目说明 293），且 `docs/深度审查与修复进度.md` 仍把"local 存储下 /api/ready 返回
+503"写成预期行为。
+2. **修改前：** 第 400/401 行两份 init；render.yaml 无 `APP_HTTPS`；
+AGENTS.md 319 / 复现文档 293 / 项目说明 293；深度审查文档记录旧 ready 行为。
+3. **修改后：** 删除无 `visibilitychange` 监听的第一份 init；render.yaml 增加
+`APP_HTTPS: "0"`；AGENTS.md、复现文档、项目说明基线统一为 345；深度审查文档
+同步 ready 新语义（local 就绪 / S3 严格）。
+4. **为什么这样改：** 死代码删除降低混淆；Render 走平台暴露的 `$PORT`，容器内
+自签 HTTPS 监听无意义；基线数字必须与实际一致才可执行。
+5. **收益：** ① 前端入口唯一且包含磁盘同步监听；② Render 部署行为干净；
+③ 验证基线可复核；④ 提交材料与代码行为不再互相矛盾。
+
+**涉及文件：** `tests/conftest.py`、`tests/test_api.py`、`app/web/static/app.js`、
+`app/web/templates/index.html`（app.js?v=c618538f）、`app/web/routers/realtime.py`、
+`app/web/routers/system.py`、`app/web/routers/report.py`、
+`app/services/media_analysis.py`、`app/services/omni_chat.py`、`render.yaml`、
+`AGENTS.md`、`docs/复现文档.md`、`docs/项目说明.md`、
+`docs/深度审查与修复进度.md`、`CHANGELOG.md`。
+
+**同步修改（2026-08-24 追加九 · 差距点改进：流式输出 + 会议进度 + 视频抽帧）：**
+针对审查结论中"对话无流式展示、等待感强""会议旁听 1-3 分钟干等""视频抽帧
+覆盖不全"三个差距点落地改进：抽屉对话改走 SSE 增量推送、会议旁听逐阶段上报
+进度、短视频抽帧按「首帧+中间均匀+末帧」取满；流式端点补充模块级 logger
+定义（异常路径曾会二次抛 NameError 吞掉错误事件，已修复并加回归用例）。
+全量测试 345 → 350 passed；
+`app.js?v=` → `64467026`。
+
+#### 1. 对话流式输出：消除"攒完才显示"的等待感（P2 体验）
+1. **问题：** 抽屉 AI 对话是整轮等待：`RealtimeClient.chat` 把 `response.output.delta`
+全部攒完才一次性返回，长回答期间用户看到的是转圈，感知延迟大；备赛梳理 §8.4
+把"对话流式展示"列为待办。
+2. **修改前：** `RealtimeClient.chat` 无增量回调；`/api/realtime/chat` 返回完整 JSON；
+前端 `sendChat` 调 `sendRealtimeChat` 一次性拿结果。
+3. **修改后：**
+   - `RealtimeClient.chat` 新增可选参数 `on_text_delta`（支持同步/异步回调），
+     每个文本增量到达即回调，最终文本拼接逻辑不变；
+   - 新增 `POST /api/realtime/chat/stream`（SSE）：`delta` 增量推送 →
+     本地 A3 乱码时发 `reset` 清屏重试 → 末尾 `done`（含完整回复与 TTS 音频）；
+     TTS 失败降级、本地历史摊平、乱码守卫与 `/chat` 完全一致；
+   - 前端 `streamRealtimeChat` 用 `fetch` + `ReadableStream` 解析 SSE，
+     增量写入气泡 `textContent`（天然防 XSS，不经过 innerHTML），
+     `reset` 清空重显，`done` 后回填历史并附"🔊 重听"按钮；
+   - 流式失败自动回落 `sendLegacyChat`，行为与旧版一致。
+4. **为什么这样改：** 协议本身是增量输出，攒满再返回是纯应用层损耗；
+把增量推给前端即可用最小改动获得"边生成边显示"的实时感，且不改动既有
+非流式接口（兼容第三方调用）。
+5. **收益：** ① 长回答首字可见时间大幅提前；② 演示"AI 在思考"的过程可见，
+减少等待焦虑；③ 流式失败有完整回落，不破坏主链路；④ 本地乱码 `reset` 重试
+分支有回归用例（重置后仅带裸问句，与旧 `/chat` 语义一致）。
+
+#### 2. 会议旁听进度流式：1-3 分钟处理不再干等（P2 体验）
+1. **问题：** 会议旁听要抽帧、听音频、看画面、整理纪要，全程 1-3 分钟，
+前端只有一个静态"正在旁听…"提示，用户不知道进行到哪一步。
+2. **修改前：** `realtime_meeting` 一次性返回 JSON，无中间状态。
+3. **修改后：**
+   - 抽出 `_meeting_analysis(raw, emit)` 核心逻辑（emit 为可选进度回调），
+     普通 `/api/realtime/meeting` 与新增 `/api/realtime/meeting/stream`
+     共用同一实现，避免两处行为分叉；
+   - 流式端点按阶段上报 `progress`：抽取画面 → 提取音频 → 听会议音频 →
+     理解画面 → 整理纪要，末尾 `done` 返回结构化结果；
+   - 前端 `handleMeetingFile` 改调流式端点，弹窗即时打开并逐条更新进度；
+     分析失败（`error` 事件）自动关弹窗并提示。
+4. **为什么这样改：** 分析耗时来自模型调用，应用层无法缩短，但可以
+"让等待可感知"；共享核心逻辑保证两个端点结果一致、无重复维护。
+5. **收益：** ① 用户随时知道当前阶段，等待焦虑显著降低；② 普通端点行为
+与返回结构完全不变（既有调用与测试不受影响）；③ 后续加阶段只需在
+`_meeting_analysis` 里加一行 `_emit`；④ 分析内部异常下发 `error` 事件并
+正常收尾（新增回归用例，防静默断流）。
+
+#### 3. 视频抽帧覆盖开头/结尾（P2 内容质量）
+1. **问题：** 均匀步长抽帧会漏掉结尾（如 12 帧取 4 帧只到 75% 位置），
+答辩/会议的关键内容常在开场与收尾（白板结论、总结页），漏帧即漏信息。
+2. **修改前：** `extract_video_frames` 按 `count % step == 0` 均匀取，不保证末帧。
+3. **修改后：** 短视频（≤2400 帧，约 80 秒 @30fps）按
+`round(total * i / (max_frames - 1))` 取「首帧 + 中间均匀 + 末帧」目标索引集合，
+解码命中即停；长视频保持均匀步长并在取满后提前 break，避免全量解码。
+4. **为什么这样改：** 短视频全量解码成本可接受（数秒），换取开头/结尾必覆盖；
+长视频仍以性能为先。回归用例断言取满 4 帧且各帧亮度不同（确实覆盖不同时间点）。
+5. **收益：** ① 开场/收尾内容不再被漏掉；② 长视频解码开销不增加；
+③ 会议/答辩画面理解的信息完整性提升。
+
+**同步修改：** `docs/华为昇腾创新应用赛道接入说明.md` 补充流式端点与 SSE 事件格式；
+`docs/比赛备赛梳理.md` §5/§8.4 更新（流式已落地，实时双工仍为待办）；
+测试基线 345 → 350 同步至 AGENTS.md / 复现文档 / 项目说明。
+
+**涉及文件：** `app/services/realtime_client.py`、`app/web/routers/realtime.py`、
+`app/services/media_analysis.py`、`app/web/static/app.js`、
+`app/web/templates/index.html`（app.js?v=64467026）、
+`tests/test_realtime_client.py`、`AGENTS.md`、`docs/复现文档.md`、
+`docs/项目说明.md`、`docs/华为昇腾创新应用赛道接入说明.md`、
+`docs/比赛备赛梳理.md`、`CHANGELOG.md`。
+
 ---
 ## v7.0 —— 视频理解：会议录像边看边听 + 多模态演示闭环（2026-08-22）
 
