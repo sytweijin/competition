@@ -111,7 +111,8 @@ class LLMClient:
         import asyncio
 
         from app.services.omni_chat import (
-            _flatten_history, _looks_like_canned_reply, _looks_like_garbage)
+            _NO_CANNED_NUDGE, _flatten_history,
+            _looks_like_canned_reply, _looks_like_garbage)
         from app.services.realtime_client import RealtimeClient, RealtimeError
 
         history = list(messages or [])
@@ -124,10 +125,14 @@ class LLMClient:
                 history = [{"role": "user", "content": (
                     f"【对话上下文】\n{ctx}\n\n【当前问题】\n{content}")}]
 
-        async def _call() -> str:
+        async def _call(attempt: int = 1) -> str:
+            final_system = system_prompt
+            if attempt > 1:
+                final_system = (
+                    (final_system or "") + "\n\n" + _NO_CANNED_NUDGE).strip()
             result = await RealtimeClient().chat(
                 messages=history,
-                system_prompt=system_prompt,
+                system_prompt=final_system,
                 max_new_tokens=max_tokens or LLM_MAX_TOKENS,
                 omni_mode=False,
                 tts_enabled=False,
@@ -135,6 +140,15 @@ class LLMClient:
             )
             text = (result.text or "").strip()
             if _looks_like_garbage(text) or _looks_like_canned_reply(text):
+                # 云端 ModelBest 偶发开场白/客套/乱码：带防客套指令重试一次，
+                # 提升建议抽题/答辩模拟等文字链路的成功率；
+                # 本地 A3 推理慢（约 50 token/s）且已有确定性兜底，保持单次
+                # 命中即抛，避免把演示等待时间再翻倍。
+                if attempt == 1 and not ASCEND_OMNI_WS_URL:
+                    logger.warning(
+                        "MiniCPM-o 云端文本输出异常（乱码/客套），"
+                        "带防客套指令重试：%r", text[:120])
+                    return await _call(2)
                 raise ValueError("MiniCPM-o 输出异常（乱码/客套回复），请重试")
             return text
 
@@ -143,13 +157,13 @@ class LLMClient:
                 asyncio.get_running_loop()
             except RuntimeError:
                 # 无运行中事件循环：直接 run。
-                return asyncio.run(_call())
+                return asyncio.run(_call(1))
             # 已在事件循环内（异步路由直接调用）：换线程跑，避免
             # "asyncio.run() cannot be called from a running event loop"。
             import concurrent.futures
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                return pool.submit(asyncio.run, _call()).result()
+                return pool.submit(asyncio.run, _call(1)).result()
         except RealtimeError as exc:
             raise ValueError(str(exc)) from exc
 
@@ -667,6 +681,7 @@ class LLMClient:
         system_prompt: str,
         user_prompt: str,
         temperature: float = 0.7,
+        max_tokens: int | None = None,
     ) -> str | AgentError:
         """自由文本调用（用于 B1 答辩模拟等无需严格结构化的场景）"""
         if not self._enabled and self._client is None:
@@ -680,7 +695,7 @@ class LLMClient:
                     system_prompt,
                     [{"role": "user", "content": user_prompt}],
                     temperature,
-                    LLM_MAX_TOKENS,
+                    max_tokens or LLM_MAX_TOKENS,
                 )
             except Exception as exc:
                 err_type = _classify_error(exc)

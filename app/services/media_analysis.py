@@ -249,8 +249,12 @@ def _realtime_audio_transcribe_text(filename: str, content: bytes) -> str:
             {"type": "audio", "data": chunk},
         ]
         text = _run_realtime_media_chat(content_parts, 2000, True).strip()
-        if text and not (_looks_like_garbage(text)
-                         or _looks_like_canned_reply(text)):
+        # 客套/自介拦截仅对本地 A3 生效（v7.1 曾误套到云端，
+        # 导致云端语音"无法识别"）；云端保留纯乱码守卫即可。
+        valid = not _looks_like_garbage(text)
+        if ASCEND_OMNI_WS_URL:
+            valid = valid and not _looks_like_canned_reply(text)
+        if text and valid:
             parts_out.append(text)
     if not parts_out:
         raise ValueError(

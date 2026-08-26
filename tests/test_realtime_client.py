@@ -1320,6 +1320,31 @@ def test_parse_turn_text():
     assert summary == ""
     assert reply == "没有标记的纯文本"
 
+    # 模型把换行写成字面转义序列（"\\n"）时必须归一化为真实换行
+    summary, reply = _parse_turn_text(
+        "【回答摘要】\\n用户表示材料已说明。\\n【评委回复】\\n追问：请说明数据来源。")
+    assert summary == "用户表示材料已说明。"
+    assert reply == "追问：请说明数据来源。"
+    assert "\\n" not in summary and "\\n" not in reply
+
+    # MiniCPM-o 偶发使用简写标记【评】/【追】——两者都属于评委回复
+    # （点评 + 追问），不能把点评误当成用户回答摘要
+    summary, reply = _parse_turn_text(
+        "【评】正面回答但缺细节。\\n\\n【追】既然没有说明，"
+        "现实中的专利壁垒如何导致垄断？")
+    assert summary == ""
+    assert "正面回答但缺细节。" in reply
+    assert "既然没有说明" in reply
+    assert "【评】" not in reply and "【追】" not in reply
+
+    # 摘要全称 + 回复简写混合（【回答摘要】…【评】…【追】…）
+    summary, reply = _parse_turn_text(
+        "【回答摘要】\\n用户说已读完材料。\\n【评】回答较全面。"
+        "\\n【追】请举一个具体例子。")
+    assert summary == "用户说已读完材料。"
+    assert "回答较全面。" in reply
+    assert "请举一个具体例子。" in reply
+
 
 def test_clean_transcript_strips_echo_tails():
     """云端转写应去掉模型附带的确认语/客套尾巴，只保留用户原话。"""
@@ -1550,9 +1575,15 @@ async def test_interview_turn_video_adds_observations(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_interview_turn_hollow_reply_returns_502(monkeypatch):
-    """答辩语音回合空转（评委未听懂）应返回 502 明确提示而非空转结果。"""
+    """本地答辩语音回合空转（评委未听懂）应返回 502 明确提示。"""
     import app.web.routers.realtime as realtime_router
     import app.services.media_analysis as media
+
+    monkeypatch.setattr(
+        realtime_router, "MAP_REALTIME_API_KEY", "test-key")
+    monkeypatch.setattr(
+        realtime_router, "ASCEND_OMNI_WS_URL",
+        "ws://127.0.0.1:28099/backend")
 
     def fake_frames(content, max_frames):
         return []
@@ -1937,8 +1968,10 @@ async def test_interview_turn_retries_when_reply_repeats(monkeypatch):
     monkeypatch.setattr(
         realtime_router, "MAP_REALTIME_API_KEY", "test-key")
     monkeypatch.setattr(
-        realtime_router, "ASCEND_OMNI_WS_URL", "")
-    monkeypatch.setattr(omni_chat, "ASCEND_OMNI_WS_URL", "")
+        realtime_router, "ASCEND_OMNI_WS_URL",
+        "ws://127.0.0.1:28099/backend")
+    monkeypatch.setattr(
+        omni_chat, "ASCEND_OMNI_WS_URL", "ws://127.0.0.1:28099/backend")
 
     def fake_frames(content, max_frames):
         return []
@@ -1991,3 +2024,436 @@ async def test_interview_turn_retries_when_reply_repeats(monkeypatch):
     assert resp.json()["reply"] == "新的点评与追问B"
     assert calls["n"] == 2
     assert "不要重复" in calls["instructions"][1]
+
+
+@pytest.mark.asyncio
+async def test_interview_turn_cloud_passes_through_same_reply(monkeypatch):
+    """云端评委"没听清→重复追问"（摘要为空）不应被判复读（v7.1 回归防护）。"""
+    import json
+
+    import app.services.media_analysis as media
+    import app.services.omni_chat as omni_chat
+    import app.web.routers.realtime as realtime_router
+
+    monkeypatch.setattr(
+        realtime_router, "MAP_REALTIME_API_KEY", "test-key")
+    monkeypatch.setattr(realtime_router, "ASCEND_OMNI_WS_URL", "")
+    monkeypatch.setattr(omni_chat, "ASCEND_OMNI_WS_URL", "")
+
+    def fake_frames(content, max_frames):
+        return []
+
+    def fake_audio(content):
+        return b"pcm"
+
+    calls = {"n": 0}
+    same_reply = (
+        "点评与追问A：用户基本正面回答了问题，但需要进一步说明文章"
+        "是如何支撑该结论的。")
+
+    async def fake_understand(audio_b64, system_prompt, instruction,
+                              max_new_tokens=1024, timeout=180,
+                              tts_enabled=False, history=None,
+                              allow_polite=False, prefer_text_answer=False):
+        calls["n"] += 1
+        return RealtimeChatResult(
+            text="【评】未听清用户回答，无法判断。\n【追】" + same_reply)
+
+    monkeypatch.setattr(media, "extract_video_frames", fake_frames)
+    monkeypatch.setattr(media, "extract_audio_pcm16k", fake_audio)
+    monkeypatch.setattr(omni_chat, "understand_audio", fake_understand)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/api/realtime/interview-turn",
+            data={
+                "system_prompt": "你是答辩评委",
+                "history": json.dumps([
+                    {"role": "assistant", "content": "第一个问题"},
+                    {"role": "user", "content": "🎤 [语音回答] 要点：A"},
+                    {"role": "assistant", "content": same_reply},
+                ]),
+            },
+            files={"file": ("voice.webm", b"fake-audio", "audio/webm")},
+        )
+
+    assert resp.status_code == 200
+    assert same_reply in resp.json()["reply"]
+    # 摘要为空（没拿到用户内容）时不触发复读重试，只走单次理解
+    assert calls["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_interview_turn_cloud_transcript_fallback_summary(monkeypatch):
+    """模型漏输出【回答摘要】时，用云端转写文本兜底摘要，
+    避免把评委点评误存成用户回答。"""
+    import json
+
+    import app.services.media_analysis as media
+    import app.services.omni_chat as omni_chat
+    import app.web.routers.realtime as realtime_router
+
+    monkeypatch.setattr(
+        realtime_router, "MAP_REALTIME_API_KEY", "test-key")
+    monkeypatch.setattr(realtime_router, "ASCEND_OMNI_WS_URL", "")
+    monkeypatch.setattr(omni_chat, "ASCEND_OMNI_WS_URL", "")
+
+    def fake_frames(content, max_frames):
+        return []
+
+    def fake_audio(content):
+        return b"pcm"
+
+    async def fake_understand(audio_b64, system_prompt, instruction,
+                              max_new_tokens=1024, timeout=180,
+                              tts_enabled=False, history=None,
+                              allow_polite=False, prefer_text_answer=False):
+        return RealtimeChatResult(
+            text="【评】正面回答但缺细节。\n【追】请补充数据来源。",
+            transcript="我实际回答的内容：数据来自问卷调查。",
+        )
+
+    monkeypatch.setattr(media, "extract_video_frames", fake_frames)
+    monkeypatch.setattr(media, "extract_audio_pcm16k", fake_audio)
+    monkeypatch.setattr(omni_chat, "understand_audio", fake_understand)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/api/realtime/interview-turn",
+            data={
+                "system_prompt": "你是答辩评委",
+                "history": json.dumps([
+                    {"role": "assistant", "content": "第一个问题"},
+                ]),
+            },
+            files={"file": ("voice.webm", b"fake-audio", "audio/webm")},
+        )
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["summary"] == "我实际回答的内容：数据来自问卷调查。"
+    assert "正面回答但缺细节。" in payload["reply"]
+    assert "请补充数据来源。" in payload["reply"]
+
+
+@pytest.mark.asyncio
+async def test_interview_turn_cloud_repeat_with_content_retries(monkeypatch):
+    """云端已拿到真实回答内容（摘要非空）却复读同一追问时，应重试一次。"""
+    import json
+
+    import app.services.media_analysis as media
+    import app.services.omni_chat as omni_chat
+    import app.web.routers.realtime as realtime_router
+
+    monkeypatch.setattr(
+        realtime_router, "MAP_REALTIME_API_KEY", "test-key")
+    monkeypatch.setattr(realtime_router, "ASCEND_OMNI_WS_URL", "")
+    monkeypatch.setattr(omni_chat, "ASCEND_OMNI_WS_URL", "")
+
+    def fake_frames(content, max_frames):
+        return []
+
+    def fake_audio(content):
+        return b"pcm"
+
+    calls = {"n": 0, "instructions": []}
+    prev_question = (
+        "既然原著没有详细说明，那在现实世界中，哪些冶金技术的缺失或"
+        "专利壁垒通常会导致一个行业被少数企业垄断？")
+
+    async def fake_understand(audio_b64, system_prompt, instruction,
+                              max_new_tokens=1024, timeout=180,
+                              tts_enabled=False, history=None,
+                              allow_polite=False, prefer_text_answer=False):
+        calls["n"] += 1
+        calls["instructions"].append(instruction)
+        if calls["n"] == 1:
+            return RealtimeChatResult(
+                text="【追】" + prev_question,
+                transcript="我这次补充了技术细节：炼金术与专利壁垒。",
+            )
+        return RealtimeChatResult(
+            text="【回答摘要】\n用户补充了技术细节。\n【评委回复】\n"
+                 "好的，这次请说明金融垄断如何放大技术壁垒。")
+
+    monkeypatch.setattr(media, "extract_video_frames", fake_frames)
+    monkeypatch.setattr(media, "extract_audio_pcm16k", fake_audio)
+    monkeypatch.setattr(omni_chat, "understand_audio", fake_understand)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/api/realtime/interview-turn",
+            data={
+                "system_prompt": "你是答辩评委",
+                "history": json.dumps([
+                    {"role": "assistant", "content": "第一个问题"},
+                    {"role": "user", "content": "🎤 [语音回答] 要点：回答一"},
+                    {"role": "assistant", "content": prev_question},
+                ]),
+            },
+            files={"file": ("voice.webm", b"fake-audio", "audio/webm")},
+        )
+
+    assert resp.status_code == 200
+    assert "金融垄断如何放大技术壁垒" in resp.json()["reply"]
+    assert calls["n"] == 2
+    assert "完全相同" in calls["instructions"][1]
+
+
+@pytest.mark.asyncio
+async def test_interview_turn_cloud_garbage_retries_once(monkeypatch):
+    """云端评委输出乱码（MAIL MAIL…）时，带防乱码指令重试一次。"""
+    import json
+
+    import app.services.media_analysis as media
+    import app.services.omni_chat as omni_chat
+    import app.web.routers.realtime as realtime_router
+
+    monkeypatch.setattr(
+        realtime_router, "MAP_REALTIME_API_KEY", "test-key")
+    monkeypatch.setattr(realtime_router, "ASCEND_OMNI_WS_URL", "")
+    monkeypatch.setattr(omni_chat, "ASCEND_OMNI_WS_URL", "")
+
+    def fake_frames(content, max_frames):
+        return []
+
+    def fake_audio(content):
+        return b"pcm"
+
+    calls = {"n": 0, "instructions": []}
+
+    async def fake_understand(audio_b64, system_prompt, instruction,
+                              max_new_tokens=1024, timeout=180,
+                              tts_enabled=False, history=None,
+                              allow_polite=False, prefer_text_answer=False):
+        calls["n"] += 1
+        calls["instructions"].append(instruction)
+        if calls["n"] == 1:
+            return RealtimeChatResult(
+                text="MAIL MAIL MAIL MAIL MAIL MAIL MAIL MAIL "
+                     "MAIL MAIL MAIL MAIL MAIL MAIL MAIL MAIL")
+        return RealtimeChatResult(
+            text="【回答摘要】\n要点A\n【评委回复】\n点评与追问A")
+
+    monkeypatch.setattr(media, "extract_video_frames", fake_frames)
+    monkeypatch.setattr(media, "extract_audio_pcm16k", fake_audio)
+    monkeypatch.setattr(omni_chat, "understand_audio", fake_understand)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/api/realtime/interview-turn",
+            data={
+                "system_prompt": "你是答辩评委",
+                "history": json.dumps([
+                    {"role": "assistant", "content": "第一个问题"},
+                    {"role": "user", "content": "🎤 [语音回答] 要点：A"},
+                ]),
+            },
+            files={"file": ("voice.webm", b"fake-audio", "audio/webm")},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["reply"] == "点评与追问A"
+    assert calls["n"] == 2
+    assert "乱码" in calls["instructions"][1]
+
+
+@pytest.mark.asyncio
+async def test_interview_turn_cloud_garbage_twice_returns_502(monkeypatch):
+    """云端评委连续两轮乱码应返回 502，绝不把乱码当回复展示。"""
+    import json
+
+    import app.services.media_analysis as media
+    import app.services.omni_chat as omni_chat
+    import app.web.routers.realtime as realtime_router
+
+    monkeypatch.setattr(
+        realtime_router, "MAP_REALTIME_API_KEY", "test-key")
+    monkeypatch.setattr(realtime_router, "ASCEND_OMNI_WS_URL", "")
+    monkeypatch.setattr(omni_chat, "ASCEND_OMNI_WS_URL", "")
+
+    def fake_frames(content, max_frames):
+        return []
+
+    def fake_audio(content):
+        return b"pcm"
+
+    calls = {"n": 0}
+
+    async def fake_understand(audio_b64, system_prompt, instruction,
+                              max_new_tokens=1024, timeout=180,
+                              tts_enabled=False, history=None,
+                              allow_polite=False, prefer_text_answer=False):
+        calls["n"] += 1
+        return RealtimeChatResult(
+            text="ösösösösösösösösösösösösösösösösösösösösösösösös"
+                 "ösösösösösösösösösösösösösösösösösösösösösösösös")
+
+    monkeypatch.setattr(media, "extract_video_frames", fake_frames)
+    monkeypatch.setattr(media, "extract_audio_pcm16k", fake_audio)
+    monkeypatch.setattr(omni_chat, "understand_audio", fake_understand)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/api/realtime/interview-turn",
+            data={
+                "system_prompt": "你是答辩评委",
+                "history": json.dumps([
+                    {"role": "assistant", "content": "第一个问题"},
+                ]),
+            },
+            files={"file": ("voice.webm", b"fake-audio", "audio/webm")},
+        )
+
+    assert resp.status_code == 502
+    assert "评委" in resp.json()["detail"]
+    assert calls["n"] == 2
+
+
+def test_looks_like_canned_reply_flags_greeting_openers():
+    """"你好，很高兴认识你。有什么我可以帮你的吗？"这类开场白必须被识别。"""
+    from app.services.omni_chat import _looks_like_canned_reply
+
+    assert _looks_like_canned_reply(
+        "你好，很高兴认识你。有什么我可以帮你的吗？")
+    assert _looks_like_canned_reply(
+        "你好，小红！很高兴认识你。有什么我可以帮你的吗？")
+    # 对话场景的正常问候承接（完整疑问句）仍不算客套回复
+    assert not _looks_like_canned_reply(
+        "你好！有什么问题我可以帮您解答吗？")
+
+
+@pytest.mark.asyncio
+async def test_transcribe_audio_cloud_skips_canned_guard(monkeypatch):
+    """云端转写恢复 v7.0 语义：清洗尾巴后非空即收，客套拦截仅限本地。"""
+    import app.services.omni_chat as omni_chat
+    import app.services.realtime_client as rt
+
+    monkeypatch.setattr(omni_chat, "ASCEND_OMNI_WS_URL", "")
+    calls = {"n": 0}
+
+    async def fake_chat(self, **kwargs):
+        calls["n"] += 1
+        return RealtimeChatResult(
+            text="你好，小红！很高兴认识你。有什么我可以帮你的吗？")
+
+    monkeypatch.setattr(rt.RealtimeClient, "chat", fake_chat)
+
+    audio_b64 = base64.b64encode(b"pcm-bytes").decode("utf-8")
+    text = await omni_chat.transcribe_audio(audio_b64)
+    assert text == "你好，小红！很高兴认识你。有什么我可以帮你的吗？"
+    assert calls["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_transcribe_audio_local_rejects_canned(monkeypatch):
+    """本地 A3 把转写指令当对话回应时，仍须重试并最终报错。"""
+    import app.services.omni_chat as omni_chat
+    import app.services.realtime_client as rt
+
+    monkeypatch.setattr(
+        omni_chat, "ASCEND_OMNI_WS_URL", "ws://127.0.0.1:28099/backend")
+    calls = {"n": 0}
+
+    async def fake_chat(self, **kwargs):
+        calls["n"] += 1
+        return RealtimeChatResult(
+            text="你好，小红！很高兴认识你。有什么我可以帮你的吗？")
+
+    monkeypatch.setattr(rt.RealtimeClient, "chat", fake_chat)
+
+    audio_b64 = base64.b64encode(b"pcm-bytes").decode("utf-8")
+    with pytest.raises(RealtimeError):
+        await omni_chat.transcribe_audio(audio_b64)
+    assert calls["n"] == 3
+
+
+@pytest.mark.asyncio
+async def test_transcribe_audio_cloud_rejects_garbage(monkeypatch):
+    """云端转写保留纯乱码（"?"）守卫，绝不把问号串当用户原话。"""
+    import app.services.omni_chat as omni_chat
+    import app.services.realtime_client as rt
+
+    monkeypatch.setattr(omni_chat, "ASCEND_OMNI_WS_URL", "")
+
+    async def fake_chat(self, **kwargs):
+        return RealtimeChatResult(text="????????????")
+
+    monkeypatch.setattr(rt.RealtimeClient, "chat", fake_chat)
+
+    audio_b64 = base64.b64encode(b"pcm-bytes").decode("utf-8")
+    with pytest.raises(RealtimeError):
+        await omni_chat.transcribe_audio(audio_b64)
+
+
+@pytest.mark.asyncio
+async def test_realtime_transcribe_cloud_allows_canned_text(monkeypatch):
+    """云端转写接口不再因客套判定返回 502（v7.1 回归防护）。"""
+    import app.services.media_analysis as media
+    import app.web.routers.realtime as realtime_router
+
+    monkeypatch.setattr(
+        realtime_router, "MAP_REALTIME_API_KEY", "test-key")
+    monkeypatch.setattr(realtime_router, "ASCEND_OMNI_WS_URL", "")
+
+    def fake_transcribe(filename, content, labeled):
+        return "你好，小红！很高兴认识你。有什么我可以帮你的吗？"
+
+    monkeypatch.setattr(media, "audio_transcribe_text", fake_transcribe)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/realtime/transcribe",
+            files={"file": ("voice.webm", b"fake-audio", "audio/webm")},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["text"] == (
+        "你好，小红！很高兴认识你。有什么我可以帮你的吗？")
+
+
+@pytest.mark.asyncio
+async def test_realtime_transcribe_local_rejects_canned_text(monkeypatch):
+    """本地转写接口对客套回复仍返回 502。"""
+    import app.services.media_analysis as media
+    import app.web.routers.realtime as realtime_router
+
+    monkeypatch.setattr(
+        realtime_router, "MAP_REALTIME_API_KEY", "test-key")
+    monkeypatch.setattr(
+        realtime_router, "ASCEND_OMNI_WS_URL",
+        "ws://127.0.0.1:28099/backend")
+
+    def fake_transcribe(filename, content, labeled):
+        return "你好，小红！很高兴认识你。有什么我可以帮你的吗？"
+
+    monkeypatch.setattr(media, "audio_transcribe_text", fake_transcribe)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/realtime/transcribe",
+            files={"file": ("voice.webm", b"fake-audio", "audio/webm")},
+        )
+
+    assert response.status_code == 502

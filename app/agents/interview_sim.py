@@ -13,6 +13,26 @@ from app.models.schemas import PlanOutput, QAOutput
 
 logger = logging.getLogger(__name__)
 
+# MiniCPM-o（8B）对超长材料文本会退化（实测云端对 5 万字 PPT 提取文本
+# 反复输出 "ösösös…/MAIL MAIL…" 乱码并拖慢响应）：材料一律限量，
+# 保留开头主体 + 结尾结论，中间省略，既保质量又显著提速。
+_SOURCE_LIMIT = 12000
+_SOURCE_LIMIT_RETRY = 6000
+
+
+def _bounded_source(source: str, limit: int = _SOURCE_LIMIT) -> str:
+    """把长材料截成 首部 75% + 尾部 25%，中间用省略标记连接。"""
+    source = (source or "").strip()
+    if len(source) <= limit:
+        return source
+    head_len = int(limit * 0.75)
+    tail_len = limit - head_len
+    return (
+        source[:head_len]
+        + "\n……（材料过长，中间内容已省略）……\n"
+        + source[-tail_len:]
+    )
+
 
 class InterviewSimAgent(BaseAgent):
     system_prompt = INTERVIEW_SYSTEM
@@ -22,7 +42,7 @@ class InterviewSimAgent(BaseAgent):
             user_requirements: str = "", project_context: str = "",
             material_text: str = "",
             material_names: list[str] | None = None) -> str:
-        """根据答辩要求和答辩材料生成 10-15 道现场问题。
+        """根据答辩要求和答辩材料生成 8-10 道现场问题。
 
         Args:
             plan/qa_matrix: 仅用于旧调用无材料时提供最低限度项目背景。
@@ -32,27 +52,47 @@ class InterviewSimAgent(BaseAgent):
         """
         names = "、".join(material_names or []) or "粘贴的答辩稿"
         if material_text.strip():
-            source = material_text.strip()[:50000]
+            source = _bounded_source(material_text.strip())
         else:
             source = "\n".join(f"- {t.name}: {t.description}" for t in plan.tasks)
-        user = (
-            "请模拟正式答辩现场。问题必须围绕答辩者实际提交的内容，"
-            "不要围绕任务完成状态、项目看板或系统分工提问。\n\n"
-            f"## 原始答辩/展示要求\n{project_context.strip() or '未提供额外要求'}\n\n"
-            f"## 答辩材料（{names}）\n{source}\n\n"
-        )
-        if user_requirements.strip():
-            user += f"## 评委关注点\n{user_requirements.strip()}\n\n"
-        user += (
-            "请生成10-15道可能的答辩提问并标注优先级。重点检查材料中的"
-            "核心主张、证据、数据、方案逻辑、创新点、局限和表达清晰度；"
-            "不得根据项目任务是否完成来提问。"
-        )
+
+        def build_user(src: str) -> str:
+            user = (
+                "请模拟正式答辩现场。问题必须围绕答辩者实际提交的内容，"
+                "不要围绕任务完成状态、项目看板或系统分工提问。\n\n"
+                f"## 原始答辩/展示要求\n{project_context.strip() or '未提供额外要求'}\n\n"
+                f"## 答辩材料（{names}）\n{src}\n\n"
+            )
+            if user_requirements.strip():
+                user += f"## 评委关注点\n{user_requirements.strip()}\n\n"
+            user += (
+                "请生成 8-10 道可能的答辩提问并标注优先级。重点检查材料中的"
+                "核心主张、证据、数据、方案逻辑、创新点、局限和表达清晰度；"
+                "不得根据项目任务是否完成来提问。\n"
+                "必须直接基于材料中的具体内容出题，不要询问答辩者"
+                "'请概括/复述/再说明一遍材料'这类元问题——材料里已有的结论"
+                "直接追问它的依据、逻辑和边界即可。每题一句话，只输出问题，"
+                "不要开场白和解释。"
+            )
+            return user
 
         result = self.llm.chat_text(
             system_prompt=self.system_prompt,
-            user_prompt=user,
+            user_prompt=build_user(source),
+            max_tokens=2048,
         )
+        if not isinstance(result, str) or not result.strip():
+            # 长材料仍可能让模型退化：缩短到一半再试一次（应用层第二道防线，
+            # 与 _realtime_text 的防乱码重试叠加，最多多一次生成）。
+            logger.warning(
+                "Interview question generation failed, retrying with shorter "
+                "material: %s", getattr(result, "message", result))
+            result = self.llm.chat_text(
+                system_prompt=self.system_prompt,
+                user_prompt=build_user(
+                    _bounded_source(source, _SOURCE_LIMIT_RETRY)),
+                max_tokens=2048,
+            )
         if isinstance(result, str):
             # Post-process: strip any leaked internal terminology
             # 禁用清单与 prompts.INTERVIEW_SYSTEM 逐条对齐（含裸 主讲/主答/辅答等答辩遗留术语）；码点统一 UTF-8。
@@ -103,8 +143,11 @@ class InterviewSimAgent(BaseAgent):
         """
         from app.llm.prompts import INTERVIEW_ADJUST_SYSTEM, INTERVIEW_CHAT_SYSTEM
         names = "、".join(material_names or []) or "粘贴的答辩稿"
-        source = material_text.strip()[:50000] if material_text.strip() else "\n".join(
-            f"- {t.name}: {t.description}" for t in plan.tasks
+        source = (
+            _bounded_source(material_text.strip(), 8000)
+            if material_text.strip()
+            else "\n".join(
+                f"- {t.name}: {t.description}" for t in plan.tasks)
         )
         context = (
             "这是一次基于答辩稿或PPT内容的模拟答辩，不是项目任务完成情况检查。\n\n"
@@ -157,6 +200,7 @@ class InterviewSimAgent(BaseAgent):
             system_prompt=INTERVIEW_ADJUST_SYSTEM if adjust_mode else INTERVIEW_CHAT_SYSTEM,
             messages=messages,
             temperature=0.6,
+            max_tokens=2048,
         )
         if isinstance(result, str):
             import re

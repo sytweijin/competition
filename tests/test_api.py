@@ -258,6 +258,8 @@ async def test_interview_returns_material_aware_fallback(client, monkeypatch):
         for q in data["questions"]
     )
     assert any("数据来源" in q for q in data["questions"])
+    # 兜底问题不允许再出现"请概括核心观点"式元问题（甩回给答辩者概括材料）
+    assert not any("请概括" in q for q in data["questions"])
 
 
 def _large_plan_payload():

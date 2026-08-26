@@ -45,7 +45,8 @@ class FakeLLMClient:
         return AgentError(agent="FakeLLM", error_type="unknown",
                          message="No mock configured", recoverable=True)
 
-    def chat_text(self, system_prompt, user_prompt, temperature=0.7):
+    def chat_text(self, system_prompt, user_prompt, temperature=0.7,
+                  max_tokens=None):
         if self._raise:
             return AgentError(agent="FakeLLM", error_type="llm_timeout",
                             message=str(self._raise), recoverable=True)
@@ -258,7 +259,8 @@ def test_interview_sim_uses_defense_material_instead_of_task_status():
     calls = []
 
     class MaterialLLM(FakeLLMClient):
-        def chat_text(self, system_prompt, user_prompt, temperature=0.7):
+        def chat_text(self, system_prompt, user_prompt, temperature=0.7,
+                      max_tokens=None):
             calls.append(user_prompt)
             return "【高】样本量为什么足以支撑这个结论？"
 
@@ -273,6 +275,48 @@ def test_interview_sim_uses_defense_material_instead_of_task_status():
     assert "调研覆盖120名学生" in calls[0]
     assert "答辩PPT.pptx" in calls[0]
     assert "任务完成状态" in calls[0]
+    # 出题指令：数量收敛到 8-10、禁止"请概括材料"式元问题
+    assert "8-10 道" in calls[0]
+    assert "请概括" in calls[0] and "不要询问答辩者" in calls[0]
+
+
+def test_bounded_source_keeps_head_and_tail():
+    """超长材料应保留首尾、省略中间，避免 MiniCPM-o 长输入退化。"""
+    from app.agents.interview_sim import _bounded_source
+
+    src = "A" * 1000 + "B" * 1000
+    out = _bounded_source(src, limit=400)
+    assert out.count("中间内容已省略") == 1
+    assert out.startswith("A")
+    assert out.endswith("B")
+    assert len(out) < len(src)
+    # 未超限的材料原样返回
+    assert _bounded_source("短文", limit=400) == "短文"
+
+
+def test_interview_sim_retries_with_shorter_material(monkeypatch):
+    """长材料出题失败时，应缩短材料再试一次而不是直接兜底。"""
+    from app.agents.interview_sim import InterviewSimAgent
+
+    plan = PlanOutput(tasks=[SubTask(id="T1", name="开发")], summary="test")
+    qa = QAOutput(assignments=[])
+    calls = []
+
+    class ShrinkLLM(FakeLLMClient):
+        def chat_text(self, system_prompt, user_prompt, temperature=0.7,
+                      max_tokens=None):
+            calls.append(user_prompt)
+            if len(calls) == 1:
+                return AgentError(agent="FakeLLM", error_type="unknown",
+                                  message="输出乱码", recoverable=True)
+            return "【高】为什么采用这种方法？"
+
+    result = InterviewSimAgent(llm=ShrinkLLM()).run(
+        plan=plan, qa_matrix=qa, material_text="长" * 30000)
+    assert result == "【高】为什么采用这种方法？"
+    assert len(calls) == 2
+    assert "材料过长" in calls[1]
+    assert len(calls[1]) < len(calls[0])
 
 
 # ──────────── validate_plan ────────────

@@ -43,7 +43,10 @@ INTERVIEW_TURN_INSTRUCTION = (
     "要求补充说明，不要提出新问题；只有回答到位，才提出下一个新问题。\n"
     "不要输出任何占位符、尖括号标签或格式说明。\n"
     "绝对不要重复或复述你上一轮已经给出的点评与追问；"
-    "若上一轮追问用户已回答，请换一个新维度继续提问。"
+    "若上一轮追问用户已回答，请换一个新维度继续提问。\n"
+    "追问时不要与上一轮使用完全相同的句子：如果用户回答已覆盖要点"
+    "（哪怕不完整），不要要求其逐字复述材料内容，直接基于其回答继续"
+    "追问依据、逻辑、数据或与方案其他部分的联系，或换一个更具体的角度。"
 )
 
 MEETING_PROMPT = (
@@ -132,7 +135,10 @@ async def realtime_transcribe(file: UploadFile = File(...)):
         raise HTTPException(status_code=502, detail=f"{hint}（{exc}）")
     from app.services.omni_chat import _looks_like_canned_reply
     from app.services.omni_chat import _looks_like_garbage
-    if _looks_like_canned_reply(text) or _looks_like_garbage(text):
+    # 客套判定仅对本地 A3 生效（v7.1 误套到云端导致云端语音"无法识别"）；
+    # 云端保留纯乱码守卫。
+    if (ASCEND_OMNI_WS_URL and _looks_like_canned_reply(text)) \
+            or _looks_like_garbage(text):
         hint = "语音识别暂不可用"
         if ASCEND_OMNI_WS_URL:
             hint += ("：本地昇腾把转写指令当成了对话，未返回用户原话，"
@@ -170,7 +176,7 @@ async def realtime_dictate(file: UploadFile = File(...)):
             hint += "：本地昇腾后端未连接，请确认 llama-omni-server 已启动"
         raise HTTPException(status_code=502, detail=f"{hint}（{exc}）")
     from app.services.omni_chat import _looks_like_canned_reply
-    if _looks_like_canned_reply(text):
+    if ASCEND_OMNI_WS_URL and _looks_like_canned_reply(text):
         hint = "语音整理暂不可用"
         if ASCEND_OMNI_WS_URL:
             hint += ("：本地昇腾未返回整理结果（模型可能把指令当成了对话），"
@@ -312,7 +318,7 @@ async def realtime_voice_requirement(file: UploadFile = File(...)):
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     text = (result.text or "").strip()
     from app.services.omni_chat import _looks_like_canned_reply
-    if _looks_like_canned_reply(text):
+    if ASCEND_OMNI_WS_URL and _looks_like_canned_reply(text):
         raise HTTPException(
             status_code=502,
             detail="语音需求理解失败：本地昇腾未返回有效需求要点"
@@ -382,9 +388,31 @@ def _reply_similar(left: str, right: str) -> float:
     return SequenceMatcher(None, left or "", right or "").ratio()
 
 
+def _normalize_literal_newlines(text: str) -> str:
+    """把模型偶发输出的字面转义序列（"\\n"）还原为真实换行。
+
+    MiniCPM-o 偶发把结构分隔写成字面 "\\n\\n"（截图/日志实测），
+    前端 pre-wrap 会原样显示成反斜杠 n，必须先归一化再解析与展示。
+    """
+    return (
+        (text or "")
+        .replace("\\r\\n", "\n")
+        .replace("\\n", "\n")
+        .replace("\\r", "\n")
+    )
+
+
 def _parse_turn_text(text: str) -> tuple[str, str]:
-    """解析答辩回合输出：返回 (回答摘要, 评委回复)。"""
+    """解析答辩回合输出：返回 (回答摘要, 评委回复)。
+
+    标准格式：【回答摘要】…【评委回复】a. 点评… b. 追问…
+    MiniCPM-o 偶发简写：【评】点评…【追】追问…——注意【评】是"点评"、
+    属于评委回复的一部分，不是用户回答摘要；摘要缺失时返回空串，
+    由调用方用云端转写文本兜底（避免把评委点评误存成用户回答）。
+    """
     text = (text or "").strip()
+    text = _normalize_literal_newlines(text)
+    shorthand_markers = ("【评】", "【点评】", "【追】", "【追问】")
     placeholder_lines = {
         "<摘要>", "<点评与下一个问题>", "<摘要内容>",
         "点评与下一个问题", "<点评>",
@@ -393,25 +421,47 @@ def _parse_turn_text(text: str) -> tuple[str, str]:
     def clean(part: str) -> str:
         lines = [
             line for line in part.splitlines()
-            if line.strip() not in placeholder_lines
+            if line.strip()
+            and line.strip() not in placeholder_lines
             and "<点评与下一个问题>" not in line
             and "<摘要>" not in line
         ]
         return "\n".join(lines).strip()
 
+    def strip_shorthand(part: str) -> str:
+        """把简写标记还原为换行（点评/追问同属评委回复）。"""
+        for marker in shorthand_markers:
+            part = part.replace(marker, "\n")
+        return clean(part)
+
     if "【回答摘要】" in text and "【评委回复】" in text:
         _, rest = text.split("【回答摘要】", 1)
         summary, reply = rest.split("【评委回复】", 1)
-        return clean(summary), clean(reply)
+        return clean(summary), strip_shorthand(reply)
     if "【评委回复】" in text:
         _, reply = text.split("【评委回复】", 1)
-        return "", clean(reply)
+        return "", strip_shorthand(reply)
+    # 摘要用全称、回复用简写（如 【回答摘要】…【评】…【追】…）
+    sum_pos = text.find("【回答摘要】")
+    if sum_pos >= 0:
+        rest = text[sum_pos + len("【回答摘要】"):]
+        rep_pos = min(
+            (rest.find(m) for m in shorthand_markers if m in rest),
+            default=-1,
+        )
+        if rep_pos >= 0:
+            summary = clean(rest[:rep_pos])
+            reply = strip_shorthand(rest[rep_pos:])
+            return summary, reply
+    # 只有简写标记：整段都是评委回复（点评 + 追问），摘要为空
+    if any(m in text for m in shorthand_markers):
+        return "", strip_shorthand(text)
     return "", clean(text)
 
 
 def _parse_meeting_text(text: str) -> tuple[str, list[dict], str]:
     """解析会议整理输出：返回 (会议要点, 任务列表, 风险)。"""
-    text = (text or "").strip()
+    text = _normalize_literal_newlines(text).strip()
     placeholder_lines = {
         "<会议要点>", "<任务>", "<风险>", "会议要点", "任务内容 | 负责人 | 截止",
         "风险或待确认事项，没有就写\"无\"",
@@ -518,18 +568,23 @@ async def realtime_interview_turn(
             _AUDIO_CHUNK_SECONDS, _looks_like_garbage, understand_audio)
 
         try:
-            # 防"评委复读"：模型被上一轮回复锚定时会逐字重复点评与追问。
-            # 首次命中重复即带防重复指令重试一次；重试后仍重复则判空转，
-            # 交给下方 502 提示，绝不把复读内容当回复展示。
-            for attempt in (1, 2):
+            # 评委输出守卫（两端通用）：
+            # - 乱码/复读退化（"ösösös…/MAIL MAIL…/ironiron…"）：云端与本地
+            #   都可能出现，命中即带防乱码+防复读指令重试一次，仍失败判空转
+            #   （交给下方 502，绝不把乱码当评委回复展示）；
+            # - 相似度复读（本地 A3 被上一轮回复锚定逐字重复）：仅本地判定。
+            #   云端仅在"已拿到真实回答内容（摘要非空）却仍复读同一追问"
+            #   时才判定复读——没听清（摘要为空）时重复追问是合法行为。
+            max_attempts = 2
+            for attempt in range(1, max_attempts + 1):
                 instruction = (
                     "用户正在回答你提出的问题，请听用户的语音并点评追问。"
                     if attempt == 1 else
                     "用户正在回答你提出的问题。注意：你第一次生成的点评与"
-                    "追问和对话历史中已有的回复完全相同，这是复读错误。"
-                    "请基于用户本次的新回答重新点评与追问；绝对不要重复"
-                    "历史中已有的任何点评或追问；若上一轮追问用户已回答，"
-                    "请换一个新维度继续提问。"
+                    "追问是乱码或与历史回复完全相同，这是输出错误。请基于"
+                    "用户本次的新回答重新生成有效的点评与追问；绝对不要输出"
+                    "重复的无意义字符，绝对不要重复历史中已有的任何点评或"
+                    "追问；若上一轮追问用户已回答，请换一个新维度继续提问。"
                 )
                 result = await understand_audio(
                     audio_b64,
@@ -539,29 +594,73 @@ async def realtime_interview_turn(
                     history=history_list,
                 )
                 summary, reply = _parse_turn_text(result.text)
-                if (attempt == 1 and last_reply and reply
-                        and len(reply) >= 30
-                        and _reply_similar(reply, last_reply) >= 0.85):
+                # 模型漏输出【回答摘要】时，用云端转写文本兜底，避免
+                # 评委点评被误存成用户回答、历史失真导致复读循环。
+                if not summary.strip() and (result.transcript or "").strip():
+                    summary = (result.transcript or "").strip()[:300]
+                bad_similar = (
+                    ASCEND_OMNI_WS_URL and last_reply and reply
+                    and len(reply) >= 30
+                    and _reply_similar(reply, last_reply) >= 0.85)
+                bad_repeat = (
+                    not ASCEND_OMNI_WS_URL and summary.strip() and reply
+                    and len(reply) >= 20 and last_reply
+                    and _reply_similar(reply, last_reply) >= 0.9)
+                bad_garbage = _looks_like_garbage(summary + " " + reply)
+                if attempt == 1 and (bad_garbage or bad_similar or bad_repeat):
                     summary = ""
                     reply = ""
                     continue
                 break
-            if (last_reply and reply and len(reply) >= 30
+            if _looks_like_garbage(summary + " " + reply):
+                audio_hollow = True
+                audio_error = "评委输出异常（乱码/重复内容），请重试"
+                summary = ""
+                reply = ""
+                logger.warning(
+                    "interview-turn 评委输出乱码：%r",
+                    (result.text or "")[:120],
+                )
+            elif (not ASCEND_OMNI_WS_URL and summary.strip() and reply
+                    and len(reply) >= 20 and last_reply
+                    and _reply_similar(reply, last_reply) >= 0.9):
+                audio_hollow = True
+                audio_error = (
+                    "评委连续两轮输出相同追问（未基于新回答推进），请重试")
+                summary = ""
+                reply = ""
+                logger.warning(
+                    "interview-turn 云端评委复读：len=%d last_len=%d "
+                    "similarity=%.3f",
+                    len(reply), len(last_reply),
+                    _reply_similar(reply, last_reply),
+                )
+            elif (ASCEND_OMNI_WS_URL and last_reply and reply
+                    and len(reply) >= 30
                     and _reply_similar(reply, last_reply) >= 0.85):
                 audio_hollow = True
                 audio_error = "评委连续两轮输出相同回复（模型复读），请重试"
                 summary = ""
                 reply = ""
-            # 本地 A3 常把音频当对话而非听懂内容：输出"用户尚未提供回答内容"
-            # 等空转文本。命中即标记，等待画面观察是否兜底。
-            hollow_markers = (
-                "尚未提供", "未提供", "没有听到", "未听到",
-                "无法判断", "无法识别", "没有收到", "没有捕获",
-            )
-            if not (summary or reply) or any(
-                    marker in (summary + " " + reply)
-                    for marker in hollow_markers):
-                audio_hollow = True
+                logger.warning(
+                    "interview-turn 本地评委复读：len=%d last_len=%d "
+                    "similarity=%.3f",
+                    len(reply), len(last_reply),
+                    _reply_similar(reply, last_reply),
+                )
+            if ASCEND_OMNI_WS_URL:
+                # 本地 A3 常把音频当对话而非听懂内容：输出"用户尚未提供
+                # 回答内容"等空转文本。命中即标记，等待画面观察是否兜底。
+                # 云端不判空转——"没有听到/无法识别"是评委的正常回应，
+                # 应当展示给用户而不是整轮报错。
+                hollow_markers = (
+                    "尚未提供", "未提供", "没有听到", "未听到",
+                    "无法判断", "无法识别", "没有收到", "没有捕获",
+                )
+                if not (summary or reply) or any(
+                        marker in (summary + " " + reply)
+                        for marker in hollow_markers):
+                    audio_hollow = True
         except RealtimeError as exc:
             if (getattr(exc, "error_type", "") == "validation_error"
                     and "超过" in str(exc)):
@@ -937,9 +1036,10 @@ async def realtime_chat(req: RealtimeChatRequest):
 
     # 本地 A3 偶发输出全 "?" 乱码（长上下文时更常见）：去掉摊平的长上下文，
     # 用裸问句重试一次，提升抽屉对话的演示稳定性。
-    # 文字对话场景不做"客套回复"拦截：模型回"你好，有什么可以帮您"是正常
-    # 承接，只有乱码才需要重试/报错。
-    from app.services.omni_chat import _looks_like_garbage
+    # 本地文字对话不拦"客套回复"（"你好，有什么可以帮您"可能是正常承接），
+    # 只对乱码报错；云端命中开场白/乱码时走下方带防客套指令的重试。
+    from app.services.omni_chat import (
+        _NO_CANNED_NUDGE, _looks_like_canned_reply, _looks_like_garbage)
     if (ASCEND_OMNI_WS_URL and _looks_like_garbage(result.text)
             and bare_last_content is not None):
         try:
@@ -957,6 +1057,36 @@ async def realtime_chat(req: RealtimeChatRequest):
             status_code=502,
             detail="本地昇腾模型输出异常（未能理解该问题），请重试或改用云端后端",
         )
+
+    # 云端 MiniCPM-o 偶发输出开场白/自介式客套（如"你好，很高兴认识你。
+    # 有什么我可以帮你的吗？"）或乱码：带防客套指令重试一次。重试后仍为
+    # 纯乱码才报错；仍是客套则直接返回（比 502 丢整轮更可接受，前端还有
+    # 兜底链路可继续追问）。
+    if (not ASCEND_OMNI_WS_URL
+            and (_looks_like_garbage(result.text)
+                 or _looks_like_canned_reply(result.text))):
+        logger.warning(
+            "realtime/chat 云端输出异常（乱码/客套），带防客套指令重试：%r",
+            (result.text or "")[:120],
+        )
+        retry_system = (
+            (req.system_prompt or "") + "\n\n" + _NO_CANNED_NUDGE).strip()
+        try:
+            result = await client.chat(
+                messages=messages,
+                system_prompt=retry_system,
+                max_new_tokens=req.max_new_tokens or MAP_REALTIME_MAX_TOKENS,
+                tts_enabled=False,
+                enable_thinking=req.enable_thinking,
+            )
+        except RealtimeError as retry_exc:
+            raise HTTPException(
+                status_code=502, detail=str(retry_exc)) from retry_exc
+        if _looks_like_garbage(result.text):
+            raise HTTPException(
+                status_code=502,
+                detail="云端 MiniCPM-o 输出异常（未能理解该问题），请重试",
+            )
 
     model = "llama.cpp-omni" if ASCEND_OMNI_WS_URL else MAP_REALTIME_MODEL
     backend = "local" if ASCEND_OMNI_WS_URL else "map"
@@ -1023,7 +1153,9 @@ async def realtime_chat_stream(req: RealtimeChatRequest):
             await queue.put({"type": "delta", "delta": chunk})
 
         async def run():
-            from app.services.omni_chat import _looks_like_garbage
+            from app.services.omni_chat import (
+                _NO_CANNED_NUDGE, _looks_like_canned_reply,
+                _looks_like_garbage)
 
             client = RealtimeClient()
             tts_failed = False
@@ -1085,6 +1217,43 @@ async def realtime_chat_stream(req: RealtimeChatRequest):
                     "detail": (
                         "本地昇腾模型输出异常（未能理解该问题），"
                         "请重试或改用云端后端"
+                    ),
+                })
+                return
+
+            # 云端 MiniCPM-o 偶发输出开场白/自介式客套或乱码：带防客套指令
+            # 重试一次（前端收到 reset 清空已展示文本）；重试后仍为纯乱码
+            # 才报错，客套内容直接返回。
+            if (not ASCEND_OMNI_WS_URL
+                    and (_looks_like_garbage(result.text)
+                         or _looks_like_canned_reply(result.text))):
+                await queue.put({"type": "reset"})
+                logger.warning(
+                    "realtime/chat/stream 云端输出异常（乱码/客套），"
+                    "带防客套指令重试：%r",
+                    (result.text or "")[:120],
+                )
+                retry_system = (
+                    (req.system_prompt or "")
+                    + "\n\n" + _NO_CANNED_NUDGE).strip()
+                try:
+                    result = await client.chat(
+                        messages=messages,
+                        system_prompt=retry_system,
+                        max_new_tokens=(
+                            req.max_new_tokens or MAP_REALTIME_MAX_TOKENS),
+                        tts_enabled=False,
+                        enable_thinking=req.enable_thinking,
+                        on_text_delta=on_delta,
+                    )
+                except RealtimeError:
+                    pass
+            if (not ASCEND_OMNI_WS_URL
+                    and _looks_like_garbage(result.text)):
+                await queue.put({
+                    "type": "error",
+                    "detail": (
+                        "云端 MiniCPM-o 输出异常（未能理解该问题），请重试"
                     ),
                 })
                 return

@@ -41,7 +41,8 @@ def test_interview_chat_sends_user_answer_and_history():
     calls = []
 
     class FakeLLM:
-        def chat_messages(self, system_prompt, messages, temperature):
+        def chat_messages(self, system_prompt, messages, temperature,
+                          max_tokens=None):
             calls.append(messages)
             return "点评合理，下一个问题：预算如何控制？"
 
@@ -68,7 +69,8 @@ def test_interview_chat_merges_consecutive_user_messages():
     calls = []
 
     class FakeLLM:
-        def chat_messages(self, system_prompt, messages, temperature):
+        def chat_messages(self, system_prompt, messages, temperature,
+                          max_tokens=None):
             calls.append(messages)
             return "点评合理，下一个问题：预算如何控制？"
 
@@ -101,7 +103,8 @@ def test_interview_chat_adjust_question():
     calls = []
 
     class FakeLLM:
-        def chat_messages(self, system_prompt, messages, temperature):
+        def chat_messages(self, system_prompt, messages, temperature,
+                          max_tokens=None):
             calls.append((system_prompt, messages))
             return "调整后的问题：你们的视觉物料具体怎么分工？"
 

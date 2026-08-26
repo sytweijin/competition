@@ -854,7 +854,8 @@ class InterviewRequest(BaseModel):
 
 def _fallback_interview_questions(req: InterviewRequest) -> list[str]:
     """LLM 生成失败时的确定性兜底问题：优先基于材料与评委关注点，
-    不再是与材料无关的通用提问。"""
+    不再是与材料无关的通用提问；也不再把"请概括核心观点"这类元问题
+    甩回给答辩者（材料已有的结论应直接追问依据）。"""
     questions: list[str] = []
     material = (req.material_text or "").strip()
     focus = (req.user_requirements or "").strip()
@@ -862,14 +863,21 @@ def _fallback_interview_questions(req: InterviewRequest) -> list[str]:
     tasks = req.plan.tasks if req.plan else []
 
     if material:
-        first_line = next(
-            (line.strip() for line in material.splitlines() if line.strip()),
-            "",
-        )
+        lines = [line.strip() for line in material.splitlines() if line.strip()]
+        first_line = lines[0] if lines else ""
         snippet = first_line[:48] + ("…" if len(first_line) > 48 else "")
         questions.append(
             f"根据你提交的答辩材料（「{snippet}」），"
             "请说明这项成果最核心的创新点是什么？")
+        # 直接针对材料中的第二个具体内容追问依据，避免模板化的
+        # "请概括你最希望评委理解的核心观点"式元问题。
+        if len(lines) >= 2:
+            second = lines[1][:48] + ("…" if len(lines[1]) > 48 else "")
+            questions.append(
+                f"材料中提到「{second}」，请说明支持这一结论的数据或依据是什么？")
+        else:
+            questions.append(
+                "材料中最重要的数据或证据是什么？它如何支撑你的核心结论？")
     elif tasks:
         questions.append(
             f"请介绍「{tasks[0].name}」这项成果的核心思路、"
@@ -881,7 +889,8 @@ def _fallback_interview_questions(req: InterviewRequest) -> list[str]:
     if context:
         questions.append(
             "结合答辩要求，请说明你的方案如何满足其中的关键评价标准？")
-    questions.append("请概括这次答辩最希望评委理解的核心观点。")
+    questions.append(
+        "这项成果在什么情况下可能不成立，或还需要补充哪些证据？")
     return questions
 
 

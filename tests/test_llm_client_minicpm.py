@@ -100,3 +100,72 @@ def test_chat_messages_minicpm_garbage_returns_error(monkeypatch, minicpm_mode):
         "你是助手", [{"role": "user", "content": "hi"}], timeout=30)
     assert isinstance(result, AgentError)
     assert "MiniCPM-o" in str(result)
+
+
+def test_realtime_text_cloud_retries_canned_once(monkeypatch):
+    """云端文本链路命中开场白/客套时，带防客套指令重试一次。"""
+    import app.llm.client as llm_client
+    import app.services.realtime_client as rt
+
+    monkeypatch.setattr(llm_client, "ASCEND_OMNI_WS_URL", "")
+    monkeypatch.setattr(llm_client, "MAP_REALTIME_API_KEY", "test-key")
+    calls = []
+
+    async def fake_chat(self, **kwargs):
+        calls.append(kwargs.get("system_prompt"))
+        if len(calls) == 1:
+            return RealtimeChatResult(
+                text="你好，很高兴认识你。有什么我可以帮你的吗？")
+        return RealtimeChatResult(text="请介绍你的项目核心创新点。")
+
+    monkeypatch.setattr(rt.RealtimeClient, "chat", fake_chat)
+
+    client = LLMClient()
+    text = client._realtime_text(
+        "你是答辩评委", [{"role": "user", "content": "请生成答辩问题"}])
+    assert text == "请介绍你的项目核心创新点。"
+    assert len(calls) == 2
+    assert "不要输出问候语" in (calls[1] or "")
+
+
+def test_realtime_text_cloud_garbage_retries_then_errors(monkeypatch):
+    """云端文本链路连续乱码时，重试一次后仍报错，不把问号串交付。"""
+    import app.llm.client as llm_client
+    import app.services.realtime_client as rt
+
+    monkeypatch.setattr(llm_client, "ASCEND_OMNI_WS_URL", "")
+    monkeypatch.setattr(llm_client, "MAP_REALTIME_API_KEY", "test-key")
+    calls = {"n": 0}
+
+    async def fake_chat(self, **kwargs):
+        calls["n"] += 1
+        return RealtimeChatResult(text="????????????")
+
+    monkeypatch.setattr(rt.RealtimeClient, "chat", fake_chat)
+
+    client = LLMClient()
+    with pytest.raises(ValueError):
+        client._realtime_text(
+            "你是答辩评委", [{"role": "user", "content": "请生成答辩问题"}])
+    assert calls["n"] == 2
+
+
+def test_realtime_text_local_canned_raises_without_retry(monkeypatch,
+                                                         minicpm_mode):
+    """本地 A3 命中客套/乱码保持单次即抛，避免推理慢再翻倍等待。"""
+    import app.services.realtime_client as rt
+
+    calls = {"n": 0}
+
+    async def fake_chat(self, **kwargs):
+        calls["n"] += 1
+        return RealtimeChatResult(
+            text="你好，很高兴认识你。有什么我可以帮你的吗？")
+
+    monkeypatch.setattr(rt.RealtimeClient, "chat", fake_chat)
+
+    client = LLMClient()
+    with pytest.raises(ValueError):
+        client._realtime_text(
+            "你是答辩评委", [{"role": "user", "content": "请生成答辩问题"}])
+    assert calls["n"] == 1

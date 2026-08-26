@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import base64
+import logging
 import math
 import re
 
@@ -18,6 +19,8 @@ from app.services.realtime_client import (
     RealtimeClient,
     RealtimeError,
 )
+
+logger = logging.getLogger(__name__)
 
 TRANSCRIBE_INSTRUCTION = (
     "这是用户的语音输入。请只转写用户说出的原话，不要添加任何其他内容："
@@ -60,6 +63,10 @@ _LOCAL_AUDIO_MAX_SECONDS = 600
 _CANNED_REPLY_PATTERNS = (
     "很高兴为你提供帮助",
     "很高兴为您提供帮助",
+    # 云端 MiniCPM-o 常见的"自我介绍式开场白"（截图实测复读原文），
+    # 与"高兴为你提供帮助"同属模型未执行指令的客套回复。
+    "很高兴认识你",
+    "有什么我可以帮",
     "请问有什么可以帮您",
     "请问有什么可以帮你",
     "有什么可以帮您",
@@ -93,6 +100,13 @@ _EN_CANNED_PATTERNS = (
     "certainly!",
     "here's a",
     "please let me know",
+)
+
+# 云端 MiniCPM-o 文本/对话输出疑似开场白、客套或自我介绍时，
+# 重试一次并在系统提示词后追加这条指令，引导模型直接完成任务。
+_NO_CANNED_NUDGE = (
+    "【注意】请直接输出任务结果或回答用户的问题本身，不要输出问候语、"
+    "开场白或自我介绍，不要出现'很高兴认识你''有什么我可以帮你'等客套话。"
 )
 
 MEMORY_EXTRACT_INSTRUCTION = (
@@ -412,11 +426,19 @@ async def transcribe_audio(audio_b64: str, timeout: float = 120) -> str:
 
     本地长音频先按 12 秒分片、每片独立会话转写（绕开 whisper 越界崩溃），
     再拼接各片清洗后的文本；输出为 "?" 乱码时自动重试，避免把问号给用户。
+
+    本地/云端守卫差异（2026-08-26）：
+    - 本地 A3 把"转写指令"当对话回应（"你好，小红！很高兴认识你…"），
+      必须用客套/自介判定拦截并重试；
+    - 云端 ModelBest 转写正常时带确认语尾巴，靠 _clean_transcript 清洗后
+      非空即收；v7.1 把本地客套拦截误套到云端，导致云端语音"无法识别"，
+      因此客套判定仅对本地生效，云端只保留纯乱码（"?"）守卫。
     """
     if ASCEND_OMNI_WS_URL:
         _ensure_local_audio_within_limit(audio_b64)
     chunks = (
         _split_pcm_b64(audio_b64) if ASCEND_OMNI_WS_URL else [audio_b64])
+    last_raw = ""
     for _attempt in range(3):
         parts: list[str] = []
         for chunk in chunks:
@@ -431,16 +453,31 @@ async def transcribe_audio(audio_b64: str, timeout: float = 120) -> str:
                     tts_enabled=False,
                     timeout=timeout,
                 )
+                last_raw = result.text or ""
             except RealtimeError:
                 continue
             cleaned = _clean_transcript(result.text or "")
             if cleaned:
                 parts.append(cleaned)
         text = "\n".join(parts)
-        if text and not (_looks_like_garbage(text)
-                         or _looks_like_canned_reply(text)):
-            return text
-    raise RealtimeError(_GARBAGE_FALLBACK_MSG, "parse_error")
+        if text and not _looks_like_garbage(text):
+            if not ASCEND_OMNI_WS_URL or not _looks_like_canned_reply(text):
+                return text
+        logger.warning(
+            "transcribe_audio 重试 backend=%s attempt=%d len=%d "
+            "garbage=%s canned=%s raw=%r",
+            "local" if ASCEND_OMNI_WS_URL else "map",
+            _attempt + 1, len(text),
+            _looks_like_garbage(text),
+            _looks_like_canned_reply(text),
+            last_raw[:120],
+        )
+    if ASCEND_OMNI_WS_URL:
+        raise RealtimeError(_GARBAGE_FALLBACK_MSG, "parse_error")
+    raise RealtimeError(
+        "云端语音识别失败：模型未能返回有效的用户原话，请重试",
+        "parse_error",
+    )
 
 
 async def _merge_text_groups(
