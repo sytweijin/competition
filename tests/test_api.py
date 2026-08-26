@@ -223,6 +223,43 @@ def _minimal_full_plan():
     }
 
 
+@pytest.mark.asyncio
+async def test_interview_returns_material_aware_fallback(client, monkeypatch):
+    """问题生成失败时返回基于材料与评委关注点的兜底问题 + warning。"""
+    from app.agents.interview_sim import InterviewSimAgent
+
+    captured = {}
+
+    def fake_run(self, **kwargs):
+        captured["material"] = kwargs.get("material_text")
+        captured["focus"] = kwargs.get("user_requirements")
+        return ""
+
+    monkeypatch.setattr(InterviewSimAgent, "run", fake_run)
+    payload = {
+        "plan": {
+            "tasks": [{"id": "T1", "name": "调研", "estimated_hours": 4}],
+            "modules": [],
+            "summary": "s",
+            "reasoning": "",
+        },
+        "qa_matrix": {"assignments": [], "workload": {}, "note": ""},
+        "user_requirements": "重点关注数据来源",
+        "project_context": "需提交调研报告",
+        "material_text": "我们完成了问卷调查，样本 200 份。",
+        "material_names": [],
+    }
+    resp = await client.post("/api/interview", json=payload)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["warning"]
+    assert any(
+        "样本 200 份" in q or "问卷调查" in q
+        for q in data["questions"]
+    )
+    assert any("数据来源" in q for q in data["questions"])
+
+
 def _large_plan_payload():
     """大型项目模式的最小 FullPlan：T1 需招募 2 名志愿者。"""
     payload = _minimal_full_plan()

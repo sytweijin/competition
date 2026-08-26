@@ -852,6 +852,39 @@ class InterviewRequest(BaseModel):
     material_names: list[str] = Field(default_factory=list)
 
 
+def _fallback_interview_questions(req: InterviewRequest) -> list[str]:
+    """LLM 生成失败时的确定性兜底问题：优先基于材料与评委关注点，
+    不再是与材料无关的通用提问。"""
+    questions: list[str] = []
+    material = (req.material_text or "").strip()
+    focus = (req.user_requirements or "").strip()
+    context = (req.project_context or "").strip()
+    tasks = req.plan.tasks if req.plan else []
+
+    if material:
+        first_line = next(
+            (line.strip() for line in material.splitlines() if line.strip()),
+            "",
+        )
+        snippet = first_line[:48] + ("…" if len(first_line) > 48 else "")
+        questions.append(
+            f"根据你提交的答辩材料（「{snippet}」），"
+            "请说明这项成果最核心的创新点是什么？")
+    elif tasks:
+        questions.append(
+            f"请介绍「{tasks[0].name}」这项成果的核心思路、"
+            "关键决策和交付内容。")
+    if focus:
+        focus_snippet = focus[:60] + ("…" if len(focus) > 60 else "")
+        questions.append(
+            f"评委重点关注「{focus_snippet}」，请就此展开你的准备与依据。")
+    if context:
+        questions.append(
+            "结合答辩要求，请说明你的方案如何满足其中的关键评价标准？")
+    questions.append("请概括这次答辩最希望评委理解的核心观点。")
+    return questions
+
+
 @router.post("/interview")
 def interview_sim(req: InterviewRequest):
     """基于实际答辩要求和用户提交材料生成模拟问题。"""
@@ -869,7 +902,11 @@ def interview_sim(req: InterviewRequest):
         for line in str(result or "").splitlines()
         if line.strip()
     ]
-    return {"questions": questions or ["请概括这次答辩最希望评委理解的核心观点。"]}
+    warning = ""
+    if not questions:
+        questions = _fallback_interview_questions(req)
+        warning = "AI 问题生成暂不可用，已根据材料与评委关注点生成基础问题；可重新生成。"
+    return {"questions": questions, "warning": warning}
 
 
 class InterviewChatRequest(BaseModel):

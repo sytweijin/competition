@@ -240,6 +240,18 @@ def test_interview_sim_with_requirements():
     assert isinstance(result, str)
 
 
+def test_interview_sim_failure_returns_empty_string():
+    """LLM 失败时 run() 应返回空串（此前漏 return 返回 None，
+    路由只能给出与材料无关的通用兜底问题）。"""
+    plan = PlanOutput(tasks=[SubTask(id="T1", name="开发")], summary="test")
+    qa = QAOutput(assignments=[])
+    fake = FakeLLMClient(raise_error="模型超时")
+    agent = InterviewSimAgent(llm=fake)
+    result = agent.run(plan=plan, qa_matrix=qa,
+                       user_requirements="关注技术选型")
+    assert result == ""
+
+
 def test_interview_sim_uses_defense_material_instead_of_task_status():
     plan = PlanOutput(tasks=[SubTask(id="T1", name="开发")], summary="test")
     qa = QAOutput(assignments=[])

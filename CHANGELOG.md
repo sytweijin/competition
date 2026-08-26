@@ -600,6 +600,38 @@ AGENTS.md 319 / 复现文档 293 / 项目说明 293；深度审查文档记录�
 `app/web/templates/index.html`（app.js?v=c9e4e360）、
 `tests/test_interview_chat.py`、`CHANGELOG.md`。
 
+**同步修改（2026-08-24 追加十二 · 答辩首问总是通用兜底问题的根因修复）：**
+用户反馈：无论答辩材料与评委关注点怎么写，第一个问题总是"请概括这次答辩
+最希望评委理解的核心观点"。定位根因：`InterviewSimAgent.run()` 的失败分支
+漏写 return（注释写明"返回错误提示文本"但代码没有），LLM 生成问题失败时
+函数返回 `None`，路由拿到空结果只能回退到与材料无关的通用问题；而
+MiniCPM-o 问题生成在长材料下又频繁失败（乱码/客套被质量闸门拦截），
+于是每次都看到通用首问。全量测试 353 → 355 passed；`app.js?v=` →
+`af4ec2f0`。
+
+#### 1. 答辩首问总是通用兜底（P0 功能）
+1. **问题：** ① `run()` 失败分支漏 `return`，`chat_text` 返回 AgentError 时
+函数落到末尾返回 `None`；② 路由对空结果只给一句与材料无关的通用问题；
+③ 长材料下 MiniCPM-o 生成问题失败率高，通用兜底几乎每次命中。
+2. **修改前：** `run()` 尾部只有 `if isinstance(result, str): ... return result`
+和一条注释，无失败 return；路由 `questions or ["请概括这次答辩最希望
+评委理解的核心观点。"]`。
+3. **修改后：**
+   - `run()`：失败时 `logger.warning` 记录原因并 `return ""`（保持 str 契约）；
+   - 路由新增 `_fallback_interview_questions`：兜底问题改为**基于材料首句、
+     任务名、评委关注点、答辩要求**逐条生成，通用问题仅作最后一项；
+     响应新增 `warning` 字段提示"AI 生成暂不可用，已用基础问题，可重新生成"；
+   - 前端 `startInterviewChat` 收到 `warning` 时弹提示，用户可重新开始重试。
+4. **为什么这样改：** 漏 return 是直接根因；但即使补上 return，把错误文本
+当首问也体验很差，所以同时把兜底问题做成材料/关注点感知，让 LLM 不可用时
+首问仍然贴题，且明确提示用户重试。
+5. **收益：** ① 不再出现"与材料无关的通用首问"；② 失败原因进日志可排查；
+③ 兜底问题贴合材料与评委关注点；④ 前端明确提示，用户知道可重新生成。
+
+**涉及文件：** `app/agents/interview_sim.py`、`app/web/routes.py`、
+`app/web/static/app.js`、`app/web/templates/index.html`（app.js?v=af4ec2f0）、
+`tests/test_agents.py`、`tests/test_api.py`、`CHANGELOG.md`。
+
 ---
 ## v7.0 —— 视频理解：会议录像边看边听 + 多模态演示闭环（2026-08-22）
 

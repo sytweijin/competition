@@ -5,9 +5,13 @@ B1: 团队协作模拟 Agent（轻量）
 v0.3.1: 支持用户自定义模拟要求（评委关注点、重点模块等）
 """
 
+import logging
+
 from app.agents.base import BaseAgent
 from app.llm.prompts import INTERVIEW_SYSTEM
 from app.models.schemas import PlanOutput, QAOutput
+
+logger = logging.getLogger(__name__)
 
 
 class InterviewSimAgent(BaseAgent):
@@ -74,7 +78,12 @@ class InterviewSimAgent(BaseAgent):
             # Collapse multiple newlines
             result = re.sub(r'\n{3,}', '\n\n', result)
             return result
-        # chat_text 失败时返回错误提示文本，不抛异常
+        # chat_text 失败时记录原因并返回空串，由路由层给出
+        # 基于材料/评委关注点的确定性兜底问题（此前漏 return 会返回 None，
+        # 路由只能给出与材料无关的通用问题）。
+        logger.warning("Interview question generation failed: %s",
+                       getattr(result, "message", result))
+        return ""
 
     def chat_turn(self, plan: PlanOutput, qa_matrix: QAOutput,
                   user_answer: str, history: list[dict],
