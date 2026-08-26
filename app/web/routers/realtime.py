@@ -41,7 +41,9 @@ INTERVIEW_TURN_INSTRUCTION = (
     "回答是否全面、依据是否到位；\n"
     "   b. 追问：如果回答不完整、有漏洞或不到位，就同一问题继续追问、"
     "要求补充说明，不要提出新问题；只有回答到位，才提出下一个新问题。\n"
-    "不要输出任何占位符、尖括号标签或格式说明。"
+    "不要输出任何占位符、尖括号标签或格式说明。\n"
+    "绝对不要重复或复述你上一轮已经给出的点评与追问；"
+    "若上一轮追问用户已回答，请换一个新维度继续提问。"
 )
 
 MEETING_PROMPT = (
@@ -373,6 +375,13 @@ async def realtime_tts(req: RealtimeTTSRequest):
     return {"audio_wav_base64": wav}
 
 
+def _reply_similar(left: str, right: str) -> float:
+    """计算两段评委回复的相似度，用于检测"复读上一轮"。"""
+    from difflib import SequenceMatcher
+
+    return SequenceMatcher(None, left or "", right or "").ratio()
+
+
 def _parse_turn_text(text: str) -> tuple[str, str]:
     """解析答辩回合输出：返回 (回答摘要, 评委回复)。"""
     text = (text or "").strip()
@@ -500,20 +509,49 @@ async def realtime_interview_turn(
     summary = ""
     audio_hollow = False
     audio_error = ""
+    last_reply = ""
+    if history_list and history_list[-1].get("role") == "assistant":
+        last_reply = str(history_list[-1].get("content") or "")
     if audio:
         audio_b64 = base64.b64encode(audio).decode("utf-8")
         from app.services.omni_chat import (
             _AUDIO_CHUNK_SECONDS, _looks_like_garbage, understand_audio)
 
         try:
-            result = await understand_audio(
-                audio_b64,
-                judge_sys,
-                "用户正在回答你提出的问题，请听用户的语音并点评追问。",
-                max_new_tokens=MAP_REALTIME_MAX_TOKENS,
-                history=history_list,
-            )
-            summary, reply = _parse_turn_text(result.text)
+            # 防"评委复读"：模型被上一轮回复锚定时会逐字重复点评与追问。
+            # 首次命中重复即带防重复指令重试一次；重试后仍重复则判空转，
+            # 交给下方 502 提示，绝不把复读内容当回复展示。
+            for attempt in (1, 2):
+                instruction = (
+                    "用户正在回答你提出的问题，请听用户的语音并点评追问。"
+                    if attempt == 1 else
+                    "用户正在回答你提出的问题。注意：你第一次生成的点评与"
+                    "追问和对话历史中已有的回复完全相同，这是复读错误。"
+                    "请基于用户本次的新回答重新点评与追问；绝对不要重复"
+                    "历史中已有的任何点评或追问；若上一轮追问用户已回答，"
+                    "请换一个新维度继续提问。"
+                )
+                result = await understand_audio(
+                    audio_b64,
+                    judge_sys,
+                    instruction,
+                    max_new_tokens=MAP_REALTIME_MAX_TOKENS,
+                    history=history_list,
+                )
+                summary, reply = _parse_turn_text(result.text)
+                if (attempt == 1 and last_reply and reply
+                        and len(reply) >= 30
+                        and _reply_similar(reply, last_reply) >= 0.85):
+                    summary = ""
+                    reply = ""
+                    continue
+                break
+            if (last_reply and reply and len(reply) >= 30
+                    and _reply_similar(reply, last_reply) >= 0.85):
+                audio_hollow = True
+                audio_error = "评委连续两轮输出相同回复（模型复读），请重试"
+                summary = ""
+                reply = ""
             # 本地 A3 常把音频当对话而非听懂内容：输出"用户尚未提供回答内容"
             # 等空转文本。命中即标记，等待画面观察是否兜底。
             hollow_markers = (

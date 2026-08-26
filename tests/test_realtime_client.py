@@ -1923,3 +1923,71 @@ async def test_interview_turn_carries_history(monkeypatch):
     assert second[0]["content"] == "第一个问题"
     assert second[1]["content"] == "🎤 [语音回答] 要点：我是张三负责调研"
     assert second[-1]["content"] == "历史问题转写"
+
+
+@pytest.mark.asyncio
+async def test_interview_turn_retries_when_reply_repeats(monkeypatch):
+    """评委复读上一轮点评/追问时，应带防重复指令自动重试一次。"""
+    import json
+
+    import app.services.media_analysis as media
+    import app.services.omni_chat as omni_chat
+    import app.web.routers.realtime as realtime_router
+
+    monkeypatch.setattr(
+        realtime_router, "MAP_REALTIME_API_KEY", "test-key")
+    monkeypatch.setattr(
+        realtime_router, "ASCEND_OMNI_WS_URL", "")
+    monkeypatch.setattr(omni_chat, "ASCEND_OMNI_WS_URL", "")
+
+    def fake_frames(content, max_frames):
+        return []
+
+    def fake_audio(content):
+        return b"pcm"
+
+    calls = {"n": 0, "instructions": []}
+
+    async def fake_understand(audio_b64, system_prompt, instruction,
+                              max_new_tokens=1024, timeout=180,
+                              tts_enabled=False, history=None,
+                              allow_polite=False, prefer_text_answer=False):
+        calls["n"] += 1
+        calls["instructions"].append(instruction)
+        text = (
+            "【回答摘要】\n要点A\n【评委回复】\n点评与追问A：用户基本正面"
+            "回答了问题，但需要进一步说明文章是如何支撑该结论的。"
+            if calls["n"] == 1 else
+            "【回答摘要】\n要点B\n【评委回复】\n新的点评与追问B"
+        )
+        return RealtimeChatResult(text=text)
+
+    monkeypatch.setattr(media, "extract_video_frames", fake_frames)
+    monkeypatch.setattr(media, "extract_audio_pcm16k", fake_audio)
+    monkeypatch.setattr(omni_chat, "understand_audio", fake_understand)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/api/realtime/interview-turn",
+            data={
+                "system_prompt": "你是答辩评委",
+                "history": json.dumps([
+                    {"role": "assistant", "content": "第一个问题"},
+                    {"role": "user", "content": "🎤 [语音回答] 要点：A"},
+                    {
+                        "role": "assistant",
+                        "content": "点评与追问A：用户基本正面回答了问题，"
+                        "但需要进一步说明文章是如何支撑该结论的。",
+                    },
+                ]),
+            },
+            files={"file": ("voice.webm", b"fake-audio", "audio/webm")},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["reply"] == "新的点评与追问B"
+    assert calls["n"] == 2
+    assert "不要重复" in calls["instructions"][1]
