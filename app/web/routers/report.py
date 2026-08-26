@@ -621,7 +621,7 @@ async def report_photo(
     # 时间戳 + uuid 双保险：同一秒内连续上传（或并发上传）也不会互相覆盖
     attach_path = ATTACH_DIR / (
         f"{filename.replace('.json', '')}_{safe_id}_"
-        f"{int(time.time())}_{uuid.uuid4().hex[:6]}{ext}"
+        f"{int(time.time())}_{uuid.uuid4().hex[:12]}{ext}"
     )
     attach_path.write_bytes(raw)
     note = f"交付物照片已上传（{attach_path.name}）"
