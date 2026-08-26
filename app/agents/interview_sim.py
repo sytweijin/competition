@@ -108,19 +108,41 @@ class InterviewSimAgent(BaseAgent):
         messages = [{"role": "user", "content": context + "请开始模拟答辩，针对材料提第一个问题。"}]
         messages.append({"role": "assistant", "content":
             "好的，我已经了解了你们的项目。让我们开始吧。"})
+        # 防"重新开始"：评委生成失败时，前端历史里可能残留没有评委回复的
+        # user 消息；连续多条 user 会让模型误判为新会话，从第一问重新问。
+        # 这里归一化历史（丢弃空内容、合并连续同角色），并让本轮回答也参与
+        # 合并，保证发给模型的 Q/A 始终交替。
+        normalized_history: list[dict] = []
         for msg in history:
-            messages.append({"role": msg.get("role", "user"),
-                             "content": msg.get("content", "")})
+            role = "assistant" if msg.get("role") == "assistant" else "user"
+            content = str(msg.get("content") or "").strip()
+            if not content:
+                continue
+            if normalized_history and normalized_history[-1]["role"] == role:
+                normalized_history[-1]["content"] += "\n" + content
+            else:
+                normalized_history.append({"role": role, "content": content})
         adjust_mode = mode == "adjust"
         if adjust_mode:
             feedback = user_answer.strip() or "这道题不够精确，请调整得更具体、更贴合我们的项目。"
-            messages.append({"role": "user", "content":
-                "请根据我的反馈重新调整你刚才提出的评审问题。只输出调整后的一个问题，不要点评，不要解释。\n\n反馈：" + feedback})
+            final_user = (
+                "请根据我的反馈重新调整你刚才提出的评审问题。"
+                "只输出调整后的一个问题，不要点评，不要解释。\n\n反馈："
+                + feedback
+            )
         elif user_answer.strip():
-            messages.append({"role": "user", "content": user_answer})
+            final_user = user_answer
         else:
-            messages.append({"role": "user",
-                             "content": "请提第一个评审问题。"})
+            final_user = "请提第一个评审问题。"
+        turn_messages = normalized_history + [
+            {"role": "user", "content": final_user}]
+        merged: list[dict] = []
+        for msg in turn_messages:
+            if merged and merged[-1]["role"] == msg["role"]:
+                merged[-1]["content"] += "\n" + msg["content"]
+            else:
+                merged.append(dict(msg))
+        messages.extend(merged)
 
         result = self.llm.chat_messages(
             system_prompt=INTERVIEW_ADJUST_SYSTEM if adjust_mode else INTERVIEW_CHAT_SYSTEM,

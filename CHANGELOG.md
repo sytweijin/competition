@@ -562,6 +562,44 @@ AGENTS.md 319 / 复现文档 293 / 项目说明 293；深度审查文档记录�
 `tests/test_api.py`、`tests/test_report.py`、`AGENTS.md`、
 `docs/复现文档.md`、`docs/项目说明.md`、`CHANGELOG.md`。
 
+**同步修改（2026-08-24 追加十一 · 答辩模拟"答完重问第一题"根因修复）：**
+用户反馈：正常回答后评委本应点评并追问，结果像连接中断、从第一问重新开始。
+定位根因：评委生成失败（模型连接中断或输出被质量闸门拦截）时，回答残留在
+历史里却没有对应的评委回复；下一轮发送历史出现连续多条 user 消息，模型
+误判为新会话，从第一问重问。全量测试 352 → 353 passed；`app.js?v=` →
+`c9e4e360`。
+
+#### 1. 历史残留导致"重新开始"（P0 功能）
+1. **问题：** 答辩模拟多轮对话中，某轮评委生成失败后，前端把用户回答保留在
+`ivChat.messages` 但没有评委回复；下一轮 `history` 出现连续 user 消息，
+模型把它当成新对话，重新问第一题（用户看到"从头开始"）。语音/视频答题
+失败时还会把"语音问答失败：xxx"当成 assistant 消息写进历史，进一步污染
+上下文。
+2. **修改前：**
+   - 前端 `sendInterviewAnswer` 发 `history: ivChat.messages.slice(0,-1)`，
+     只去掉当前轮，历史里之前悬空的 user 消息原样发送；
+   - `interviewHistoryForJudge` 原样映射全部消息；
+   - `finishInterviewTurnError` 把错误文本 push 成 assistant 消息；
+   - 后端 `chat_turn` 把历史消息原样拼进 messages，不处理连续同角色。
+3. **修改后：**
+   - 前端新增 `interviewHistoryForTurn()`：裁剪掉末尾所有没有评委回复的
+     user 消息（文本答题历史改用它）；
+   - `interviewHistoryForJudge`（语音/视频）同样裁剪末尾悬空 user；
+   - `finishInterviewTurnError`：失败时回滚刚推入的"🎤 [语音回答]"
+     占位消息，错误只以 notice 提示，不进对话历史；
+   - 后端 `chat_turn`：归一化历史（丢弃空内容、合并连续同角色消息），
+     并让本轮回答也参与合并，保证发给模型的 Q/A 始终交替。
+4. **为什么这样改：** "重新开始"不是模型想重来，而是输入里连续 user 消息
+让它以为这是新会话；两端同时修正输入结构，从根上消除歧义。失败不污染
+历史则保证重试后上下文仍然干净。
+5. **收益：** ① 评委失败后重试会继续原对话，不再从第一问重问；② 语音/视频
+失败不再把错误文本当评委回复存进记忆；③ 后端兜底合并保证即使前端有遗漏，
+模型也不会收到连续 user。
+
+**涉及文件：** `app/agents/interview_sim.py`、`app/web/static/app.js`、
+`app/web/templates/index.html`（app.js?v=c9e4e360）、
+`tests/test_interview_chat.py`、`CHANGELOG.md`。
+
 ---
 ## v7.0 —— 视频理解：会议录像边看边听 + 多模态演示闭环（2026-08-22）
 

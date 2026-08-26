@@ -62,6 +62,40 @@ def test_interview_chat_sends_user_answer_and_history():
     )
 
 
+def test_interview_chat_merges_consecutive_user_messages():
+    """评委生成失败残留的连续 user 消息应合并，防止模型误判为新会话重问第一题。"""
+    agent = InterviewSimAgent()
+    calls = []
+
+    class FakeLLM:
+        def chat_messages(self, system_prompt, messages, temperature):
+            calls.append(messages)
+            return "点评合理，下一个问题：预算如何控制？"
+
+    agent.llm = FakeLLM()
+    plan, qa = _plan_and_qa()
+    reply = agent.chat_turn(
+        plan=plan, qa_matrix=qa,
+        user_answer="第二轮回答",
+        history=[
+            {"role": "assistant", "content": "第一个问题：项目目标是什么？"},
+            {"role": "user", "content": "第一轮回答（无评委回复残留）"},
+            {"role": "user", "content": "第二轮回答（再次残留）"},
+        ],
+    )
+    assert "预算" in reply
+    messages = calls[0]
+    roles = [m["role"] for m in messages]
+    # 不允许出现连续 user，Q/A 必须交替
+    assert all(
+        roles[i] != "user" or roles[i + 1] != "user"
+        for i in range(len(roles) - 1)
+    )
+    # 合并后的最后一个 user 同时包含残留回答与本轮回答
+    assert "第一轮回答" in messages[-1]["content"]
+    assert "第二轮回答" in messages[-1]["content"]
+
+
 def test_interview_chat_adjust_question():
     agent = InterviewSimAgent()
     calls = []
