@@ -937,6 +937,26 @@ def test_looks_like_canned_reply_rejects_assistant_smalltalk():
     assert _looks_like_canned_reply("你好，请问有什么可以帮您")
 
 
+def test_looks_like_canned_reply_catches_polite_advice_variant():
+    """模型把任务指令当对话、回"很高兴能为你提供帮助…请告诉我选题"必须拦截。"""
+    from app.services.omni_chat import _looks_like_canned_reply
+
+    text = (
+        "当然，很高兴能为你提供帮助。为了更好地支持你，我需要先了解具体需要"
+        "讨论或论证的题目或主题是什么，以及你希望从哪些方面进行深入探讨。"
+        "创新性和新颖性往往体现在选题的独特视角上。"
+        "如果你能提供具体的选题或方向，我可以帮你："
+        "1. 分析该题目的创新点；2. 构建清晰的论证结构。"
+        "请告诉我你感兴趣的选题或领域，我将为你量身定制建议！"
+    )
+    assert _looks_like_canned_reply(text)
+    # 用户真实需求里的类似表述不应误伤（无"量身定制/请告诉我…感兴趣"组合）
+    assert not _looks_like_canned_reply(
+        "老师关注选题的切入点新颖性、论证逻辑的顺畅和严密性")
+    assert not _looks_like_canned_reply(
+        "请评委重点围绕创新点与技术架构提问")
+
+
 def test_looks_like_garbage_flags_question_runs():
     from app.services.omni_chat import _looks_like_garbage
 

@@ -63,6 +63,8 @@ _LOCAL_AUDIO_MAX_SECONDS = 600
 _CANNED_REPLY_PATTERNS = (
     "很高兴为你提供帮助",
     "很高兴为您提供帮助",
+    "很高兴能为你提供帮助",
+    "很高兴能为您提供帮助",
     # 云端 MiniCPM-o 常见的"自我介绍式开场白"（截图实测复读原文），
     # 与"高兴为你提供帮助"同属模型未执行指令的客套回复。
     "很高兴认识你",
@@ -75,6 +77,15 @@ _CANNED_REPLY_PATTERNS = (
     "需要我帮助您吗",
     "需要我帮你吗",
     "请告诉我你具体需要什么",
+    "请告诉我你感兴趣",
+    "告诉我你感兴趣",
+    "请提供具体的选题",
+    "我需要先了解",
+    "为了更好地支持你",
+    "为了更好地帮助您",
+    "量身定制建议",
+    "为你量身定制",
+    "为您量身定制",
     "我是由",  # "我是由 xxx 开发的语言模型"
     "我是一款",
     "我是一个人工智能",
@@ -319,6 +330,15 @@ def _looks_like_canned_reply(text: str) -> bool:
     lowered = text.lower()
     if lowered.startswith(("hello", "hi there", "i'm ", "i am ",
                            "as an ai", "it seems like you", "here's")):
+        return True
+    # 组合式客套：单条模式漏网但多个客套特征同时出现的变体
+    # （实测"当然，很高兴能为你提供帮助。为了更好地支持你…请告诉我你
+    # 感兴趣的选题或领域，我将为你量身定制建议！"）
+    if "很高兴" in text and (
+            "提供帮助" in text or "帮助你" in text or "帮助您" in text):
+        return True
+    if "量身定制" in text or (
+            "请告诉我" in text and "感兴趣" in text):
         return True
     return (
         any(pattern in text for pattern in _CANNED_REPLY_PATTERNS)
