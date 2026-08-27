@@ -60,7 +60,7 @@ _PERFORMANCE_RETRY_HINT = (
 
 
 def _off_topic_performance_observation(text: str) -> bool:
-    """本地昇腾表现观察合规过滤：描述外貌/背景/寒暄视为跑偏，不展示。"""
+    """表现观察合规过滤（本地/云端通用）：描述外貌/背景/寒暄视为跑偏，不展示。"""
     lowered = (text or "").lower()
     return any(marker in lowered for marker in _PERFORMANCE_OFF_TOPIC_MARKERS)
 
@@ -83,7 +83,7 @@ async def _analyze_performance_frame(frame: bytes, index: int) -> str:
             _run_realtime_media_chat, parts, 300, False, 120)
         or ""
     ).strip()
-    if ASCEND_OMNI_WS_URL and obs and _off_topic_performance_observation(obs):
+    if obs and _off_topic_performance_observation(obs):
         retry_parts = [
             {"type": "text", "text": prompt + _PERFORMANCE_RETRY_HINT},
             {"type": "image",
@@ -756,8 +756,7 @@ async def realtime_interview_turn(
             obs = await _analyze_performance_frame(frame, index)
             if obs and obs.strip() and not _looks_like_garbage(
                     obs, local=bool(ASCEND_OMNI_WS_URL)) \
-                    and (not ASCEND_OMNI_WS_URL
-                         or not _off_topic_performance_observation(obs)):
+                    and not _off_topic_performance_observation(obs):
                 observations.append(f"第 {index} 帧：{obs.strip()}")
         except Exception:
             continue
@@ -984,8 +983,7 @@ async def realtime_performance(file: UploadFile = File(...)):
             obs = await _analyze_performance_frame(frame, index)
             if obs and obs.strip() and not _looks_like_garbage(
                     obs, local=bool(ASCEND_OMNI_WS_URL)) \
-                    and (not ASCEND_OMNI_WS_URL
-                         or not _off_topic_performance_observation(obs)):
+                    and not _off_topic_performance_observation(obs):
                 observations.append(
                     f"第 {index} 帧：{obs.strip()}")
         except Exception as exc:

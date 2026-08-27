@@ -1679,6 +1679,57 @@ async def test_interview_turn_local_drops_off_topic_observations(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_interview_turn_cloud_drops_off_topic_observations(monkeypatch):
+    """云端：表现观察同样启用合规过滤，跑偏内容不回显（正常输出零额外调用）。"""
+    import app.services.media_analysis as media
+    import app.web.routers.realtime as realtime_router
+
+    # 不设置 ASCEND_OMNI_WS_URL，走云端路径
+    monkeypatch.setattr(realtime_router, "ASCEND_OMNI_WS_URL", "")
+
+    def fake_frames(content, max_frames):
+        return [b"JPEG1"]
+
+    def fake_audio(content):
+        return b"pcm"
+
+    async def fake_chat(self, **kwargs):
+        return RealtimeChatResult(
+            text="【回答摘要】\n要点\n【评委回复】\n追问内容")
+
+    calls = {"n": 0}
+
+    def fake_run(parts, max_tokens, omni_mode, timeout=180):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return "图片里是一位戴眼镜的女性，背景是室内，光线柔和。"
+        return "表现：平静；眼神：专注；表情：自然；回答流畅"
+
+    monkeypatch.setattr(media, "extract_video_frames", fake_frames)
+    monkeypatch.setattr(media, "extract_audio_pcm16k", fake_audio)
+    monkeypatch.setattr(
+        realtime_router.RealtimeClient, "chat", fake_chat)
+    monkeypatch.setattr(media, "_run_realtime_media_chat", fake_run)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/realtime/interview-turn",
+            files={"file": ("answer.webm", b"fake-video", "video/webm")},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "📹 表现观察" in payload["reply"]
+    assert "戴眼镜" not in payload["reply"]
+    assert "背景" not in payload["reply"]
+    assert "专注" in payload["reply"]
+    assert calls["n"] >= 2
+
+
+@pytest.mark.asyncio
 async def test_interview_turn_hollow_reply_returns_502(monkeypatch):
     """本地答辩语音回合空转（评委未听懂）应返回 502 明确提示。"""
     import app.web.routers.realtime as realtime_router
