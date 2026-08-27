@@ -262,6 +262,51 @@ async def test_interview_returns_material_aware_fallback(client, monkeypatch):
     assert not any("请概括" in q for q in data["questions"])
 
 
+@pytest.mark.asyncio
+async def test_interview_splits_and_dedupes_questions(client, monkeypatch):
+    """模型把多题挤一行/重复生成时：按标记切分、去重、丢弃开场白。"""
+    from app.agents.interview_sim import InterviewSimAgent
+
+    def fake_run(self, **kwargs):
+        return (
+            "以下是评委可能提出的问题：\n"
+            "【高】材料提到妖精掌握了货币铸造的技术垄断，为什么巫师界没有自主研发？"
+            "【高】古灵阁的地下金库需要极高的固定成本，材料中有没有分析这种成本的特殊性？"
+            "【高】材料提到古灵阁是妖精的独家银行，有没有考虑过其他非妖精群体？"
+            "【高】材料中提到古灵阁的妖精叛乱，有没有分析过这种历史事件的影响？"
+            "【高】材料中提到古灵阁的妖精叛乱，有没有分析过这种历史事件的影响？"
+            "【高】材料中提到古灵阁的妖精叛乱，有没有分析过这种历史事件的影响？"
+            "【高】材料中提到古灵阁的妖精叛乱，有没有分析过这种历史事件的影响？"
+            "【高】材料中提到古灵阁的妖精叛乱，有没有分析过这种历史事件的影响？"
+        )
+
+    monkeypatch.setattr(InterviewSimAgent, "run", fake_run)
+    payload = {
+        "plan": {
+            "tasks": [{"id": "T1", "name": "调研", "estimated_hours": 4}],
+            "modules": [],
+            "summary": "s",
+            "reasoning": "",
+        },
+        "qa_matrix": {"assignments": [], "workload": {}, "note": ""},
+        "material_text": "材料：古灵阁由妖精经营，垄断了货币铸造。",
+        "material_names": [],
+    }
+    resp = await client.post("/api/interview", json=payload)
+    assert resp.status_code == 200
+    questions = resp.json()["questions"]
+    # 5 条重复只保留 1 条
+    repeat = [q for q in questions if "妖精叛乱" in q]
+    assert len(repeat) == 1
+    # 开场白不被当成问题；列表无重复；第一条是带优先级标记的完整问题
+    assert not any("以下是评委" in q for q in questions)
+    assert len(questions) == len(set(questions))
+    assert questions[0].startswith("【高】")
+    assert questions[0] == (
+        "【高】材料提到妖精掌握了货币铸造的技术垄断，"
+        "为什么巫师界没有自主研发？")
+
+
 def _large_plan_payload():
     """大型项目模式的最小 FullPlan：T1 需招募 2 名志愿者。"""
     payload = _minimal_full_plan()
