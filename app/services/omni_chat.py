@@ -346,13 +346,17 @@ def _looks_like_self_intro(text: str) -> bool:
                for marker in markers)
 
 
-def _looks_like_garbage(text: str) -> bool:
-    """判断模型输出是否为乱码或退化文本（A3 偶发，长上下文时更常见）。
+def _looks_like_garbage(text: str, *, local: bool = False) -> bool:
+    """判断模型输出是否为乱码或退化文本。
 
-    判定标准：连续问号串 ≥4 个（A3 乱码形态）或问号占比 >30%；
-    或输出退化成"复读机"（ironironiron… / inininin… 等无限重复）。
+    判定标准（local=False，云端/通用）：连续问号串 ≥4 个或问号占比 >30%；
+    或整段退化成"复读机"（ironironiron… / inininin… 等无限重复）。
     注意不能按"问号总数 ≥5"判定——合法的多问题列表（答辩问题、追问）
     本身就有 5+ 个问号，按总数会被误杀成"AI 生成失败"。
+
+    local=True（本地昇腾 A3）额外启用"局部复读"检测：回复前半段正常、
+    后半段"妖精妖精…"无限循环、或单字符连续超长重复（实测退化形态）。
+    云端不启用，避免收紧后误伤云端正常输出（2026-08-27 按后端隔离）。
     """
     text = (text or "").strip()
     if not text:
@@ -364,16 +368,38 @@ def _looks_like_garbage(text: str) -> bool:
     )
     if max_run >= 4 or q / max(1, len(text)) > 0.3:
         return True
-    return _looks_like_repetition(text)
+    if _looks_like_repetition(text):
+        return True
+    if local:
+        return _looks_like_local_repetition(text)
+    return False
+
+
+def _looks_like_local_repetition(text: str) -> bool:
+    """本地昇腾专用：正文任意位置的"局部复读"（整段判定之外的退化形态）。
+
+    1) 2-6 字单元连续重复且总长 ≥12 字符（如"…妖精妖精妖精妖精…"尾巴）；
+    2) 单字符连续 ≥12 个（"啊啊啊啊啊啊啊啊啊啊" / "aaaaaaaaaaaa"）。
+    长度门槛避免误伤"可以可以可以""哈哈哈哈"等自然表达。
+    """
+    compact = re.sub(r"\s+", "", (text or "").lower())
+    if not compact:
+        return False
+    for match in re.finditer(
+            r"([a-z\u4e00-\u9fff]{2,6}?)\1{2,}", compact):
+        if len(match.group(0)) >= 12:
+            return True
+    return bool(re.search(r"(.)\1{11,}", compact))
 
 
 def _looks_like_repetition(text: str) -> bool:
     """检测模型退化成"复读机"的输出（如 ironironiron… / inininin…）。
 
-    三类特征任一命中即判为退化：
+    三类特征任一命中即判为退化（云端/通用口径）：
     1. 整段由同一短单元无间隔循环（ironironiron / 好的好的好的好的…）；
     2. 去空格后字符多样性极低（整段只有几个字符反复出现）；
     3. 同一词重复 ≥6 次且占全文 60% 以上（iron iron iron …）。
+    局部复读（规则 4/5）由 _looks_like_local_repetition 提供，仅本地启用。
     """
     text = (text or "").strip()
     if not text:
@@ -400,6 +426,38 @@ def _looks_like_repetition(text: str) -> bool:
         if count >= 6 and count * len(top) >= len(compact) * 0.6:
             return True
     return False
+
+
+def _trim_repetition_tail(text: str) -> str:
+    """截掉正文中退化的"复读机"片段（含其后内容），保留前面有效部分。
+
+    与 _looks_like_repetition 同一套判定口径：2-6 字单元连续重复且总长 ≥12，
+    或单字符连续 ≥12。从首次命中处截断；无复读则原样返回。
+    用于答辩评委回复等场景：宁可保留有效前缀，也不把复读尾巴展示给用户。
+    """
+    text = (text or "").strip()
+    if not text:
+        return text
+    compact = re.sub(r"\s+", "", text.lower())
+
+    def original_index(compact_pos: int) -> int:
+        """把去空格后的下标映射回原文下标（复读单元由非空白字符构成）。"""
+        count = 0
+        for index, ch in enumerate(text):
+            if not ch.isspace():
+                if count == compact_pos:
+                    return index
+                count += 1
+        return len(text)
+
+    for match in re.finditer(
+            r"([a-z\u4e00-\u9fff]{2,6}?)\1{2,}", compact):
+        if len(match.group(0)) >= 12:
+            return text[:original_index(match.start())].strip()
+    match = re.search(r"(.)\1{11,}", compact)
+    if match:
+        return text[:original_index(match.start())].strip()
+    return text
 
 
 def _clean_transcript(text: str) -> str:
@@ -460,7 +518,8 @@ async def transcribe_audio(audio_b64: str, timeout: float = 120) -> str:
             if cleaned:
                 parts.append(cleaned)
         text = "\n".join(parts)
-        if text and not _looks_like_garbage(text):
+        if text and not _looks_like_garbage(
+                text, local=bool(ASCEND_OMNI_WS_URL)):
             if not ASCEND_OMNI_WS_URL or not _looks_like_canned_reply(text):
                 return text
         logger.warning(
@@ -468,7 +527,7 @@ async def transcribe_audio(audio_b64: str, timeout: float = 120) -> str:
             "garbage=%s canned=%s raw=%r",
             "local" if ASCEND_OMNI_WS_URL else "map",
             _attempt + 1, len(text),
-            _looks_like_garbage(text),
+            _looks_like_garbage(text, local=bool(ASCEND_OMNI_WS_URL)),
             _looks_like_canned_reply(text),
             last_raw[:120],
         )
@@ -563,7 +622,7 @@ async def understand_audio(
                         system_prompt, max_new_tokens, timeout, tts_enabled)
             except RealtimeError:
                 continue
-            if not (_looks_like_garbage(result.text)
+            if not (_looks_like_garbage(result.text, local=True)
                     or (_looks_like_canned_reply(result.text)
                         and not allow_polite)):
                 return result
@@ -626,7 +685,7 @@ async def _understand_audio_local_text(
             # （A3 常输出"你好，小红！…"式回应文本，其中包含用户关键信息，
             # 不能像严格转写那样丢弃；但"我叫通义千问…"这类自我介绍是
             # 模型回应而非用户原话，丢弃以免覆盖记忆）。
-            if cleaned and not _looks_like_garbage(cleaned) \
+            if cleaned and not _looks_like_garbage(cleaned, local=True) \
                     and not _looks_like_self_intro(cleaned):
                 parts.append(cleaned)
         except RealtimeError:

@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" data-pptx-page-role="content" font-family="Microsoft YaHei, Arial, sans-serif">
+  <defs>
+    <marker id="arrowTri2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#2F7FCE"/>
+    </marker>
+    <marker id="arrowGold" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#C9A227"/>
+    </marker>
+  </defs>
+  <rect id="bg" x="0" y="0" width="1280" height="720" fill="#FFFFFF" data-pptx-role="background"/>
+  <g id="header" data-pptx-bounds="40 40 1200 100">
+    <text x="40" y="66" font-size="16" fill="#2F7FCE" letter-spacing="2">01 · 项目概览</text>
+    <text x="40" y="106" font-size="36" font-weight="bold" fill="#1E293B">解决思路：以全模态能力驱动完整协作闭环</text>
+    <rect x="40" y="120" width="48" height="4" fill="#C9A227"/>
+    <line x1="40" y1="142" x2="1240" y2="142" stroke="#DCE6F0" stroke-width="1"/>
+  </g>
+  <g id="loop-caption" data-pptx-bounds="40 164 1200 40">
+    <text x="40" y="190" font-size="20" font-weight="bold" fill="#2F7FCE">五步闭环：计划生成 → 成员执行 → 汇报反馈 → 通知触达</text>
+  </g>
+  <g id="loop-step-1" data-pptx-bounds="40 218 216 170">
+    <rect x="40" y="218" width="216" height="170" rx="4" fill="#F0F6FC"/>
+    <text x="64" y="250" font-size="18" font-weight="bold" fill="#C9A227">01</text>
+    <use data-icon="tabler-outline/camera" x="64" y="268" width="36" height="36" fill="#2F7FCE" stroke-width="2"/>
+    <text x="64" y="330" font-size="18" font-weight="bold" fill="#1E293B">拍照立项</text>
+    <text x="64" y="356" font-size="14" fill="#64748B">拍照 / 录音描述需求，<tspan x="64" dy="22">白板、截图、手绘直接进拆解</tspan></text>
+  </g>
+  <g id="loop-arrow-1" data-pptx-bounds="256 284 30 40">
+    <line x1="256" y1="303" x2="284" y2="303" stroke="#2F7FCE" stroke-width="2" marker-end="url(#arrowTri2)"/>
+  </g>
+  <g id="loop-step-2" data-pptx-bounds="286 218 216 170">
+    <rect x="286" y="218" width="216" height="170" rx="4" fill="#F0F6FC"/>
+    <text x="310" y="250" font-size="18" font-weight="bold" fill="#C9A227">02</text>
+    <use data-icon="tabler-outline/microphone" x="310" y="268" width="36" height="36" fill="#2F7FCE" stroke-width="2"/>
+    <text x="310" y="330" font-size="18" font-weight="bold" fill="#1E293B">说话排期</text>
+    <text x="310" y="356" font-size="14" fill="#64748B">语音补充项目要求，<tspan x="310" dy="22">自动生成任务草案</tspan></text>
+  </g>
+  <g id="loop-arrow-2" data-pptx-bounds="502 284 30 40">
+    <line x1="502" y1="303" x2="530" y2="303" stroke="#2F7FCE" stroke-width="2" marker-end="url(#arrowTri2)"/>
+  </g>
+  <g id="loop-step-3" data-pptx-bounds="532 218 216 170">
+    <rect x="532" y="218" width="216" height="170" rx="4" fill="#F0F6FC"/>
+    <text x="556" y="250" font-size="18" font-weight="bold" fill="#C9A227">03</text>
+    <use data-icon="tabler-outline/check" x="556" y="268" width="36" height="36" fill="#2F7FCE" stroke-width="2"/>
+    <text x="556" y="330" font-size="18" font-weight="bold" fill="#1E293B">确认分工</text>
+    <text x="556" y="356" font-size="14" fill="#64748B">人工调整草案，<tspan x="556" dy="22">拖拽分工、即时重算</tspan></text>
+  </g>
+  <g id="loop-arrow-3" data-pptx-bounds="748 284 30 40">
+    <line x1="748" y1="303" x2="776" y2="303" stroke="#2F7FCE" stroke-width="2" marker-end="url(#arrowTri2)"/>
+  </g>
+  <g id="loop-step-4" data-pptx-bounds="778 218 216 170">
+    <rect x="778" y="218" width="216" height="170" rx="4" fill="#F0F6FC"/>
+    <text x="802" y="250" font-size="18" font-weight="bold" fill="#C9A227">04</text>
+    <use data-icon="tabler-outline/list-check" x="802" y="268" width="36" height="36" fill="#2F7FCE" stroke-width="2"/>
+    <text x="802" y="330" font-size="18" font-weight="bold" fill="#1E293B">成员汇报</text>
+    <text x="802" y="356" font-size="14" fill="#64748B">语音 / 照片交付，<tspan x="802" dy="22">负责人确认完成</tspan></text>
+  </g>
+  <g id="loop-arrow-4" data-pptx-bounds="994 284 30 40">
+    <line x1="994" y1="303" x2="1022" y2="303" stroke="#2F7FCE" stroke-width="2" marker-end="url(#arrowTri2)"/>
+  </g>
+  <g id="loop-step-5" data-pptx-bounds="1024 218 216 170">
+    <rect x="1024" y="218" width="216" height="170" rx="4" fill="#F0F6FC"/>
+    <text x="1048" y="250" font-size="18" font-weight="bold" fill="#C9A227">05</text>
+    <use data-icon="tabler-outline/send" x="1048" y="268" width="36" height="36" fill="#2F7FCE" stroke-width="2"/>
+    <text x="1048" y="330" font-size="18" font-weight="bold" fill="#1E293B">群通知触达</text>
+    <text x="1048" y="356" font-size="14" fill="#64748B">状态变更自动推送，<tspan x="1048" dy="22">今日播报（TTS）</tspan></text>
+  </g>
+  <g id="loop-return" data-pptx-bounds="80 388 1120 60">
+    <path d="M1168 388 C1168 430 140 430 140 388" fill="none" stroke="#C9A227" stroke-width="2" marker-end="url(#arrowGold)"/>
+  </g>
+  <g id="principle-1" data-pptx-bounds="40 470 590 110">
+    <rect x="40" y="470" width="590" height="110" rx="4" fill="#F0F6FC"/>
+    <use data-icon="tabler-outline/adjustments" x="68" y="496" width="36" height="36" fill="#2F7FCE" stroke-width="2"/>
+    <text x="122" y="516" font-size="18" font-weight="bold" fill="#1E293B">设计原则一</text>
+    <text x="68" y="552" font-size="16" fill="#1E293B">LLM 负责创造性拆解，确定性算法负责正确性保证<tspan x="68" dy="26">（CPM、评分、均衡、依赖校验）。</tspan></text>
+  </g>
+  <g id="principle-2" data-pptx-bounds="650 470 590 110">
+    <rect x="650" y="470" width="590" height="110" rx="4" fill="#F0F6FC"/>
+    <use data-icon="tabler-outline/lifebuoy" x="678" y="496" width="36" height="36" fill="#2F7FCE" stroke-width="2"/>
+    <text x="732" y="516" font-size="18" font-weight="bold" fill="#1E293B">设计原则二</text>
+    <text x="678" y="552" font-size="16" fill="#1E293B">每个 Agent 失败都有确定性兜底，<tspan x="678" dy="26">主链路永不中断；演示不依赖模型持续在线。</tspan></text>
+  </g>
+  <g id="footer" data-pptx-bounds="40 676 1200 30">
+    <text x="40" y="694" font-size="12" fill="#64748B">协作分工智能体 · 昇腾全模态版</text>
+    <text x="1240" y="694" font-size="12" fill="#64748B" text-anchor="end">05 / 29 · v7.1</text>
+  </g>
+</svg>

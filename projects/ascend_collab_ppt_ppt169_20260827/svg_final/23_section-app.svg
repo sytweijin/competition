@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" data-pptx-page-role="section" font-family="Microsoft YaHei, Arial, sans-serif">
+  <rect id="bg" x="0" y="0" width="1280" height="720" fill="#375A86" data-pptx-role="background"/>
+  <rect id="accent-bar" x="0" y="0" width="8" height="720" fill="#C9A227" data-pptx-role="decoration"/>
+  <g id="section-head" data-pptx-bounds="80 150 1120 180">
+    <text x="80" y="208" font-size="16" fill="#D5E0EE" letter-spacing="3">05 / 应用落地与工程验证</text>
+    <text x="80" y="266" font-size="38" font-weight="bold" fill="#FFFFFF">真实场景 · 真实运行效果 · 可核验的工程证据</text>
+    <line x1="80" y1="300" x2="200" y2="300" stroke="#C9A227" stroke-width="3"/>
+  </g>
+  <g id="section-list" data-pptx-bounds="80 370 1120 240">
+    <!-- icon: tabler-outline/rocket -->
+  <g transform="translate(80, 370) scale(1.5)" fill="none" stroke="#FFFFFF" stroke-width="2">
+    <path d="M4 13a8 8 0 0 1 7 7a6 6 0 0 0 3 -5a9 9 0 0 0 6 -8a3 3 0 0 0 -3 -3a9 9 0 0 0 -8 6a6 6 0 0 0 -5 3" />
+    <path d="M7 14a6 6 0 0 0 -3 6a6 6 0 0 0 6 -3" />
+    <path d="M14 9a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />
+  </g>
+    <text x="140" y="396" font-size="20" fill="#FFFFFF">应用场景与落地形态（P24）</text>
+    <!-- icon: tabler-outline/player-play -->
+  <g transform="translate(80, 430) scale(1.5)" fill="none" stroke="#FFFFFF" stroke-width="2">
+    <path d="M7 4v16l13 -8l-13 -8" />
+  </g>
+    <text x="140" y="456" font-size="20" fill="#FFFFFF">运行效果展示：截图占位，提交前粘贴（P25）</text>
+    <!-- icon: tabler-outline/activity -->
+  <g transform="translate(80, 490) scale(1.5)" fill="none" stroke="#FFFFFF" stroke-width="2">
+    <path d="M3 12h4l3 8l4 -16l3 8h4" />
+  </g>
+    <text x="140" y="516" font-size="20" fill="#FFFFFF">工程验证：379 项测试通过 + 昇腾 A3 实测（P26）</text>
+    <!-- icon: tabler-outline/terminal -->
+  <g transform="translate(80, 550) scale(1.5)" fill="none" stroke="#FFFFFF" stroke-width="2">
+    <path d="M5 7l5 5l-5 5" />
+    <path d="M12 19l7 0" />
+  </g>
+    <text x="140" y="576" font-size="20" fill="#FFFFFF">统一昇腾环境复现（P27）· 合规安全与已知边界（P28）</text>
+  </g>
+  <g id="section-footer" data-pptx-bounds="80 656 1120 40">
+    <text x="80" y="684" font-size="14" fill="#D5E0EE">P23–P28</text>
+    <text x="1200" y="684" font-size="12" fill="#D5E0EE" text-anchor="end">23 / 29 · v7.1</text>
+  </g>
+</svg>

@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" data-pptx-page-role="toc" font-family="Microsoft YaHei, Arial, sans-serif">
+  <rect id="bg" x="0" y="0" width="1280" height="720" fill="#FFFFFF" data-pptx-role="background"/>
+  <g id="header" data-pptx-bounds="40 40 1200 100">
+    <text x="40" y="66" font-size="16" fill="#375A86" letter-spacing="2">目录</text>
+    <text x="40" y="106" font-size="36" font-weight="bold" fill="#1E293B">内容结构</text>
+    <rect x="40" y="120" width="48" height="4" fill="#C9A227"/>
+    <line x1="40" y1="142" x2="1240" y2="142" stroke="#DCE6F0" stroke-width="1"/>
+  </g>
+  <g id="toc-left" data-pptx-bounds="40 170 590 460">
+    <g id="toc-01" data-pptx-bounds="40 186 590 130">
+      <text x="40" y="222" font-size="28" font-weight="bold" fill="#375A86">01</text>
+      <text x="120" y="216" font-size="24" font-weight="bold" fill="#1E293B">项目概览</text>
+      <text x="120" y="244" font-size="16" fill="#64748B">定位、背景与痛点、解决思路（P03–P05）</text>
+      <line x1="40" y1="276" x2="630" y2="276" stroke="#DCE6F0" stroke-width="1"/>
+    </g>
+    <g id="toc-02" data-pptx-bounds="40 296 590 130">
+      <text x="40" y="332" font-size="28" font-weight="bold" fill="#375A86">02</text>
+      <text x="120" y="326" font-size="24" font-weight="bold" fill="#1E293B">系统架构与核心机制</text>
+      <text x="120" y="354" font-size="16" fill="#64748B">总体架构、计划引擎、全模态链路、协作闭环（P06–P10）</text>
+      <line x1="40" y1="386" x2="630" y2="386" stroke="#DCE6F0" stroke-width="1"/>
+    </g>
+    <g id="toc-03" data-pptx-bounds="40 406 590 130">
+      <text x="40" y="442" font-size="28" font-weight="bold" fill="#375A86">03</text>
+      <text x="120" y="436" font-size="24" font-weight="bold" fill="#1E293B">核心功能详解</text>
+      <text x="120" y="464" font-size="16" fill="#64748B">功能总览、计划引擎、CPM 排期、动态协作、<tspan x="120" dy="26">汇报触达（P11–P17）</tspan></text>
+      <line x1="40" y1="496" x2="630" y2="496" stroke="#DCE6F0" stroke-width="1"/>
+    </g>
+  </g>
+  <g id="toc-right" data-pptx-bounds="660 170 580 460">
+    <g id="toc-04" data-pptx-bounds="660 186 580 130">
+      <text x="660" y="222" font-size="28" font-weight="bold" fill="#375A86">04</text>
+      <text x="740" y="216" font-size="24" font-weight="bold" fill="#1E293B">创新点</text>
+      <text x="740" y="244" font-size="16" fill="#64748B">全模态进流程、确定性保证、完整闭环<tspan x="740" dy="26">与兜底、昇腾双后端（P18–P22）</tspan></text>
+      <line x1="660" y1="276" x2="1240" y2="276" stroke="#DCE6F0" stroke-width="1"/>
+    </g>
+    <g id="toc-05" data-pptx-bounds="660 296 580 130">
+      <text x="660" y="332" font-size="28" font-weight="bold" fill="#375A86">05</text>
+      <text x="740" y="326" font-size="24" font-weight="bold" fill="#1E293B">应用落地与工程验证</text>
+      <text x="740" y="354" font-size="16" fill="#64748B">应用场景、运行效果、工程验证、昇腾复现、<tspan x="740" dy="26">合规与边界（P23–P28）</tspan></text>
+      <line x1="660" y1="386" x2="1240" y2="386" stroke="#DCE6F0" stroke-width="1"/>
+    </g>
+    <g id="toc-06" data-pptx-bounds="660 406 580 130">
+      <text x="660" y="442" font-size="28" font-weight="bold" fill="#375A86">06</text>
+      <text x="740" y="436" font-size="24" font-weight="bold" fill="#1E293B">总结与展望</text>
+      <text x="740" y="464" font-size="16" fill="#64748B">核心价值收束与未来方向（P29）</text>
+      <line x1="660" y1="496" x2="1240" y2="496" stroke="#DCE6F0" stroke-width="1"/>
+    </g>
+  </g>
+  <g id="footer" data-pptx-bounds="40 676 1200 30">
+    <text x="40" y="694" font-size="12" fill="#64748B">协作分工智能体 · 昇腾全模态版</text>
+    <text x="1240" y="694" font-size="12" fill="#64748B" text-anchor="end">02 / 29 · v7.1</text>
+  </g>
+</svg>

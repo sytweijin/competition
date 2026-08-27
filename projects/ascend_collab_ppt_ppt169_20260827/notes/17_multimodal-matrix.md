@@ -1,0 +1,1 @@
+本页是五种模态的能力矩阵。文本提供 SSE 流式对话与带方案快照的 AI 建议抽屉，对应接口 /api/realtime/chat；语音提供麦克风对话、需求输入与语音汇报，对应 /api/realtime/voice-chat；图片支持拍照需求、白板、截图与扫描 PDF 理解，对应 /api/analyze-files；视频支持会议录像边看边听与答辩录像表现观察，对应 /api/realtime/meeting；TTS 提供语音回复与今日播报，对应 /api/realtime/tts。每种模态都有对应接口与真实协作动作，全模态能力落进工作流而非停留在演示。

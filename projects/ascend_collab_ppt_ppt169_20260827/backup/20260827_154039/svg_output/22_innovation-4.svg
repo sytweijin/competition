@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" data-pptx-page-role="content" font-family="Microsoft YaHei, Arial, sans-serif">
+  <defs>
+    <marker id="arrowTri9" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#2F7FCE"/>
+    </marker>
+  </defs>
+  <rect id="bg" x="0" y="0" width="1280" height="720" fill="#FFFFFF" data-pptx-role="background"/>
+  <g id="header" data-pptx-bounds="40 40 1200 100">
+    <text x="40" y="66" font-size="16" fill="#2F7FCE" letter-spacing="2">04 · 创新点</text>
+    <text x="40" y="106" font-size="36" font-weight="bold" fill="#1E293B">创新点四：昇腾本地 + 云端双后端统一适配</text>
+    <rect x="40" y="120" width="48" height="4" fill="#C9A227"/>
+    <line x1="40" y1="142" x2="1240" y2="142" stroke="#DCE6F0" stroke-width="1"/>
+  </g>
+  <g id="backend-a3" data-pptx-bounds="40 170 570 250">
+    <rect x="40" y="170" width="570" height="250" rx="4" fill="#FFFFFF" stroke="#DCE6F0" stroke-width="1"/>
+    <rect x="40" y="170" width="570" height="8" fill="#2F7FCE"/>
+    <use data-icon="tabler-outline/cpu" x="72" y="204" width="40" height="40" fill="#2F7FCE" stroke-width="2"/>
+    <text x="130" y="234" font-size="22" font-weight="bold" fill="#1E293B">昇腾 A3 本地（评审期主力）</text>
+    <text x="72" y="290" font-size="16" fill="#1E293B">· Ascend 910C + llama.cpp-omni</text>
+    <text x="72" y="324" font-size="16" fill="#1E293B">· MiniCPM-o-4_5-F16（约 16G）</text>
+    <text x="72" y="358" font-size="16" fill="#1E293B">· 本地直听直答，统一昇腾环境复现</text>
+    <text x="72" y="398" font-size="14" fill="#64748B">配置：ASCEND_OMNI_WS_URL=ws://127.0.0.1:28099/backend</text>
+  </g>
+  <g id="backend-cloud" data-pptx-bounds="670 170 570 250">
+    <rect x="670" y="170" width="570" height="250" rx="4" fill="#FFFFFF" stroke="#DCE6F0" stroke-width="1"/>
+    <rect x="670" y="170" width="570" height="8" fill="#7FB1DC"/>
+    <use data-icon="tabler-outline/cloud" x="702" y="204" width="40" height="40" fill="#2F7FCE" stroke-width="2"/>
+    <text x="760" y="234" font-size="22" font-weight="bold" fill="#1E293B">ModelBest 云端（开发期兜底）</text>
+    <text x="702" y="290" font-size="16" fill="#1E293B">· MiniCPM-o-4.5-Realtime API</text>
+    <text x="702" y="324" font-size="16" fill="#1E293B">· 免费 API，开发 / 评审期通用</text>
+    <text x="702" y="358" font-size="16" fill="#1E293B">· turn-based：先转写再理解</text>
+    <text x="702" y="398" font-size="14" fill="#64748B">配置：MAP_REALTIME_API_KEY + wss://api.modelbest.cn/v1/realtime</text>
+  </g>
+  <g id="switch-badge" data-pptx-bounds="604 240 72 110">
+    <rect x="604" y="240" width="72" height="110" rx="30" fill="#C9A227"/>
+    <text x="640" y="280" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="middle">一键</text>
+    <text x="640" y="304" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="middle">切换</text>
+    <text x="640" y="334" font-size="12" fill="#FFFFFF" text-anchor="middle">WebSocket</text>
+  </g>
+  <g id="status-note" data-pptx-bounds="40 444 1200 64">
+    <rect x="40" y="444" width="1200" height="60" rx="4" fill="#F0F6FC"/>
+    <use data-icon="tabler-outline/api" x="68" y="460" width="28" height="28" fill="#2F7FCE" stroke-width="2"/>
+    <text x="110" y="482" font-size="16" fill="#1E293B">统一适配：omni_chat 层统一行为——本地能直接听，云端先转写再理解；/api/realtime/status 返回 backend: local | map 一键确认。</text>
+  </g>
+  <g id="compliance" data-pptx-bounds="40 530 1200 118">
+    <rect x="40" y="530" width="1200" height="118" rx="4" fill="#FFFFFF" stroke="#DCE6F0" stroke-width="1"/>
+    <use data-icon="tabler-outline/shield-check" x="68" y="554" width="36" height="36" fill="#2F7FCE" stroke-width="2"/>
+    <text x="122" y="578" font-size="20" font-weight="bold" fill="#1E293B">合规性</text>
+    <text x="68" y="612" font-size="16" fill="#1E293B">APP_MODEL_MODE=minicpm 且 APP_ALLOW_EXTERNAL_MODELS=0 时，全链路仅调用 MiniCPM-o 4.5；<tspan x="68" dy="28">不创建任何其他模型客户端；API Key 仅存 .env，不进入版本库。</tspan></text>
+  </g>
+  <g id="footer" data-pptx-bounds="40 676 1200 30">
+    <text x="40" y="694" font-size="12" fill="#64748B">协作分工智能体 · 昇腾全模态版</text>
+    <text x="1240" y="694" font-size="12" fill="#64748B" text-anchor="end">22 / 29 · v7.1</text>
+  </g>
+</svg>

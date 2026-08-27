@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" data-pptx-page-role="content" font-family="Microsoft YaHei, Arial, sans-serif">
+  <defs>
+    <marker id="arrowTri8" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#17457F"/>
+    </marker>
+    <marker id="arrowGold2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#C9A227"/>
+    </marker>
+  </defs>
+  <rect id="bg" x="0" y="0" width="1280" height="720" fill="#FFFFFF" data-pptx-role="background"/>
+  <g id="header" data-pptx-bounds="40 40 1200 100">
+    <text x="40" y="66" font-size="16" fill="#17457F" letter-spacing="2">04 · 创新点</text>
+    <text x="40" y="106" font-size="36" font-weight="bold" fill="#1E293B">创新点三：完整协作闭环，任何环节失败都有兜底</text>
+    <rect x="40" y="120" width="48" height="4" fill="#C9A227"/>
+    <line x1="40" y1="142" x2="1240" y2="142" stroke="#D9E1EC" stroke-width="1"/>
+  </g>
+  <g id="loop-n1" data-pptx-bounds="40 178 270 116">
+    <rect x="40" y="178" width="270" height="116" rx="3" fill="#F2F5FA" stroke="#D9E1EC" stroke-width="1"/>
+    <use data-icon="tabler-outline/clipboard-list" x="64" y="196" width="30" height="30" fill="#17457F" stroke-width="2"/>
+    <text x="104" y="218" font-size="18" font-weight="bold" fill="#1E293B">计划生成</text>
+    <text x="64" y="254" font-size="14" fill="#64748B">拆解 · 排期 · 分工 · 报告</text>
+    <text x="64" y="278" font-size="14" fill="#64748B">确认后进入执行</text>
+  </g>
+  <g id="loop-a" data-pptx-bounds="310 230 28 30">
+    <line x1="310" y1="245" x2="334" y2="245" stroke="#17457F" stroke-width="2" marker-end="url(#arrowTri8)"/>
+  </g>
+  <g id="loop-n2" data-pptx-bounds="338 178 270 116">
+    <rect x="338" y="178" width="270" height="116" rx="3" fill="#F2F5FA" stroke="#D9E1EC" stroke-width="1"/>
+    <use data-icon="tabler-outline/users" x="362" y="196" width="30" height="30" fill="#17457F" stroke-width="2"/>
+    <text x="402" y="218" font-size="18" font-weight="bold" fill="#1E293B">成员执行</text>
+    <text x="362" y="254" font-size="14" fill="#64748B">按分工推进任务</text>
+    <text x="362" y="278" font-size="14" fill="#64748B">状态随时更新</text>
+  </g>
+  <g id="loop-b" data-pptx-bounds="608 230 28 30">
+    <line x1="608" y1="245" x2="632" y2="245" stroke="#17457F" stroke-width="2" marker-end="url(#arrowTri8)"/>
+  </g>
+  <g id="loop-n3" data-pptx-bounds="636 178 270 116">
+    <rect x="636" y="178" width="270" height="116" rx="3" fill="#F2F5FA" stroke="#D9E1EC" stroke-width="1"/>
+    <use data-icon="tabler-outline/list-check" x="660" y="196" width="30" height="30" fill="#17457F" stroke-width="2"/>
+    <text x="700" y="218" font-size="18" font-weight="bold" fill="#1E293B">汇报反馈</text>
+    <text x="660" y="254" font-size="14" fill="#64748B">语音 / 照片 / 文本汇报</text>
+    <text x="660" y="278" font-size="14" fill="#64748B">负责人确认</text>
+  </g>
+  <g id="loop-c" data-pptx-bounds="906 230 28 30">
+    <line x1="906" y1="245" x2="930" y2="245" stroke="#17457F" stroke-width="2" marker-end="url(#arrowTri8)"/>
+  </g>
+  <g id="loop-n4" data-pptx-bounds="934 178 306 116">
+    <rect x="934" y="178" width="306" height="116" rx="3" fill="#F2F5FA" stroke="#D9E1EC" stroke-width="1"/>
+    <use data-icon="tabler-outline/send" x="958" y="196" width="30" height="30" fill="#17457F" stroke-width="2"/>
+    <text x="998" y="218" font-size="18" font-weight="bold" fill="#1E293B">通知触达</text>
+    <text x="958" y="254" font-size="14" fill="#64748B">Webhook 群通知</text>
+    <text x="958" y="278" font-size="14" fill="#64748B">今日播报（TTS）</text>
+  </g>
+  <g id="loop-return" data-pptx-bounds="80 294 1120 50">
+    <path d="M1240 294 C1240 328 80 328 80 294" fill="none" stroke="#C9A227" stroke-width="2" marker-end="url(#arrowGold2)"/>
+  </g>
+  <g id="fallback-title" data-pptx-bounds="40 356 1200 36">
+    <text x="40" y="384" font-size="20" font-weight="bold" fill="#17457F">全环节确定性兜底</text>
+  </g>
+  <g id="fb-1" data-pptx-bounds="40 398 286 210">
+    <rect x="40" y="398" width="286" height="210" rx="4" fill="#FFFFFF" stroke="#D9E1EC" stroke-width="1"/>
+    <use data-icon="tabler-outline/clipboard-list" x="64" y="422" width="32" height="32" fill="#17457F" stroke-width="2"/>
+    <text x="64" y="482" font-size="18" font-weight="bold" fill="#1E293B">拆解兜底</text>
+    <text x="64" y="520" font-size="15" fill="#64748B">LLM 拆解失败 → 确定性拆解<tspan x="64" dy="24">（弹性子任务规则）</tspan></text>
+    <text x="64" y="572" font-size="14" fill="#5E8FBF">结果可复现</text>
+  </g>
+  <g id="fb-2" data-pptx-bounds="346 398 286 210">
+    <rect x="346" y="398" width="286" height="210" rx="4" fill="#FFFFFF" stroke="#D9E1EC" stroke-width="1"/>
+    <use data-icon="tabler-outline/users" x="370" y="422" width="32" height="32" fill="#17457F" stroke-width="2"/>
+    <text x="370" y="482" font-size="18" font-weight="bold" fill="#1E293B">分工兜底</text>
+    <text x="370" y="520" font-size="15" fill="#64748B">分工失败 → 规则分工与评分兜底</text>
+    <text x="370" y="572" font-size="14" fill="#5E8FBF">匹配度可解释</text>
+  </g>
+  <g id="fb-3" data-pptx-bounds="652 398 286 210">
+    <rect x="652" y="398" width="286" height="210" rx="4" fill="#FFFFFF" stroke="#D9E1EC" stroke-width="1"/>
+    <use data-icon="tabler-outline/timeline" x="676" y="422" width="32" height="32" fill="#17457F" stroke-width="2"/>
+    <text x="676" y="482" font-size="18" font-weight="bold" fill="#1E293B">排期兜底</text>
+    <text x="676" y="520" font-size="15" fill="#64748B">排期失败 → 算法排期兜底</text>
+    <text x="676" y="572" font-size="14" fill="#5E8FBF">日期约束仍生效</text>
+  </g>
+  <g id="fb-4" data-pptx-bounds="958 398 282 210">
+    <rect x="958" y="398" width="282" height="210" rx="4" fill="#FFFFFF" stroke="#D9E1EC" stroke-width="1"/>
+    <use data-icon="tabler-outline/lifebuoy" x="982" y="422" width="32" height="32" fill="#17457F" stroke-width="2"/>
+    <text x="982" y="482" font-size="18" font-weight="bold" fill="#1E293B">断网兜底</text>
+    <text x="982" y="520" font-size="15" fill="#64748B">断网 / 模型离线 → 本地保留<tspan x="982" dy="24">确定性拆解与导出能力</tspan></text>
+    <text x="982" y="572" font-size="14" fill="#5E8FBF">主链路仍可演示</text>
+  </g>
+  <g id="footer" data-pptx-bounds="40 676 1200 30">
+    <text x="40" y="694" font-size="12" fill="#64748B">协作分工智能体 · 昇腾全模态版</text>
+    <text x="1240" y="694" font-size="12" fill="#64748B" text-anchor="end">21 / 29 · v7.1</text>
+  </g>
+</svg>

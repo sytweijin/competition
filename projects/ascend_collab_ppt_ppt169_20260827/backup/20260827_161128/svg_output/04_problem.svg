@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" data-pptx-page-role="content" font-family="Microsoft YaHei, Arial, sans-serif">
+  <rect id="bg" x="0" y="0" width="1280" height="720" fill="#FFFFFF" data-pptx-role="background"/>
+  <g id="header" data-pptx-bounds="40 40 1200 100">
+    <text x="40" y="66" font-size="16" fill="#375A86" letter-spacing="2">01 · 项目概览</text>
+    <text x="40" y="106" font-size="36" font-weight="bold" fill="#1E293B">背景与痛点：为什么需要“活”的协作规划</text>
+    <rect x="40" y="120" width="48" height="4" fill="#C9A227"/>
+    <line x1="40" y1="142" x2="1240" y2="142" stroke="#DCE6F0" stroke-width="1"/>
+  </g>
+  <g id="story" data-pptx-bounds="40 162 1200 110">
+    <text x="40" y="196" font-size="20" fill="#1E293B">组队完成一个项目，几乎每个人都有过这样的经历：分工靠临时商量，任务边界含糊，<tspan x="40" dy="30">有人忙有人闲，临近答辩才发现进度对不上。</tspan></text>
+    <text x="40" y="264" font-size="16" fill="#64748B">这背后是四个真实存在的痛点——它们共同造成了协作中最常见的挫败感。</text>
+  </g>
+  <g id="pain-01" data-pptx-bounds="40 288 590 168">
+    <rect x="40" y="288" width="590" height="168" rx="4" fill="#F0F6FC"/>
+    <text x="66" y="324" font-size="26" font-weight="bold" fill="#375A86">01</text>
+    <text x="118" y="326" font-size="19" font-weight="bold" fill="#1E293B">静态计划表</text>
+    <text x="66" y="368" font-size="16" fill="#1E293B">绝大多数规划工具只在项目开始时生成一张分工表，<tspan x="66" dy="26">从那以后就再也不更新。项目一旦变化——有人请假、任务调整、</tspan><tspan x="66" dy="26">截止日提前——这张表立刻过时，团队只能回到群里反复对齐。</tspan></text>
+  </g>
+  <g id="pain-02" data-pptx-bounds="650 288 590 168">
+    <rect x="650" y="288" width="590" height="168" rx="4" fill="#F0F6FC"/>
+    <text x="676" y="324" font-size="26" font-weight="bold" fill="#375A86">02</text>
+    <text x="728" y="326" font-size="19" font-weight="bold" fill="#1E293B">大模型没有进入流程</text>
+    <text x="676" y="368" font-size="16" fill="#1E293B">多模态大模型的能力越来越强，但通常只被当作聊天机器人挂在旁边：<tspan x="676" dy="26">问它问题、让它转写、让它识别图片，结果停留在对话框里，</tspan><tspan x="676" dy="26">从来没有真正改变团队怎么分工、怎么排期。</tspan></text>
+  </g>
+  <g id="pain-03" data-pptx-bounds="40 476 590 168">
+    <rect x="40" y="476" width="590" height="168" rx="4" fill="#F0F6FC"/>
+    <text x="66" y="512" font-size="26" font-weight="bold" fill="#375A86">03</text>
+    <text x="118" y="514" font-size="19" font-weight="bold" fill="#1E293B">汇报成本高</text>
+    <text x="66" y="556" font-size="16" fill="#1E293B">成员更新任务状态要打开表格、找到任务、填写说明，步骤繁琐，<tspan x="66" dy="26">于是大家选择不更新。负责人只能挨个追问进度，</tspan><tspan x="66" dy="26">信息永远滞后。</tspan></text>
+  </g>
+  <g id="pain-04" data-pptx-bounds="650 476 590 168">
+    <rect x="650" y="476" width="590" height="168" rx="4" fill="#F0F6FC"/>
+    <text x="676" y="512" font-size="26" font-weight="bold" fill="#375A86">04</text>
+    <text x="728" y="514" font-size="19" font-weight="bold" fill="#1E293B">会议内容难沉淀</text>
+    <text x="676" y="556" font-size="16" fill="#1E293B">开一次会，录音、录像、白板照片散落各处，没有人愿意二次整理。</text>
+    <text x="676" y="588" font-size="16" fill="#1E293B">会上明明讨论清楚的任务，会后依然要靠回忆。</text>
+  </g>
+  <g id="footer" data-pptx-bounds="40 676 1200 30">
+    <text x="40" y="694" font-size="12" fill="#64748B">协作分工智能体 · 昇腾全模态版</text>
+    <text x="1240" y="694" font-size="12" fill="#64748B" text-anchor="end">04 / 29 · v7.1</text>
+  </g>
+</svg>

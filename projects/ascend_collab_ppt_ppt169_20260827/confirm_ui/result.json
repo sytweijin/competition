@@ -1,0 +1,66 @@
+{
+  "primary_language": "zh-CN",
+  "canvas": "ppt169",
+  "audience": "华为昇腾创新应用赛道评审（评委）。他们围绕 MiniCPM-o 4.5 全模态模型与昇腾 NPU，重点考察创新性、实用性、场景价值、工程完整度、可运行可展示、统一昇腾环境复现；对项目本身没有先入了解，需要通过材料快速判断参赛价值。",
+  "communication_intent": "先说明项目是什么、解决什么问题（功能与价值），再解释系统如何运转（架构与机制），进而用证据展示创新点、实际落地应用与工程验证（测试、昇腾 A3 实测、复现），最后如实交代边界与下一步。以 inform 与 explain 为主线，辅以 persuade：让评委信服这是一个完整、真实、可落地、可复现的全模态协作闭环，而非单点 Demo。",
+  "audience_outcome": "评委独立阅读后能准确复述：项目的核心功能链路、核心创新点、实际应用场景，以及工程完整度的证据（379 项自动化测试通过、昇腾 A3 实测指标、统一昇腾环境复现步骤），并据此作出正向评审判断。",
+  "core_message": "把 MiniCPM-o 4.5 从“聊天机器人”变成真实协作流程的入口：拍照立项、说话排期、确认分工、语音/照片汇报、群通知的完整闭环；LLM 负责创造性拆解，确定性算法负责正确性保证，任何环节失败都有兜底；双后端一键切换，在昇腾 A3 本地或 ModelBest 云端均可运行，统一昇腾环境可复现。",
+  "delivery_context": "主要为评委直接阅读的提交材料（读者驱动、无主讲人），页面必须自洽、信息完整、可独立理解；次要为评审答辩或路演时辅助讲解。",
+  "artifact_afterlife": "作为比赛提交材料存档，评委可能反复查阅，并与项目说明、演示视频、复现文档对照核验；也可能用于后续路演或成果展示。",
+  "content_divergence": "严格贴近原材料，但是可以自己组织语言",
+  "delivery_purpose": "text",
+  "page_count": "29",
+  "mode": "custom",
+  "mode_behavior": "以说明书式完整覆盖为骨架（主题式标题、可扫读、并列均衡），但把评委最关心的三个要点——核心功能、创新点、落地应用——在开篇\"项目一览\"页以结论前置的方式集中呈现，随后按\"背景问题 → 系统架构 → 核心功能 → 创新点 → 应用与工程验证 → 边界与展望\"完整展开；标题以主题为主，关键证据页辅以结论式副标题。",
+  "visual_style": "swiss-minimal",
+  "color": {
+    "name": "冷静深海蓝",
+    "palette": {
+      "background": "#FFFFFF",
+      "secondary_bg": "#F2F5FA",
+      "primary": "#17457F",
+      "accent": "#C9A227",
+      "secondary_accent": "#5E8FBF",
+      "body_text": "#1E293B"
+    }
+  },
+  "icons": "tabler-outline",
+  "typography": {
+    "name": "微软雅黑 + Arial",
+    "heading": {
+      "css": "sans-serif",
+      "english": "Arial",
+      "primary": "Microsoft YaHei",
+      "sample_primary": "",
+      "sample_english": ""
+    },
+    "body": {
+      "css": "sans-serif",
+      "english": "Arial",
+      "primary": "Microsoft YaHei",
+      "sample_primary": "",
+      "sample_english": ""
+    },
+    "body_size": 20,
+    "sizes": {
+      "title": 36,
+      "subtitle": 28,
+      "annotation": 16
+    },
+    "note": "",
+    "body_size_unit": "px"
+  },
+  "image_usage": [
+    "placeholder"
+  ],
+  "image_notes": "系统架构图、流程图、机制示意图等全部用原生矢量绘制，不使用 AI 或网络图片；仅\"运行效果展示\"页预留真实截图占位框（工作台首页、任务草案与甘特图、成员轻量汇报页、群通知示例等），由作者在提交前粘贴真实运行截图。",
+  "formula_policy": "text-only",
+  "proactive_speaker_notes": true,
+  "proactive_custom_animations": false,
+  "proactive_narration_audio": false,
+  "generation_mode": "continuous",
+  "refine_spec": true,
+  "stage": "final",
+  "status": "confirmed",
+  "confirmed_at": "2026-08-27T15:02:31"
+}

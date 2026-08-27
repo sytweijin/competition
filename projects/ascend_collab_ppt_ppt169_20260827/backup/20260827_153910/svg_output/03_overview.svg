@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" data-pptx-page-role="content" font-family="Microsoft YaHei, Arial, sans-serif">
+  <rect id="bg" x="0" y="0" width="1280" height="720" fill="#FFFFFF" data-pptx-role="background"/>
+  <g id="header" data-pptx-bounds="40 40 1200 100">
+    <text x="40" y="66" font-size="16" fill="#17457F" letter-spacing="2">01 · 项目概览</text>
+    <text x="40" y="106" font-size="36" font-weight="bold" fill="#1E293B">项目一览：功能 · 创新 · 应用</text>
+    <rect x="40" y="120" width="48" height="4" fill="#C9A227"/>
+    <line x1="40" y1="142" x2="1240" y2="142" stroke="#D9E1EC" stroke-width="1"/>
+  </g>
+  <g id="banner-position" data-pptx-bounds="40 164 1200 92">
+    <rect x="40" y="164" width="1200" height="88" fill="#17457F"/>
+    <text x="72" y="200" font-size="20" fill="#FFFFFF">输入「项目要求 + 团队成员 + 截止日」，系统自动完成 任务拆解 → CPM 关键路径排期 → 技能匹配分工 → 报告生成；<tspan x="72" dy="32">并以 MiniCPM-o 4.5 全模态能力驱动完整协作闭环，支持随时调整、即时重算。</tspan></text>
+  </g>
+  <g id="card-feature" data-pptx-bounds="40 282 386 296">
+    <rect x="40" y="282" width="386" height="296" rx="4" fill="#FFFFFF" stroke="#D9E1EC" stroke-width="1"/>
+    <rect x="40" y="282" width="386" height="6" fill="#17457F"/>
+    <use data-icon="tabler-outline/clipboard-list" x="68" y="316" width="40" height="40" fill="#17457F" stroke-width="2"/>
+    <text x="126" y="346" font-size="24" font-weight="bold" fill="#1E293B">功能</text>
+    <text x="68" y="404" font-size="16" fill="#1E293B">· 全模态：文本 / 语音 / 图片 / 视频 / TTS</text>
+    <text x="68" y="438" font-size="16" fill="#1E293B">· 计划引擎：拆解 · 排期 · 分工 · 报告</text>
+    <text x="68" y="472" font-size="16" fill="#1E293B">· 动态协作：编辑 · 拖拽 · 即时重算</text>
+    <text x="68" y="506" font-size="16" fill="#1E293B">· 汇报触达：免登录汇报页 · 群通知 · 今日播报</text>
+    <text x="68" y="548" font-size="16" fill="#64748B">五种模态 × 完整协作链路</text>
+  </g>
+  <g id="card-innovation" data-pptx-bounds="446 282 386 296">
+    <rect x="446" y="282" width="386" height="296" rx="4" fill="#FFFFFF" stroke="#D9E1EC" stroke-width="1"/>
+    <rect x="446" y="282" width="386" height="6" fill="#C9A227"/>
+    <use data-icon="tabler-outline/award" x="474" y="316" width="40" height="40" fill="#17457F" stroke-width="2"/>
+    <text x="532" y="346" font-size="24" font-weight="bold" fill="#1E293B">创新</text>
+    <text x="474" y="404" font-size="16" fill="#1E293B">· 多模态从“聊天”进入真实协作流程</text>
+    <text x="474" y="438" font-size="16" fill="#1E293B">· LLM 负责创造 × 确定性算法负责正确</text>
+    <text x="474" y="472" font-size="16" fill="#1E293B">· 任何环节失败都有兜底，演示不依赖模型在线</text>
+    <text x="474" y="506" font-size="16" fill="#1E293B">· 完整闭环，而非单点 Demo</text>
+    <text x="474" y="548" font-size="16" fill="#64748B">四个评审要点逐页展开（P18–P22）</text>
+  </g>
+  <g id="card-application" data-pptx-bounds="852 282 388 296">
+    <rect x="852" y="282" width="388" height="296" rx="4" fill="#FFFFFF" stroke="#D9E1EC" stroke-width="1"/>
+    <rect x="852" y="282" width="388" height="6" fill="#5E8FBF"/>
+    <use data-icon="tabler-outline/rocket" x="880" y="316" width="40" height="40" fill="#17457F" stroke-width="2"/>
+    <text x="938" y="346" font-size="24" font-weight="bold" fill="#1E293B">应用</text>
+    <text x="880" y="404" font-size="16" fill="#1E293B">· 学生 / 课程 / 社团 / 中小企业项目组</text>
+    <text x="880" y="438" font-size="16" fill="#1E293B">· 小型 / 大型项目双模式</text>
+    <text x="880" y="472" font-size="16" fill="#1E293B">· 企业微信 / 飞书 / 钉钉群通知</text>
+    <text x="880" y="506" font-size="16" fill="#1E293B">· 昇腾 A3 本地或云端双后端可复现</text>
+    <text x="880" y="548" font-size="16" fill="#64748B">从课堂到团队协作（P24）</text>
+  </g>
+  <g id="principle-bar" data-pptx-bounds="40 604 1200 56">
+    <rect x="40" y="604" width="1200" height="52" rx="4" fill="#F2F5FA"/>
+    <use data-icon="tabler-outline/lifebuoy" x="68" y="614" width="30" height="30" fill="#17457F" stroke-width="2"/>
+    <text x="114" y="636" font-size="16" fill="#1E293B">设计原则：LLM 负责创造性拆解，确定性算法负责正确性保证；每个 Agent 失败都有兜底，主链路永不中断。</text>
+  </g>
+  <g id="footer" data-pptx-bounds="40 676 1200 30">
+    <text x="40" y="694" font-size="12" fill="#64748B">协作分工智能体 · 昇腾全模态版</text>
+    <text x="1240" y="694" font-size="12" fill="#64748B" text-anchor="end">03 / 29 · v7.1</text>
+  </g>
+</svg>

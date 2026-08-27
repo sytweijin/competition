@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" data-pptx-page-role="content" font-family="Microsoft YaHei, Arial, sans-serif">
+  <rect id="bg" x="0" y="0" width="1280" height="720" fill="#FFFFFF" data-pptx-role="background"/>
+  <g id="header" data-pptx-bounds="40 40 1200 100">
+    <text x="40" y="66" font-size="16" fill="#375A86" letter-spacing="2">03 · 核心功能详解</text>
+    <text x="40" y="106" font-size="36" font-weight="bold" fill="#1E293B">CPM 关键路径排期：确定性算法保证</text>
+    <rect x="40" y="120" width="48" height="4" fill="#C9A227"/>
+    <line x1="40" y1="142" x2="1240" y2="142" stroke="#DCE6F0" stroke-width="1"/>
+  </g>
+  <g id="algo-points" data-pptx-bounds="40 176 560 400">
+    <rect x="40" y="176" width="560" height="96" rx="4" fill="#F0F6FC"/>
+    <use data-icon="tabler-outline/calendar" x="66" y="194" width="32" height="32" fill="#375A86" stroke-width="2"/>
+    <text x="112" y="216" font-size="20" font-weight="bold" fill="#1E293B">倒排日期</text>
+    <text x="66" y="250" font-size="15" fill="#64748B">从项目截止日反向推导每一项任务的起止，<tspan x="66" dy="22">保证整条链路的终点就是截止日。</tspan></text>
+    <rect x="40" y="284" width="560" height="96" rx="4" fill="#F0F6FC"/>
+    <use data-icon="tabler-outline/timeline" x="66" y="302" width="32" height="32" fill="#375A86" stroke-width="2"/>
+    <text x="112" y="324" font-size="20" font-weight="bold" fill="#1E293B">关键路径与浮动</text>
+    <text x="66" y="358" font-size="15" fill="#64748B">计算关键路径与每项任务的浮动时间，<tspan x="66" dy="22">没有余量的任务直接决定交付，系统据此输出风险提示。</tspan></text>
+    <rect x="40" y="392" width="560" height="96" rx="4" fill="#F0F6FC"/>
+    <use data-icon="tabler-outline/users" x="66" y="410" width="32" height="32" fill="#375A86" stroke-width="2"/>
+    <text x="112" y="432" font-size="20" font-weight="bold" fill="#1E293B">资源日历</text>
+    <text x="66" y="466" font-size="15" fill="#64748B">跳过周末与成员标注的不可用日期，<tspan x="66" dy="22">按成员每日可用工时安排起止，计划落在真实可用性上。</tspan></text>
+    <rect x="40" y="500" width="560" height="96" rx="4" fill="#F0F6FC"/>
+    <use data-icon="tabler-outline/edit" x="66" y="518" width="32" height="32" fill="#375A86" stroke-width="2"/>
+    <text x="112" y="540" font-size="20" font-weight="bold" fill="#1E293B">手动固定日期</text>
+    <text x="66" y="574" font-size="15" fill="#64748B">有些日期是定死的（比如答辩日），<tspan x="66" dy="22">系统支持手动固定，其余任务围绕固定点自动重排。</tspan></text>
+  </g>
+  <g id="gantt" data-pptx-bounds="640 176 600 400">
+    <rect x="640" y="176" width="600" height="400" rx="4" fill="#F0F6FC"/>
+    <text x="672" y="212" font-size="20" font-weight="bold" fill="#1E293B">甘特示意</text>
+    <text x="672" y="240" font-size="14" fill="#64748B">任务条 · 里程碑 · 依赖 · 关键路径（金色）</text>
+    <line x1="672" y1="260" x2="1216" y2="260" stroke="#DCE6F0" stroke-width="1"/>
+    <text x="672" y="300" font-size="14" fill="#1E293B">需求拆解</text>
+    <rect x="792" y="284" width="150" height="20" fill="#7B9DC4"/>
+    <text x="700" y="372" font-size="14" fill="#1E293B">界面设计</text>
+    <rect x="942" y="356" width="200" height="20" fill="#7B9DC4"/>
+    <text x="700" y="444" font-size="14" fill="#1E293B">后端开发</text>
+    <rect x="792" y="428" width="350" height="20" fill="#C9A227"/>
+    <text x="700" y="516" font-size="14" fill="#1E293B">测试验收</text>
+    <rect x="1142" y="500" width="70" height="20" fill="#7B9DC4"/>
+    <polygon points="1216,516 1228,528 1216,540 1204,528" fill="#375A86"/>
+    <text x="1186" y="566" font-size="14" fill="#1E293B">交付</text>
+    <line x1="867" y1="304" x2="942" y2="356" stroke="#A5B8CF" stroke-width="1"/>
+    <line x1="942" y1="376" x2="792" y2="428" stroke="#A5B8CF" stroke-width="1"/>
+    <line x1="1142" y1="448" x2="1142" y2="500" stroke="#A5B8CF" stroke-width="1"/>
+    <line x1="1212" y1="520" x2="1228" y2="528" stroke="#A5B8CF" stroke-width="1"/>
+    <text x="672" y="556" font-size="14" fill="#64748B">示意绘制：运行界面见 P25 截图占位</text>
+  </g>
+  <g id="footer" data-pptx-bounds="40 676 1200 30">
+    <text x="40" y="694" font-size="12" fill="#64748B">协作分工智能体 · 昇腾全模态版</text>
+    <text x="1240" y="694" font-size="12" fill="#64748B" text-anchor="end">14 / 29 · v7.1</text>
+  </g>
+</svg>

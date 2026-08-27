@@ -1,0 +1,107 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" data-pptx-page-role="content" font-family="Microsoft YaHei, Arial, sans-serif">
+  <defs>
+    <marker id="arrowTri6" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#375A86"/>
+    </marker>
+  </defs>
+  <rect id="bg" x="0" y="0" width="1280" height="720" fill="#FFFFFF" data-pptx-role="background"/>
+  <g id="header" data-pptx-bounds="40 40 1200 100">
+    <text x="40" y="66" font-size="16" fill="#375A86" letter-spacing="2">02 · 系统架构与核心机制</text>
+    <text x="40" y="106" font-size="36" font-weight="bold" fill="#1E293B">协作闭环：从计划到执行再到触达</text>
+    <rect x="40" y="120" width="48" height="4" fill="#C9A227"/>
+    <line x1="40" y1="142" x2="1240" y2="142" stroke="#DCE6F0" stroke-width="1"/>
+  </g>
+  <g id="loop-n1" data-pptx-bounds="40 190 200 110">
+    <rect x="40" y="190" width="200" height="110" rx="3" fill="#F0F6FC" stroke="#DCE6F0" stroke-width="1"/>
+    <use data-icon="tabler-outline/clipboard-check" x="60" y="206" width="30" height="30" fill="#375A86" stroke-width="2"/>
+    <text x="100" y="228" font-size="18" font-weight="bold" fill="#1E293B">计划生成</text>
+    <text x="60" y="262" font-size="14" fill="#64748B">拆解 · 排期 · 分工 · 报告</text>
+    <text x="60" y="284" font-size="14" fill="#64748B">确认后进入执行</text>
+  </g>
+  <g id="loop-arrow-a" data-pptx-bounds="240 240 32 30">
+    <line x1="240" y1="255" x2="272" y2="255" stroke="#375A86" stroke-width="2" marker-end="url(#arrowTri6)"/>
+  </g>
+  <g id="loop-n2" data-pptx-bounds="272 190 200 110">
+    <rect x="272" y="190" width="200" height="110" rx="3" fill="#F0F6FC" stroke="#DCE6F0" stroke-width="1"/>
+    <use data-icon="tabler-outline/users" x="292" y="206" width="30" height="30" fill="#375A86" stroke-width="2"/>
+    <text x="332" y="228" font-size="18" font-weight="bold" fill="#1E293B">成员执行</text>
+    <text x="292" y="262" font-size="14" fill="#64748B">按分工推进任务</text>
+    <text x="292" y="284" font-size="14" fill="#64748B">状态随时更新</text>
+  </g>
+  <g id="loop-arrow-b" data-pptx-bounds="472 240 32 30">
+    <line x1="472" y1="255" x2="504" y2="255" stroke="#375A86" stroke-width="2" marker-end="url(#arrowTri6)"/>
+  </g>
+  <g id="loop-n3" data-pptx-bounds="504 190 200 110">
+    <rect x="504" y="190" width="200" height="110" rx="3" fill="#F0F6FC" stroke="#DCE6F0" stroke-width="1"/>
+    <use data-icon="tabler-outline/list-check" x="524" y="206" width="30" height="30" fill="#375A86" stroke-width="2"/>
+    <text x="564" y="228" font-size="18" font-weight="bold" fill="#1E293B">汇报反馈</text>
+    <text x="524" y="262" font-size="14" fill="#64748B">语音 / 照片 / 文本汇报</text>
+    <text x="524" y="284" font-size="14" fill="#64748B">交付物直传</text>
+  </g>
+  <g id="loop-arrow-down" data-pptx-bounds="604 300 20 50">
+    <line x1="614" y1="300" x2="614" y2="342" stroke="#375A86" stroke-width="2" marker-end="url(#arrowTri6)"/>
+  </g>
+  <g id="loop-n4" data-pptx-bounds="504 344 200 110">
+    <rect x="504" y="344" width="200" height="110" rx="3" fill="#F0F6FC" stroke="#DCE6F0" stroke-width="1"/>
+    <use data-icon="tabler-outline/clipboard-check" x="524" y="360" width="30" height="30" fill="#C9A227" stroke-width="2"/>
+    <text x="564" y="382" font-size="18" font-weight="bold" fill="#1E293B">负责人确认</text>
+    <text x="524" y="416" font-size="14" fill="#64748B">确认完成，变更进入计划</text>
+  </g>
+  <g id="loop-arrow-c" data-pptx-bounds="472 394 32 30">
+    <line x1="504" y1="409" x2="474" y2="409" stroke="#375A86" stroke-width="2" marker-end="url(#arrowTri6)"/>
+  </g>
+  <g id="loop-n5" data-pptx-bounds="272 344 200 110">
+    <rect x="272" y="344" width="200" height="110" rx="3" fill="#F0F6FC" stroke="#DCE6F0" stroke-width="1"/>
+    <use data-icon="tabler-outline/send" x="292" y="360" width="30" height="30" fill="#375A86" stroke-width="2"/>
+    <text x="332" y="382" font-size="18" font-weight="bold" fill="#1E293B">通知触达</text>
+    <text x="292" y="416" font-size="14" fill="#64748B">企微 / 飞书 / 钉钉 Webhook</text>
+    <text x="292" y="438" font-size="14" fill="#64748B">今日播报（TTS）</text>
+  </g>
+  <g id="loop-arrow-d" data-pptx-bounds="240 394 32 30">
+    <line x1="272" y1="409" x2="242" y2="409" stroke="#375A86" stroke-width="2" marker-end="url(#arrowTri6)"/>
+  </g>
+  <g id="loop-n6" data-pptx-bounds="40 344 200 110">
+    <rect x="40" y="344" width="200" height="110" rx="3" fill="#F0F6FC" stroke="#DCE6F0" stroke-width="1"/>
+    <use data-icon="tabler-outline/refresh" x="60" y="360" width="30" height="30" fill="#375A86" stroke-width="2"/>
+    <text x="100" y="382" font-size="18" font-weight="bold" fill="#1E293B">即时重算</text>
+    <text x="60" y="416" font-size="14" fill="#64748B">状态 / 成员 / 工时变化</text>
+    <text x="60" y="438" font-size="14" fill="#64748B">自动重排，计划保持最新</text>
+  </g>
+  <g id="loop-arrow-up" data-pptx-bounds="140 300 20 50">
+    <line x1="150" y1="344" x2="150" y2="302" stroke="#375A86" stroke-width="2" marker-end="url(#arrowTri6)"/>
+  </g>
+  <g id="loop-note" data-pptx-bounds="760 200 460 110">
+    <rect x="760" y="200" width="460" height="110" rx="4" fill="#FFFFFF" stroke="#C9A227" stroke-width="2"/>
+    <text x="788" y="240" font-size="18" font-weight="bold" fill="#1E293B">计划随现实持续运转</text>
+    <text x="788" y="274" font-size="16" fill="#64748B">每一次状态变更都回到“即时重算”，</text>
+    <text x="788" y="300" font-size="16" fill="#64748B">计划永远不是一次生成、永久过时。</text>
+  </g>
+  <g id="mechanism-1" data-pptx-bounds="40 494 286 150">
+    <rect x="40" y="494" width="286" height="150" rx="3" fill="#F0F6FC"/>
+    <use data-icon="tabler-outline/link" x="62" y="514" width="30" height="30" fill="#375A86" stroke-width="2"/>
+    <text x="104" y="536" font-size="18" font-weight="bold" fill="#1E293B">token 免登录</text>
+    <text x="62" y="576" font-size="14" fill="#64748B">成员只看自己的任务，手机即用</text>
+  </g>
+  <g id="mechanism-2" data-pptx-bounds="346 494 286 150">
+    <rect x="346" y="494" width="286" height="150" rx="3" fill="#F0F6FC"/>
+    <use data-icon="tabler-outline/headphones" x="368" y="514" width="30" height="30" fill="#375A86" stroke-width="2"/>
+    <text x="410" y="536" font-size="18" font-weight="bold" fill="#1E293B">语音 / 照片汇报</text>
+    <text x="368" y="576" font-size="14" fill="#64748B">语音上报状态与工时，拍照交付</text>
+  </g>
+  <g id="mechanism-3" data-pptx-bounds="652 494 286 150">
+    <rect x="652" y="494" width="286" height="150" rx="3" fill="#F0F6FC"/>
+    <use data-icon="tabler-outline/send-2" x="674" y="514" width="30" height="30" fill="#375A86" stroke-width="2"/>
+    <text x="716" y="536" font-size="18" font-weight="bold" fill="#1E293B">Webhook 群通知</text>
+    <text x="674" y="576" font-size="14" fill="#64748B">状态变更自动推送到工作群</text>
+  </g>
+  <g id="mechanism-4" data-pptx-bounds="958 494 282 150">
+    <rect x="958" y="494" width="282" height="150" rx="3" fill="#F0F6FC"/>
+    <use data-icon="tabler-outline/calendar-stats" x="980" y="514" width="30" height="30" fill="#375A86" stroke-width="2"/>
+    <text x="1022" y="536" font-size="18" font-weight="bold" fill="#1E293B">今日播报</text>
+    <text x="980" y="576" font-size="14" fill="#64748B">云端 TTS 朗读今日待办要点</text>
+  </g>
+  <g id="footer" data-pptx-bounds="40 676 1200 30">
+    <text x="40" y="694" font-size="12" fill="#64748B">协作分工智能体 · 昇腾全模态版</text>
+    <text x="1240" y="694" font-size="12" fill="#64748B" text-anchor="end">10 / 29 · v7.1</text>
+  </g>
+</svg>

@@ -139,7 +139,9 @@ class LLMClient:
                 timeout=timeout or LLM_TIMEOUT,
             )
             text = (result.text or "").strip()
-            if _looks_like_garbage(text) or _looks_like_canned_reply(text):
+            if (_looks_like_garbage(
+                    text, local=bool(ASCEND_OMNI_WS_URL))
+                    or _looks_like_canned_reply(text)):
                 # 云端 ModelBest 偶发开场白/客套/乱码：带防客套指令重试一次，
                 # 提升建议抽题/答辩模拟等文字链路的成功率；
                 # 本地 A3 推理慢（约 50 token/s）且已有确定性兜底，保持单次

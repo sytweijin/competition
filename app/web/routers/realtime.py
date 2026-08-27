@@ -32,6 +32,70 @@ PERFORMANCE_PROMPT = (
     "用中文给出简短观察（2 句话以内）；如果画面中看不清人脸，请如实说明。"
 )
 
+# 本地昇腾 A3 专用：模型常无视提示词直接描述外貌/背景/寒暄（2026-08-27
+# 实测"戴眼镜、木质橱柜、生活照、你想分享吗"），用强制结构 + 明确禁词，
+# 并在应用层做合规过滤（见 _off_topic_performance_observation）。
+PERFORMANCE_PROMPT_LOCAL = (
+    "这是用户答辩练习录像的第{n}帧画面，画面中的人是正在回答问题的答辩者。\n"
+    "请只评价 TA 的答辩表现状态，严格按以下一行格式输出，不要输出任何其他内容：\n"
+    "表现：<自信/紧张/平静/专注/犹豫…>；眼神：<专注/回避/看向别处…>；"
+    "表情：<自然/僵硬/微笑…>；姿态：<得体/晃动/僵硬…>；回答状态：<流畅/停顿较多…>\n"
+    "【绝对禁止】描述人物外貌（发型、眼镜、衣着、长相），描述背景、家具、房间、"
+    "光线、照片本身，或进行寒暄反问（如'你想分享什么吗'）。\n"
+    "如果看不清答辩者的脸或画面与答辩无关，只输出：无法识别。"
+)
+
+_PERFORMANCE_OFF_TOPIC_MARKERS = (
+    "眼镜", "头发", "发型", "马尾", "长发", "短发", "衣着", "衣服", "穿着",
+    "背景", "柜子", "橱柜", "家具", "房间", "室内", "光线", "灯光",
+    "照片", "生活照", "拍摄", "桌子", "沙发", "床", "墙", "窗户", "窗帘",
+    "项链", "耳环", "你好呀", "您好呀", "想分享", "分享吗",
+)
+
+_PERFORMANCE_RETRY_HINT = (
+    "\n\n【上一轮输出不合格】你描述了人物外貌、背景或进行了寒暄。"
+    "请只输出答辩者的表现观察（自信程度、眼神、表情、姿态、回答状态），"
+    "不要描述长相、衣着、背景或家具；看不清脸就只输出：无法识别。"
+)
+
+
+def _off_topic_performance_observation(text: str) -> bool:
+    """本地昇腾表现观察合规过滤：描述外貌/背景/寒暄视为跑偏，不展示。"""
+    lowered = (text or "").lower()
+    return any(marker in lowered for marker in _PERFORMANCE_OFF_TOPIC_MARKERS)
+
+
+async def _analyze_performance_frame(frame: bytes, index: int) -> str:
+    """分析单帧答辩画面；本地昇腾启用严格提示词 + 合规过滤与一次重试。"""
+    from app.services.media_analysis import _run_realtime_media_chat
+
+    if ASCEND_OMNI_WS_URL:
+        prompt = PERFORMANCE_PROMPT_LOCAL.format(n=index)
+    else:
+        prompt = PERFORMANCE_PROMPT.format(n=index)
+
+    parts = [
+        {"type": "text", "text": prompt},
+        {"type": "image", "data": base64.b64encode(frame).decode("utf-8")},
+    ]
+    obs = (
+        await asyncio.to_thread(
+            _run_realtime_media_chat, parts, 300, False, 120)
+        or ""
+    ).strip()
+    if ASCEND_OMNI_WS_URL and obs and _off_topic_performance_observation(obs):
+        retry_parts = [
+            {"type": "text", "text": prompt + _PERFORMANCE_RETRY_HINT},
+            {"type": "image",
+             "data": base64.b64encode(frame).decode("utf-8")},
+        ]
+        obs = (
+            await asyncio.to_thread(
+                _run_realtime_media_chat, retry_parts, 300, False, 120)
+            or ""
+        ).strip()
+    return obs
+
 INTERVIEW_TURN_INSTRUCTION = (
     "用户正在用语音/视频回答你刚才提出的问题。\n"
     "请严格按以下结构输出，且只输出这四个部分：\n"
@@ -138,7 +202,7 @@ async def realtime_transcribe(file: UploadFile = File(...)):
     # 客套判定仅对本地 A3 生效（v7.1 误套到云端导致云端语音"无法识别"）；
     # 云端保留纯乱码守卫。
     if (ASCEND_OMNI_WS_URL and _looks_like_canned_reply(text)) \
-            or _looks_like_garbage(text):
+            or _looks_like_garbage(text, local=bool(ASCEND_OMNI_WS_URL)):
         hint = "语音识别暂不可用"
         if ASCEND_OMNI_WS_URL:
             hint += ("：本地昇腾把转写指令当成了对话，未返回用户原话，"
@@ -565,7 +629,8 @@ async def realtime_interview_turn(
     if audio:
         audio_b64 = base64.b64encode(audio).decode("utf-8")
         from app.services.omni_chat import (
-            _AUDIO_CHUNK_SECONDS, _looks_like_garbage, understand_audio)
+            _AUDIO_CHUNK_SECONDS, _looks_like_garbage,
+            _trim_repetition_tail, understand_audio)
 
         try:
             # 评委输出守卫（两端通用）：
@@ -594,6 +659,12 @@ async def realtime_interview_turn(
                     history=history_list,
                 )
                 summary, reply = _parse_turn_text(result.text)
+                # 本地 A3 偶发"回复前半段正常、后半段无限复读"（实测"妖精"循环）：
+                # 先截掉复读尾巴再走乱码/复读守卫，保留有效前缀而不是整轮丢弃。
+                # 仅本地启用，云端保持原逻辑（2026-08-27 按后端隔离）。
+                if ASCEND_OMNI_WS_URL:
+                    summary = _trim_repetition_tail(summary)
+                    reply = _trim_repetition_tail(reply)
                 # 模型漏输出【回答摘要】时，用云端转写文本兜底，避免
                 # 评委点评被误存成用户回答、历史失真导致复读循环。
                 if not summary.strip() and (result.transcript or "").strip():
@@ -606,13 +677,17 @@ async def realtime_interview_turn(
                     not ASCEND_OMNI_WS_URL and summary.strip() and reply
                     and len(reply) >= 20 and last_reply
                     and _reply_similar(reply, last_reply) >= 0.9)
-                bad_garbage = _looks_like_garbage(summary + " " + reply)
+                bad_garbage = _looks_like_garbage(
+                    summary + " " + reply,
+                    local=bool(ASCEND_OMNI_WS_URL))
                 if attempt == 1 and (bad_garbage or bad_similar or bad_repeat):
                     summary = ""
                     reply = ""
                     continue
                 break
-            if _looks_like_garbage(summary + " " + reply):
+            if _looks_like_garbage(
+                    summary + " " + reply,
+                    local=bool(ASCEND_OMNI_WS_URL)):
                 audio_hollow = True
                 audio_error = "评委输出异常（乱码/重复内容），请重试"
                 summary = ""
@@ -677,15 +752,12 @@ async def realtime_interview_turn(
 
     observations: list[str] = []
     for index, frame in enumerate(frames, 1):
-        parts = [
-            {"type": "text", "text": PERFORMANCE_PROMPT.format(n=index)},
-            {"type": "image",
-             "data": base64.b64encode(frame).decode("utf-8")},
-        ]
         try:
-            obs = await asyncio.to_thread(
-                _run_realtime_media_chat, parts, 300, False, 120)
-            if obs and obs.strip() and not _looks_like_garbage(obs):
+            obs = await _analyze_performance_frame(frame, index)
+            if obs and obs.strip() and not _looks_like_garbage(
+                    obs, local=bool(ASCEND_OMNI_WS_URL)) \
+                    and (not ASCEND_OMNI_WS_URL
+                         or not _off_topic_performance_observation(obs)):
                 observations.append(f"第 {index} 帧：{obs.strip()}")
         except Exception:
             continue
@@ -787,7 +859,8 @@ async def _meeting_analysis(raw: bytes, emit=None) -> dict:
         try:
             obs = await asyncio.to_thread(
                 _run_realtime_media_chat, parts, 500, False, 120)
-            if obs and obs.strip() and not _looks_like_garbage(obs):
+            if obs and obs.strip() and not _looks_like_garbage(
+                    obs, local=bool(ASCEND_OMNI_WS_URL)):
                 visual.append(f"第 {index} 帧：{obs.strip()}")
         except Exception:
             continue
@@ -907,16 +980,12 @@ async def realtime_performance(file: UploadFile = File(...)):
 
     observations: list[str] = []
     for index, frame in enumerate(frames, 1):
-        parts = [
-            {"type": "text",
-             "text": PERFORMANCE_PROMPT.format(n=index)},
-            {"type": "image",
-             "data": base64.b64encode(frame).decode("utf-8")},
-        ]
         try:
-            obs = await asyncio.to_thread(
-                _run_realtime_media_chat, parts, 300, False, 120)
-            if obs and obs.strip() and not _looks_like_garbage(obs):
+            obs = await _analyze_performance_frame(frame, index)
+            if obs and obs.strip() and not _looks_like_garbage(
+                    obs, local=bool(ASCEND_OMNI_WS_URL)) \
+                    and (not ASCEND_OMNI_WS_URL
+                         or not _off_topic_performance_observation(obs)):
                 observations.append(
                     f"第 {index} 帧：{obs.strip()}")
         except Exception as exc:
@@ -1040,7 +1109,8 @@ async def realtime_chat(req: RealtimeChatRequest):
     # 只对乱码报错；云端命中开场白/乱码时走下方带防客套指令的重试。
     from app.services.omni_chat import (
         _NO_CANNED_NUDGE, _looks_like_canned_reply, _looks_like_garbage)
-    if (ASCEND_OMNI_WS_URL and _looks_like_garbage(result.text)
+    if (ASCEND_OMNI_WS_URL and _looks_like_garbage(
+            result.text, local=True)
             and bare_last_content is not None):
         try:
             result = await client.chat(
@@ -1052,7 +1122,8 @@ async def realtime_chat(req: RealtimeChatRequest):
             )
         except RealtimeError:
             pass
-    if ASCEND_OMNI_WS_URL and _looks_like_garbage(result.text):
+    if ASCEND_OMNI_WS_URL and _looks_like_garbage(
+            result.text, local=True):
         raise HTTPException(
             status_code=502,
             detail="本地昇腾模型输出异常（未能理解该问题），请重试或改用云端后端",
@@ -1196,7 +1267,8 @@ async def realtime_chat_stream(req: RealtimeChatRequest):
                     return
 
             # 本地 A3 偶发输出全 "?"：去摊平长上下文、用裸问句重试一次
-            if (ASCEND_OMNI_WS_URL and _looks_like_garbage(result.text)
+            if (ASCEND_OMNI_WS_URL and _looks_like_garbage(
+                    result.text, local=True)
                     and bare_last_content is not None):
                 await queue.put({"type": "reset"})
                 try:
@@ -1211,7 +1283,8 @@ async def realtime_chat_stream(req: RealtimeChatRequest):
                     )
                 except RealtimeError:
                     pass
-            if ASCEND_OMNI_WS_URL and _looks_like_garbage(result.text):
+            if ASCEND_OMNI_WS_URL and _looks_like_garbage(
+                    result.text, local=True):
                 await queue.put({
                     "type": "error",
                     "detail": (

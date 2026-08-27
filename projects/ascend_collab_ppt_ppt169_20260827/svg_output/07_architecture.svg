@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" data-pptx-page-role="content" font-family="Microsoft YaHei, Arial, sans-serif">
+  <defs>
+    <marker id="arrowTri3" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#375A86"/>
+    </marker>
+  </defs>
+  <rect id="bg" x="0" y="0" width="1280" height="720" fill="#FFFFFF" data-pptx-role="background"/>
+  <g id="header" data-pptx-bounds="40 40 1200 100">
+    <text x="40" y="66" font-size="16" fill="#375A86" letter-spacing="2">02 · 系统架构与核心机制</text>
+    <text x="40" y="106" font-size="36" font-weight="bold" fill="#1E293B">总体架构：工作台 → 后端服务 → 昇腾双后端</text>
+    <rect x="40" y="120" width="48" height="4" fill="#C9A227"/>
+    <line x1="40" y1="142" x2="1240" y2="142" stroke="#DCE6F0" stroke-width="1"/>
+  </g>
+  <g id="layer-frontend" data-pptx-bounds="40 164 1200 118">
+    <rect x="40" y="164" width="1200" height="118" rx="4" fill="#F0F6FC"/>
+    <text x="68" y="196" font-size="18" font-weight="bold" fill="#375A86">前端层 · Web 工作台 + 成员轻量汇报页</text>
+    <rect x="68" y="216" width="560" height="44" rx="3" fill="#FFFFFF" stroke="#DCE6F0" stroke-width="1"/>
+    <text x="84" y="245" font-size="16" fill="#1E293B">Web 工作台：文本 / 语音 / 拍照 / 录像 / TTS / 甘特图 / 导出 / 提醒</text>
+    <rect x="644" y="216" width="568" height="44" rx="3" fill="#FFFFFF" stroke="#DCE6F0" stroke-width="1"/>
+    <text x="660" y="245" font-size="16" fill="#1E293B">成员轻量汇报页：token 链接 · 免登录 · 只看自己的任务</text>
+  </g>
+  <g id="arrow-1" data-pptx-bounds="630 282 20 34">
+    <line x1="640" y1="282" x2="640" y2="312" stroke="#375A86" stroke-width="2" marker-end="url(#arrowTri3)"/>
+  </g>
+  <g id="layer-backend" data-pptx-bounds="40 314 1200 168">
+    <rect x="40" y="314" width="1200" height="168" rx="4" fill="#F0F6FC"/>
+    <text x="68" y="346" font-size="18" font-weight="bold" fill="#375A86">后端层 · FastAPI（/api）</text>
+    <rect x="68" y="364" width="282" height="96" rx="3" fill="#FFFFFF" stroke="#DCE6F0" stroke-width="1"/>
+    <text x="84" y="394" font-size="16" font-weight="bold" fill="#1E293B">计划引擎</text>
+    <text x="84" y="420" font-size="14" fill="#64748B">从拆解、校验到分工、排期、报告，<tspan x="84" dy="22">把需求变成可执行、可核验的计划。</tspan></text>
+    <rect x="362" y="364" width="282" height="96" rx="3" fill="#FFFFFF" stroke="#DCE6F0" stroke-width="1"/>
+    <text x="378" y="394" font-size="16" font-weight="bold" fill="#1E293B">多模态适配 omni_chat</text>
+    <text x="378" y="420" font-size="14" fill="#64748B">统一接入 MiniCPM-o：本地直听、<tspan x="378" dy="22">云端先转写再理解，长音频分片。</tspan></text>
+    <rect x="656" y="364" width="282" height="96" rx="3" fill="#FFFFFF" stroke="#DCE6F0" stroke-width="1"/>
+    <text x="672" y="394" font-size="16" font-weight="bold" fill="#1E293B">媒体分析</text>
+    <text x="672" y="420" font-size="14" fill="#64748B">PyAV 抽帧、抽音频，图片理解、<tspan x="672" dy="22">扫描 PDF 与音频转写都在这一层。</tspan></text>
+    <rect x="950" y="364" width="262" height="96" rx="3" fill="#FFFFFF" stroke="#DCE6F0" stroke-width="1"/>
+    <text x="966" y="394" font-size="16" font-weight="bold" fill="#1E293B">协作闭环</text>
+    <text x="966" y="420" font-size="14" fill="#64748B">汇报 token、负责人确认、<tspan x="966" dy="22">即时重算与 Webhook 通知。</tspan></text>
+  </g>
+  <g id="arrow-2" data-pptx-bounds="630 482 20 34">
+    <line x1="640" y1="482" x2="640" y2="512" stroke="#375A86" stroke-width="2" marker-end="url(#arrowTri3)"/>
+  </g>
+  <g id="layer-model" data-pptx-bounds="40 514 1200 96">
+    <text x="68" y="540" font-size="18" font-weight="bold" fill="#375A86">模型层 · WebSocket</text>
+    <rect x="68" y="552" width="560" height="48" rx="3" fill="#375A86"/>
+    <text x="84" y="582" font-size="16" fill="#FFFFFF">昇腾 A3（910C）· llama.cpp-omni · MiniCPM-o-4_5-F16</text>
+    <rect x="644" y="552" width="568" height="48" rx="3" fill="#7B9DC4"/>
+    <text x="660" y="582" font-size="16" fill="#FFFFFF">ModelBest 云端 Realtime API · MiniCPM-o-4.5-Realtime</text>
+  </g>
+  <g id="status-note" data-pptx-bounds="40 626 1200 44">
+    <use data-icon="tabler-outline/api" x="68" y="632" width="28" height="28" fill="#375A86" stroke-width="2"/>
+    <text x="108" y="652" font-size="16" fill="#1E293B">双后端一键切换：ASCEND_OMNI_WS_URL 指向 A3 即走本地，注释掉走云端；/api/realtime/status 返回 backend: local | map 直观确认。</text>
+  </g>
+  <g id="footer" data-pptx-bounds="40 676 1200 30">
+    <text x="40" y="694" font-size="12" fill="#64748B">协作分工智能体 · 昇腾全模态版</text>
+    <text x="1240" y="694" font-size="12" fill="#64748B" text-anchor="end">07 / 29 · v7.1</text>
+  </g>
+</svg>

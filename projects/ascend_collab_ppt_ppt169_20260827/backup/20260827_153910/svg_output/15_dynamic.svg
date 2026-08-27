@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" data-pptx-page-role="content" font-family="Microsoft YaHei, Arial, sans-serif">
+  <rect id="bg" x="0" y="0" width="1280" height="720" fill="#FFFFFF" data-pptx-role="background"/>
+  <g id="header" data-pptx-bounds="40 40 1200 100">
+    <text x="40" y="66" font-size="16" fill="#17457F" letter-spacing="2">03 · 核心功能详解</text>
+    <text x="40" y="106" font-size="36" font-weight="bold" fill="#1E293B">动态协作：计划随现实变化实时重算</text>
+    <rect x="40" y="120" width="48" height="4" fill="#C9A227"/>
+    <line x1="40" y1="142" x2="1240" y2="142" stroke="#D9E1EC" stroke-width="1"/>
+  </g>
+  <g id="interact-1" data-pptx-bounds="40 170 590 128">
+    <rect x="40" y="170" width="590" height="128" rx="4" fill="#F2F5FA"/>
+    <use data-icon="tabler-outline/edit" x="66" y="192" width="34" height="34" fill="#17457F" stroke-width="2"/>
+    <text x="118" y="216" font-size="20" font-weight="bold" fill="#1E293B">可编辑草案</text>
+    <text x="66" y="256" font-size="16" fill="#1E293B">增删改 / 拆分 / 合并任务与模块，确认前自由调整。</text>
+  </g>
+  <g id="interact-2" data-pptx-bounds="40 312 590 128">
+    <rect x="40" y="312" width="590" height="128" rx="4" fill="#F2F5FA"/>
+    <use data-icon="tabler-outline/arrows-shuffle" x="66" y="334" width="34" height="34" fill="#17457F" stroke-width="2"/>
+    <text x="118" y="358" font-size="20" font-weight="bold" fill="#1E293B">拖拽分工</text>
+    <text x="66" y="398" font-size="16" fill="#1E293B">看板拖拽负责人与协作者，一键恢复自动分工。</text>
+  </g>
+  <g id="interact-3" data-pptx-bounds="40 454 590 128">
+    <rect x="40" y="454" width="590" height="128" rx="4" fill="#F2F5FA"/>
+    <use data-icon="tabler-outline/refresh" x="66" y="476" width="34" height="34" fill="#17457F" stroke-width="2"/>
+    <text x="118" y="500" font-size="20" font-weight="bold" fill="#1E293B">即时重算</text>
+    <text x="66" y="540" font-size="16" fill="#1E293B">状态切换 / 成员变动 / 工时调整后自动重算排期与分工。</text>
+  </g>
+  <g id="member-mgmt" data-pptx-bounds="650 170 590 128">
+    <rect x="650" y="170" width="590" height="128" rx="4" fill="#F2F5FA"/>
+    <use data-icon="tabler-outline/users" x="676" y="192" width="34" height="34" fill="#17457F" stroke-width="2"/>
+    <text x="728" y="216" font-size="20" font-weight="bold" fill="#1E293B">成员管理</text>
+    <text x="676" y="256" font-size="16" fill="#1E293B">增删成员、调整工时 / 角色 / 不可用日期，自动重排。</text>
+  </g>
+  <g id="version-flow" data-pptx-bounds="650 312 590 270">
+    <rect x="650" y="312" width="590" height="270" rx="4" fill="#FFFFFF" stroke="#D9E1EC" stroke-width="1"/>
+    <rect x="650" y="312" width="590" height="6" fill="#17457F"/>
+    <use data-icon="tabler-outline/git-branch" x="676" y="340" width="34" height="34" fill="#17457F" stroke-width="2"/>
+    <text x="728" y="364" font-size="20" font-weight="bold" fill="#1E293B">版本管理</text>
+    <text x="676" y="408" font-size="16" fill="#1E293B">· 保存即生成版本快照</text>
+    <text x="676" y="440" font-size="16" fill="#1E293B">· 相似任务版本树</text>
+    <text x="676" y="472" font-size="16" fill="#1E293B">· 版本差异对比</text>
+    <text x="676" y="504" font-size="16" fill="#1E293B">· 分支回滚</text>
+    <text x="676" y="548" font-size="14" fill="#64748B">每一步调整都可追溯、可恢复</text>
+  </g>
+  <g id="large-mode" data-pptx-bounds="40 606 1200 58">
+    <rect x="40" y="606" width="1200" height="56" rx="4" fill="#F2F5FA"/>
+    <use data-icon="tabler-outline/users-group" x="68" y="618" width="30" height="30" fill="#17457F" stroke-width="2"/>
+    <text x="114" y="640" font-size="16" fill="#1E293B">大型项目模式：大模块拆解 → 骨干认领（负责人 + 技能/工时/不可用日期）→ 子任务拆解 → 志愿者招募与认领，多阶段连续推进。</text>
+  </g>
+  <g id="footer" data-pptx-bounds="40 676 1200 30">
+    <text x="40" y="694" font-size="12" fill="#64748B">协作分工智能体 · 昇腾全模态版</text>
+    <text x="1240" y="694" font-size="12" fill="#64748B" text-anchor="end">15 / 29 · v7.1</text>
+  </g>
+</svg>

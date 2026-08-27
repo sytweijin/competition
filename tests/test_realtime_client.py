@@ -972,6 +972,56 @@ def test_looks_like_garbage_flags_repetition_loops():
     assert _looks_like_garbage("？？\n？？\n？？")
 
 
+def test_looks_like_garbage_flags_local_repetition_tail():
+    """回复前半段正常、后半段无限复读：仅本地（local=True）命中，云端不收紧。"""
+    from app.services.omni_chat import _looks_like_garbage
+
+    prefix = "用户对技术壁垒和市场规律的解释较为充分，追问如下："
+    tail = "妖精" * 20
+    # 云端默认行为不变：局部复读不触发，避免影响云端流畅性
+    assert not _looks_like_garbage(prefix + tail)
+    # 本地启用局部复读检测：尾巴必须命中
+    assert _looks_like_garbage(prefix + tail, local=True)
+    assert not _looks_like_garbage("开头正常。" + "a" * 12)
+    assert _looks_like_garbage("开头正常。" + "a" * 12, local=True)
+    # 自然短叠词/短复读不应误伤（长度门槛 12 字符）
+    assert not _looks_like_garbage("可以可以可以", local=True)
+    assert not _looks_like_garbage("哈哈哈哈哈哈哈哈", local=True)
+    assert not _looks_like_garbage(
+        "好的好的好的，我们继续讨论下周三的初稿。", local=True)
+
+
+def test_trim_repetition_tail_keeps_valid_prefix():
+    """答辩评委回复出现复读尾巴时，截断保留有效前缀而不是整轮丢弃。"""
+    from app.services.omni_chat import _trim_repetition_tail
+
+    prefix = "b. 用户回答较全面，建议补充现实经济史案例，例如中世纪金融史。"
+    assert _trim_repetition_tail(prefix + "妖精" * 40) == prefix
+    assert _trim_repetition_tail("正常内容。ironironironironironironiron") == "正常内容。"
+    assert _trim_repetition_tail("表现不错。" + "啊" * 15) == "表现不错。"
+    # 无复读时原样返回
+    clean = "评委点评：回答完整，追问如下：现实中有哪些类似案例？"
+    assert _trim_repetition_tail(clean) == clean
+    assert _trim_repetition_tail("") == ""
+
+
+def test_off_topic_performance_observation_filter():
+    """表现观察描述外貌/背景/寒暄视为跑偏，评价神情/回答状态则通过。"""
+    from app.web.routers.realtime import (
+        _off_topic_performance_observation)
+
+    assert _off_topic_performance_observation(
+        "这是一位戴眼镜的女性，背景中可以看到一个木制橱柜。")
+    assert _off_topic_performance_observation(
+        "你好呀！你拍的照片里，我看到了一个戴眼镜的女生。你想分享什么吗？")
+    assert _off_topic_performance_observation(
+        "黑色头发部分扎起，透明边框眼镜，室内光线柔和")
+    assert not _off_topic_performance_observation(
+        "表现：紧张；眼神：回避；表情：僵硬；姿态：晃动")
+    assert not _off_topic_performance_observation("无法识别")
+    assert not _off_topic_performance_observation("表情自然，眼神专注，回答流畅")
+
+
 def test_looks_like_self_intro_filters_model_intro():
     """转写输出为"模型自我介绍"时应丢弃，不能当用户原话存历史。"""
     from app.services.omni_chat import _looks_like_self_intro
@@ -1571,6 +1621,61 @@ async def test_interview_turn_video_adds_observations(monkeypatch):
     assert "追问内容" in payload["reply"]
     assert "📹 表现观察" in payload["reply"]
     assert "第 1 帧" in payload["reply"]
+
+
+@pytest.mark.asyncio
+async def test_interview_turn_local_drops_off_topic_observations(monkeypatch):
+    """本地昇腾：表现观察描述外貌/背景时自动重试，跑偏内容不回显给用户。"""
+    import app.services.media_analysis as media
+    import app.web.routers.realtime as realtime_router
+
+    monkeypatch.setattr(
+        realtime_router, "ASCEND_OMNI_WS_URL",
+        "ws://127.0.0.1:28099/backend")
+
+    def fake_frames(content, max_frames):
+        return [b"JPEG1"]
+
+    def fake_audio(content):
+        return b"pcm"
+
+    async def fake_chat(self, **kwargs):
+        return RealtimeChatResult(
+            text="【回答摘要】\n要点\n【评委回复】\n追问内容")
+
+    calls = {"n": 0}
+
+    def fake_run(parts, max_tokens, omni_mode, timeout=180):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # 首次：模型无视提示词，描述外貌与背景
+            return "这是一位戴眼镜的女性，背景中可以看到一个木制橱柜。"
+        # 重试：只评价表现状态
+        return "表现：紧张；眼神：回避；表情：僵硬；回答流畅度一般"
+
+    monkeypatch.setattr(media, "extract_video_frames", fake_frames)
+    monkeypatch.setattr(media, "extract_audio_pcm16k", fake_audio)
+    monkeypatch.setattr(
+        realtime_router.RealtimeClient, "chat", fake_chat)
+    monkeypatch.setattr(media, "_run_realtime_media_chat", fake_run)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/realtime/interview-turn",
+            files={"file": ("answer.webm", b"fake-video", "video/webm")},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "追问内容" in payload["reply"]
+    assert "📹 表现观察" in payload["reply"]
+    assert "戴眼镜" not in payload["reply"]
+    assert "柜子" not in payload["reply"]
+    assert "紧张" in payload["reply"]
+    assert calls["n"] >= 2  # 跑偏触发过一次重试
 
 
 @pytest.mark.asyncio

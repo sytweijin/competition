@@ -1,0 +1,131 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" data-pptx-page-role="content" font-family="Microsoft YaHei, Arial, sans-serif">
+  <defs>
+    <marker id="arrowTri8" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#375A86" />
+    </marker>
+  </defs>
+  <rect id="bg" x="0" y="0" width="1280" height="720" fill="#FFFFFF" data-pptx-role="background" />
+  <g id="header" data-pptx-bounds="40 40 1200 100">
+    <text x="40" y="66" font-size="16" fill="#375A86" letter-spacing="2">04 · 创新点</text>
+    <text x="40" y="106" font-size="36" font-weight="bold" fill="#1E293B">创新点三：完整闭环，任何环节失败都有兜底</text>
+    <rect x="40" y="120" width="48" height="4" fill="#C9A227" />
+    <line x1="40" y1="142" x2="1240" y2="142" stroke="#DCE6F0" stroke-width="1" />
+  </g>
+  <g id="lead" data-pptx-bounds="40 156 1200 96">
+    <text fill="#1E293B" font-size="20" x="40" y="188">很多作品是一个漂亮的单点 Demo：识别很准、语音很流畅，但离“能解决一个问题”还差很远；</text><text fill="#1E293B" font-size="20" x="40" y="216">评审时最怕的，是演示到一半模型不可用。</text><text fill="#1E293B" font-size="20" x="40" y="244">所以我们做的不是单点，而是一条闭环，并给每一环都准备了确定性兜底。</text></g>
+  <g id="loop-n1" data-pptx-bounds="40 272 270 100">
+    <rect x="40" y="272" width="270" height="100" rx="3" fill="#F0F6FC" stroke="#DCE6F0" stroke-width="1" />
+    
+  <g transform="translate(64, 288) scale(1.16667)" fill="none" stroke="#375A86" stroke-width="2">
+    <path d="M9 5h-2a2 2 0 0 0 -2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-12a2 2 0 0 0 -2 -2h-2" />
+    <path d="M9 5a2 2 0 0 1 2 -2h2a2 2 0 0 1 2 2a2 2 0 0 1 -2 2h-2a2 2 0 0 1 -2 -2" />
+    <path d="M9 12l.01 0" />
+    <path d="M13 12l2 0" />
+    <path d="M9 16l.01 0" />
+    <path d="M13 16l2 0" />
+  </g>
+    <text x="102" y="308" font-size="18" font-weight="bold" fill="#1E293B">计划生成</text>
+    <text x="64" y="346" font-size="14" fill="#64748B">拆解 · 排期 · 分工 · 报告</text>
+  </g>
+  <g id="loop-a" data-pptx-bounds="310 310 28 30">
+    <line x1="310" y1="325" x2="334" y2="325" stroke="#375A86" stroke-width="2" marker-end="url(#arrowTri8)" />
+  </g>
+  <g id="loop-n2" data-pptx-bounds="338 272 270 100">
+    <rect x="338" y="272" width="270" height="100" rx="3" fill="#F0F6FC" stroke="#DCE6F0" stroke-width="1" />
+    
+  <g transform="translate(362, 288) scale(1.16667)" fill="none" stroke="#375A86" stroke-width="2">
+    <path d="M5 7a4 4 0 1 0 8 0a4 4 0 1 0 -8 0" />
+    <path d="M3 21v-2a4 4 0 0 1 4 -4h4a4 4 0 0 1 4 4v2" />
+    <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+    <path d="M21 21v-2a4 4 0 0 0 -3 -3.85" />
+  </g>
+    <text x="400" y="308" font-size="18" font-weight="bold" fill="#1E293B">成员执行</text>
+    <text x="362" y="346" font-size="14" fill="#64748B">按分工推进，状态随时更新</text>
+  </g>
+  <g id="loop-b" data-pptx-bounds="608 310 28 30">
+    <line x1="608" y1="325" x2="632" y2="325" stroke="#375A86" stroke-width="2" marker-end="url(#arrowTri8)" />
+  </g>
+  <g id="loop-n3" data-pptx-bounds="636 272 270 100">
+    <rect x="636" y="272" width="270" height="100" rx="3" fill="#F0F6FC" stroke="#DCE6F0" stroke-width="1" />
+    
+  <g transform="translate(660, 288) scale(1.16667)" fill="none" stroke="#375A86" stroke-width="2">
+    <path d="M3.5 5.5l1.5 1.5l2.5 -2.5" />
+    <path d="M3.5 11.5l1.5 1.5l2.5 -2.5" />
+    <path d="M3.5 17.5l1.5 1.5l2.5 -2.5" />
+    <path d="M11 6l9 0" />
+    <path d="M11 12l9 0" />
+    <path d="M11 18l9 0" />
+  </g>
+    <text x="698" y="308" font-size="18" font-weight="bold" fill="#1E293B">汇报反馈</text>
+    <text x="660" y="346" font-size="14" fill="#64748B">语音 / 照片 / 文本汇报，负责人确认</text>
+  </g>
+  <g id="loop-c" data-pptx-bounds="906 310 28 30">
+    <line x1="906" y1="325" x2="930" y2="325" stroke="#375A86" stroke-width="2" marker-end="url(#arrowTri8)" />
+  </g>
+  <g id="loop-n4" data-pptx-bounds="934 272 306 100">
+    <rect x="934" y="272" width="306" height="100" rx="3" fill="#F0F6FC" stroke="#DCE6F0" stroke-width="1" />
+    
+  <g transform="translate(958, 288) scale(1.16667)" fill="none" stroke="#375A86" stroke-width="2">
+    <path d="M10 14l11 -11" />
+    <path d="M21 3l-6.5 18a.55 .55 0 0 1 -1 0l-3.5 -7l-7 -3.5a.55 .55 0 0 1 0 -1l18 -6.5" />
+  </g>
+    <text x="996" y="308" font-size="18" font-weight="bold" fill="#1E293B">通知触达</text>
+    <text x="958" y="346" font-size="14" fill="#64748B">Webhook 群通知 · 今日播报（TTS）</text>
+  </g>
+  <g id="fb-title" data-pptx-bounds="40 396 1200 36">
+    <text x="40" y="424" font-size="20" font-weight="bold" fill="#375A86">四道确定性兜底</text>
+  </g>
+  <g id="fb-1" data-pptx-bounds="40 440 286 170">
+    <rect x="40" y="440" width="286" height="170" rx="4" fill="#FFFFFF" stroke="#DCE6F0" stroke-width="1" />
+    
+  <g transform="translate(64, 462) scale(1.25)" fill="none" stroke="#375A86" stroke-width="2">
+    <path d="M9 5h-2a2 2 0 0 0 -2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-12a2 2 0 0 0 -2 -2h-2" />
+    <path d="M9 5a2 2 0 0 1 2 -2h2a2 2 0 0 1 2 2a2 2 0 0 1 -2 2h-2a2 2 0 0 1 -2 -2" />
+    <path d="M9 12l.01 0" />
+    <path d="M13 12l2 0" />
+    <path d="M9 16l.01 0" />
+    <path d="M13 16l2 0" />
+  </g>
+    <text x="64" y="516" font-size="18" font-weight="bold" fill="#1E293B">拆解兜底</text>
+    <text fill="#64748B" font-size="14" x="64" y="552">LLM 拆解失败，用确定性拆解</text><text fill="#64748B" font-size="14" x="64" y="574">和弹性子任务规则顶上，</text><text fill="#64748B" font-size="14" x="64" y="596">方案照样生成。</text></g>
+  <g id="fb-2" data-pptx-bounds="346 440 286 170">
+    <rect x="346" y="440" width="286" height="170" rx="4" fill="#FFFFFF" stroke="#DCE6F0" stroke-width="1" />
+    
+  <g transform="translate(370, 462) scale(1.25)" fill="none" stroke="#375A86" stroke-width="2">
+    <path d="M5 7a4 4 0 1 0 8 0a4 4 0 1 0 -8 0" />
+    <path d="M3 21v-2a4 4 0 0 1 4 -4h4a4 4 0 0 1 4 4v2" />
+    <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+    <path d="M21 21v-2a4 4 0 0 0 -3 -3.85" />
+  </g>
+    <text x="370" y="516" font-size="18" font-weight="bold" fill="#1E293B">分工兜底</text>
+    <text fill="#64748B" font-size="14" x="370" y="552">分工失败，用规则分工</text><text fill="#64748B" font-size="14" x="370" y="574">与评分兜底，匹配度</text><text fill="#64748B" font-size="14" x="370" y="596">依然可解释。</text></g>
+  <g id="fb-3" data-pptx-bounds="652 440 286 170">
+    <rect x="652" y="440" width="286" height="170" rx="4" fill="#FFFFFF" stroke="#DCE6F0" stroke-width="1" />
+    
+  <g transform="translate(676, 462) scale(1.25)" fill="none" stroke="#375A86" stroke-width="2">
+    <path d="M4 16l6 -7l5 5l5 -6" />
+    <path d="M14 14a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />
+    <path d="M9 9a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />
+    <path d="M3 16a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />
+    <path d="M19 8a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />
+  </g>
+    <text x="676" y="516" font-size="18" font-weight="bold" fill="#1E293B">排期兜底</text>
+    <text fill="#64748B" font-size="14" x="676" y="552">排期失败，用算法排期兜底，</text><text fill="#64748B" font-size="14" x="676" y="574">日期约束依然生效。</text></g>
+  <g id="fb-4" data-pptx-bounds="958 440 282 170">
+    <rect x="958" y="440" width="282" height="170" rx="4" fill="#FFFFFF" stroke="#DCE6F0" stroke-width="1" />
+    
+  <g transform="translate(982, 462) scale(1.25)" fill="none" stroke="#375A86" stroke-width="2">
+    <path d="M8 12a4 4 0 1 0 8 0a4 4 0 1 0 -8 0" />
+    <path d="M3 12a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" />
+    <path d="M15 15l3.35 3.35" />
+    <path d="M9 15l-3.35 3.35" />
+    <path d="M5.65 5.65l3.35 3.35" />
+    <path d="M18.35 5.65l-3.35 3.35" />
+  </g>
+    <text x="982" y="516" font-size="18" font-weight="bold" fill="#1E293B">断网兜底</text>
+    <text fill="#64748B" font-size="14" x="982" y="552">断网或模型离线，本地保留</text><text fill="#64748B" font-size="14" x="982" y="574">确定性拆解与导出能力，</text><text fill="#64748B" font-size="14" x="982" y="596">主链路仍可演示。</text></g>
+  <g id="footer" data-pptx-bounds="40 676 1200 30">
+    <text x="40" y="694" font-size="12" fill="#64748B">协作分工智能体 · 昇腾全模态版</text>
+    <text x="1240" y="694" font-size="12" fill="#64748B" text-anchor="end">21 / 29 · v7.1</text>
+  </g>
+</svg>

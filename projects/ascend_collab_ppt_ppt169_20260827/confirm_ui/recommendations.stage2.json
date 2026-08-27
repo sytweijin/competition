@@ -1,0 +1,138 @@
+{
+  "stage": "stage2",
+  "lang": "zh",
+  "recommend": {
+    "delivery_purpose": "text",
+    "mode": "briefing",
+    "visual_style": "swiss-minimal",
+    "image_usage": ["placeholder"],
+    "formula_policy": "text-only",
+    "generation_mode": "continuous"
+  },
+  "page_count": {
+    "value": "29"
+  },
+  "image_notes": {
+    "value": "系统架构图、流程图、机制示意图等全部用原生矢量绘制，不使用 AI 或网络图片；仅\"运行效果展示\"页预留真实截图占位框（工作台首页、任务草案与甘特图、成员轻量汇报页、群通知示例等），由作者在提交前粘贴真实运行截图。"
+  },
+  "proactive_speaker_notes": {
+    "value": true
+  },
+  "proactive_custom_animations": {
+    "value": false
+  },
+  "proactive_narration_audio": {
+    "value": false
+  },
+  "refine_spec": {
+    "value": false
+  },
+  "custom_candidates": {
+    "mode": {
+      "name_zh": "评审导向说明书",
+      "behavior_zh": "以说明书式完整覆盖为骨架（主题式标题、可扫读、并列均衡），但把评委最关心的三个要点——核心功能、创新点、落地应用——在开篇\"项目一览\"页以结论前置的方式集中呈现，随后按\"背景问题 → 系统架构 → 核心功能 → 创新点 → 应用与工程验证 → 边界与展望\"完整展开；标题以主题为主，关键证据页辅以结论式副标题。"
+    },
+    "visual_style": {
+      "name_zh": "浅色工程手册风",
+      "behavior_zh": "白底 + 极浅灰蓝网格背景，深蓝主色、克制金色点缀；架构图采用蓝图式的细线框、连接线与编号标注语言，但保持浅色背景与瑞士网格的留白克制；正文无衬线、标注小字、无阴影无渐变，像正式系统设计手册。"
+    }
+  },
+  "design_directions": {
+    "selected": 0,
+    "candidates": [
+      {
+        "name_zh": "稳妥专业",
+        "note_zh": "高水准咨询简报式：严谨、克制、以内容取胜",
+        "visual_style": "swiss-minimal",
+        "icons": "tabler-outline",
+        "color": {
+          "name_zh": "冷静深海蓝",
+          "palette": {
+            "background": "#FFFFFF",
+            "secondary_bg": "#F2F5FA",
+            "primary": "#17457F",
+            "accent": "#C9A227",
+            "secondary_accent": "#5E8FBF",
+            "body_text": "#1E293B"
+          }
+        },
+        "typography": {
+          "name_zh": "微软雅黑 + Arial",
+          "heading": {
+            "primary": "Microsoft YaHei",
+            "english": "Arial",
+            "css": "sans-serif"
+          },
+          "body": {
+            "primary": "Microsoft YaHei",
+            "english": "Arial",
+            "css": "sans-serif"
+          },
+          "body_size": 20
+        }
+      },
+      {
+        "name_zh": "编辑报告风",
+        "note_zh": "杂志式研究报告：栏目、细线、强调结构",
+        "visual_style": "editorial",
+        "icons": "tabler-filled",
+        "color": {
+          "name_zh": "墨色配赭红",
+          "palette": {
+            "background": "#FFFFFF",
+            "secondary_bg": "#F4F2ED",
+            "primary": "#232A35",
+            "accent": "#A23E2F",
+            "secondary_accent": "#7A6A52",
+            "body_text": "#26262B"
+          }
+        },
+        "typography": {
+          "name_zh": "微软雅黑 + Arial",
+          "heading": {
+            "primary": "Microsoft YaHei",
+            "english": "Arial",
+            "css": "sans-serif"
+          },
+          "body": {
+            "primary": "Microsoft YaHei",
+            "english": "Arial",
+            "css": "sans-serif"
+          },
+          "body_size": 20
+        }
+      },
+      {
+        "name_zh": "工程蓝图风",
+        "note_zh": "深色工程图纸：线框、坐标、单点高亮，工程感最强",
+        "visual_style": "blueprint",
+        "icons": "tabler-outline",
+        "color": {
+          "name_zh": "深蓝图纸配琥珀高亮",
+          "palette": {
+            "background": "#0E1A2B",
+            "secondary_bg": "#13233B",
+            "primary": "#D7E3F4",
+            "accent": "#E0A62E",
+            "secondary_accent": "#6E8CAB",
+            "body_text": "#E8EEF7"
+          }
+        },
+        "typography": {
+          "name_zh": "微软雅黑 + Arial",
+          "heading": {
+            "primary": "Microsoft YaHei",
+            "english": "Arial",
+            "css": "sans-serif"
+          },
+          "body": {
+            "primary": "Microsoft YaHei",
+            "english": "Arial",
+            "css": "sans-serif"
+          },
+          "body_size": 20
+        }
+      }
+    ]
+  }
+}

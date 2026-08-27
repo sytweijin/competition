@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" data-pptx-page-role="content" font-family="Microsoft YaHei, Arial, sans-serif">
+  <defs>
+    <marker id="arrowTri4" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#2F7FCE"/>
+    </marker>
+  </defs>
+  <rect id="bg" x="0" y="0" width="1280" height="720" fill="#FFFFFF" data-pptx-role="background"/>
+  <g id="header" data-pptx-bounds="40 40 1200 100">
+    <text x="40" y="66" font-size="16" fill="#2F7FCE" letter-spacing="2">02 · 系统架构与核心机制</text>
+    <text x="40" y="106" font-size="36" font-weight="bold" fill="#1E293B">计划引擎：LLM 创造 × 算法正确</text>
+    <rect x="40" y="120" width="48" height="4" fill="#C9A227"/>
+    <line x1="40" y1="142" x2="1240" y2="142" stroke="#DCE6F0" stroke-width="1"/>
+  </g>
+  <g id="pipeline" data-pptx-bounds="40 164 1200 96">
+    <rect x="40" y="180" width="216" height="64" rx="3" fill="#F0F6FC" stroke="#DCE6F0" stroke-width="1"/>
+    <use data-icon="tabler-outline/sparkles" x="58" y="192" width="28" height="28" fill="#2F7FCE" stroke-width="2"/>
+    <text x="96" y="218" font-size="16" font-weight="bold" fill="#1E293B">任务拆解</text>
+    <line x1="256" y1="212" x2="286" y2="212" stroke="#2F7FCE" stroke-width="2" marker-end="url(#arrowTri4)"/>
+    <rect x="288" y="180" width="216" height="64" rx="3" fill="#F0F6FC" stroke="#DCE6F0" stroke-width="1"/>
+    <use data-icon="tabler-outline/shield-check" x="306" y="192" width="28" height="28" fill="#2F7FCE" stroke-width="2"/>
+    <text x="344" y="218" font-size="16" font-weight="bold" fill="#1E293B">结构化校验</text>
+    <line x1="504" y1="212" x2="534" y2="212" stroke="#2F7FCE" stroke-width="2" marker-end="url(#arrowTri4)"/>
+    <rect x="536" y="180" width="216" height="64" rx="3" fill="#F0F6FC" stroke="#DCE6F0" stroke-width="1"/>
+    <use data-icon="tabler-outline/target" x="554" y="192" width="28" height="28" fill="#2F7FCE" stroke-width="2"/>
+    <text x="592" y="218" font-size="16" font-weight="bold" fill="#1E293B">技能匹配分工</text>
+    <line x1="752" y1="212" x2="782" y2="212" stroke="#2F7FCE" stroke-width="2" marker-end="url(#arrowTri4)"/>
+    <rect x="784" y="180" width="216" height="64" rx="3" fill="#F0F6FC" stroke="#DCE6F0" stroke-width="1"/>
+    <use data-icon="tabler-outline/timeline" x="802" y="192" width="28" height="28" fill="#2F7FCE" stroke-width="2"/>
+    <text x="840" y="218" font-size="16" font-weight="bold" fill="#1E293B">CPM 关键路径排期</text>
+    <line x1="1000" y1="212" x2="1030" y2="212" stroke="#2F7FCE" stroke-width="2" marker-end="url(#arrowTri4)"/>
+    <rect x="1032" y="180" width="208" height="64" rx="3" fill="#F0F6FC" stroke="#DCE6F0" stroke-width="1"/>
+    <use data-icon="tabler-outline/file-text" x="1050" y="192" width="28" height="28" fill="#2F7FCE" stroke-width="2"/>
+    <text x="1088" y="218" font-size="16" font-weight="bold" fill="#1E293B">报告生成</text>
+  </g>
+  <g id="split-llm" data-pptx-bounds="40 300 590 250">
+    <rect x="40" y="300" width="590" height="250" rx="4" fill="#FFFFFF" stroke="#DCE6F0" stroke-width="1"/>
+    <rect x="40" y="300" width="590" height="8" fill="#C9A227"/>
+    <use data-icon="tabler-outline/sparkles" x="72" y="332" width="36" height="36" fill="#2F7FCE" stroke-width="2"/>
+    <text x="126" y="358" font-size="22" font-weight="bold" fill="#1E293B">LLM 负责创造</text>
+    <text x="72" y="410" font-size="16" fill="#1E293B">· 任务拆解（LLM + 知识库工时校准）</text>
+    <text x="72" y="444" font-size="16" fill="#1E293B">· 工时建议、报告表达</text>
+    <text x="72" y="478" font-size="16" fill="#1E293B">· 批判性审查建议（Reflection）</text>
+    <text x="72" y="520" font-size="14" fill="#64748B">AI 负责“想得开”——理解需求、生成弹性方案</text>
+  </g>
+  <g id="split-algo" data-pptx-bounds="650 300 590 250">
+    <rect x="650" y="300" width="590" height="250" rx="4" fill="#FFFFFF" stroke="#DCE6F0" stroke-width="1"/>
+    <rect x="650" y="300" width="590" height="8" fill="#2F7FCE"/>
+    <use data-icon="tabler-outline/adjustments" x="682" y="332" width="36" height="36" fill="#2F7FCE" stroke-width="2"/>
+    <text x="736" y="358" font-size="22" font-weight="bold" fill="#1E293B">确定性算法负责正确</text>
+    <text x="682" y="410" font-size="16" fill="#1E293B">· CPM 关键路径与浮动计算</text>
+    <text x="682" y="444" font-size="16" fill="#1E293B">· 技能匹配评分、负载均衡、依赖校验</text>
+    <text x="682" y="478" font-size="16" fill="#1E293B">· 日期约束：跳过周末与成员不可用日</text>
+    <text x="682" y="520" font-size="14" fill="#64748B">算法负责“算得准”——结果可复现、不受模型波动影响</text>
+  </g>
+  <g id="fallback-bar" data-pptx-bounds="40 576 1200 72">
+    <rect x="40" y="576" width="1200" height="66" rx="4" fill="#F0F6FC"/>
+    <use data-icon="tabler-outline/lifebuoy" x="68" y="594" width="30" height="30" fill="#2F7FCE" stroke-width="2"/>
+    <text x="114" y="612" font-size="16" font-weight="bold" fill="#1E293B">全环节兜底</text>
+    <text x="114" y="638" font-size="16" fill="#1E293B">拆解 / 分工 / 排期 / 审查任一环节 LLM 失败，自动切换到确定性规则实现；演示不依赖模型持续在线。</text>
+  </g>
+  <g id="footer" data-pptx-bounds="40 676 1200 30">
+    <text x="40" y="694" font-size="12" fill="#64748B">协作分工智能体 · 昇腾全模态版</text>
+    <text x="1240" y="694" font-size="12" fill="#64748B" text-anchor="end">08 / 29 · v7.1</text>
+  </g>
+</svg>

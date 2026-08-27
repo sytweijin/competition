@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" data-pptx-page-role="content" font-family="Microsoft YaHei, Arial, sans-serif">
+  <rect id="bg" x="0" y="0" width="1280" height="720" fill="#FFFFFF" data-pptx-role="background" />
+  <g id="header" data-pptx-bounds="40 40 1200 100">
+    <text x="40" y="66" font-size="16" fill="#375A86" letter-spacing="2">04 · 创新点</text>
+    <text x="40" y="106" font-size="36" font-weight="bold" fill="#1E293B">创新点一：把多模态模型变成协作流程的入口</text>
+    <rect x="40" y="120" width="48" height="4" fill="#C9A227" />
+    <line x1="40" y1="142" x2="1240" y2="142" stroke="#DCE6F0" stroke-width="1" />
+  </g>
+  <g id="lead" data-pptx-bounds="40 156 1200 96">
+    <text fill="#1E293B" font-size="20" x="40" y="188">先看一个常见的现状：市面上几乎所有多模态应用，都把模型放在聊天框里——你问它问题，它回答你，</text><text fill="#1E293B" font-size="20" x="40" y="216">然后就没有然后了。图片识别、语音转写、视频理解都是一个个孤立的按钮，</text><text fill="#1E293B" font-size="20" x="40" y="244">结果永远不会变成团队下一步要做的事。</text></g>
+  <g id="usage-1" data-pptx-bounds="40 268 590 130">
+    <rect x="40" y="268" width="590" height="130" rx="4" fill="#F0F6FC" />
+    
+  <g transform="translate(66, 292) scale(1.41667)" fill="none" stroke="#375A86" stroke-width="2">
+    <path d="M5 7h1a2 2 0 0 0 2 -2a1 1 0 0 1 1 -1h6a1 1 0 0 1 1 1a2 2 0 0 0 2 2h1a2 2 0 0 1 2 2v9a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-9a2 2 0 0 1 2 -2" />
+    <path d="M9 13a3 3 0 1 0 6 0a3 3 0 0 0 -6 0" />
+  </g>
+    <text x="118" y="316" font-size="20" font-weight="bold" fill="#1E293B">拍照立项</text>
+    <text fill="#1E293B" font-size="15" x="66" y="356">白板、截图、手绘拍下来直接进入任务拆解；系统理解的不只是文字，</text><text fill="#1E293B" font-size="15" x="66" y="378">还有图表、流程和界面，并把它们转化成项目需求。</text></g>
+  <g id="usage-2" data-pptx-bounds="650 268 590 130">
+    <rect x="650" y="268" width="590" height="130" rx="4" fill="#F0F6FC" />
+    
+  <g transform="translate(676, 292) scale(1.41667)" fill="none" stroke="#375A86" stroke-width="2">
+    <path d="M9 5a3 3 0 0 1 3 -3a3 3 0 0 1 3 3v5a3 3 0 0 1 -3 3a3 3 0 0 1 -3 -3l0 -5" />
+    <path d="M5 10a7 7 0 0 0 14 0" />
+    <path d="M8 21l8 0" />
+    <path d="M12 17l0 4" />
+  </g>
+    <text x="728" y="316" font-size="20" font-weight="bold" fill="#1E293B">说话排期</text>
+    <text fill="#1E293B" font-size="15" x="676" y="356">录音直接交给模型，听懂后生成任务草案；不需要先转写、再复制、再粘贴，</text><text fill="#1E293B" font-size="15" x="676" y="378">说完就开始了。</text></g>
+  <g id="usage-3" data-pptx-bounds="40 418 590 130">
+    <rect x="40" y="418" width="590" height="130" rx="4" fill="#F0F6FC" />
+    
+  <g transform="translate(66, 442) scale(1.41667)" fill="none" stroke="#375A86" stroke-width="2">
+    <path d="M15 10l4.553 -2.276a1 1 0 0 1 1.447 .894v6.764a1 1 0 0 1 -1.447 .894l-4.553 -2.276v-4" />
+    <path d="M3 8a2 2 0 0 1 2 -2h8a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2h-8a2 2 0 0 1 -2 -2l0 -8" />
+  </g>
+    <text x="118" y="466" font-size="20" font-weight="bold" fill="#1E293B">会议旁听</text>
+    <text fill="#1E293B" font-size="15" x="66" y="506">会议录像边看边听：画面和声音分别理解后合并，</text><text fill="#1E293B" font-size="15" x="66" y="528">自动整理成要点、任务和风险。</text></g>
+  <g id="usage-4" data-pptx-bounds="650 418 590 130">
+    <rect x="650" y="418" width="590" height="130" rx="4" fill="#F0F6FC" />
+    
+  <g transform="translate(676, 442) scale(1.41667)" fill="none" stroke="#375A86" stroke-width="2">
+    <path d="M15 8a5 5 0 0 1 0 8" />
+    <path d="M17.7 5a9 9 0 0 1 0 14" />
+    <path d="M6 15h-2a1 1 0 0 1 -1 -1v-4a1 1 0 0 1 1 -1h2l3.5 -4.5a.8 .8 0 0 1 1.5 .5v14a.8 .8 0 0 1 -1.5 .5l-3.5 -4.5" />
+  </g>
+    <text x="728" y="466" font-size="20" font-weight="bold" fill="#1E293B">答辩直连</text>
+    <text fill="#1E293B" font-size="15" x="676" y="506">评委的语音、视频点评直接对话，答辩录像附逐帧表现观察，</text><text fill="#1E293B" font-size="15" x="676" y="528">现场就能得到反馈。</text></g>
+  <g id="closing" data-pptx-bounds="40 568 1200 112">
+    <rect x="40" y="568" width="1200" height="112" rx="4" fill="#375A86" />
+    
+  <g transform="translate(70, 590) scale(1.41667)" fill="none" stroke="#FFFFFF" stroke-width="2">
+    <path d="M6 9a6 6 0 1 0 12 0a6 6 0 1 0 -12 0" />
+    <path d="M12 15l3.4 5.89l1.598 -3.233l3.598 .232l-3.4 -5.889" />
+    <path d="M6.802 12l-3.4 5.89l3.598 -.233l1.598 3.232l3.4 -5.889" />
+  </g>
+    <text x="122" y="614" font-size="17" font-weight="bold" fill="#FFFFFF">为什么这是创新</text>
+    <text fill="#FFFFFF" font-size="16" x="70" y="648">这些能力的共同点，是模型每一次输出都落到工作流的下一个动作上——</text><text fill="#FFFFFF" font-size="16" x="70" y="674">要么变成任务、要么变成排期、要么变成汇报。多模态能力第一次不是附加功能，</text><text fill="#FFFFFF" font-size="16" x="70" y="700">而是协作这件事的入口。</text></g>
+  <g id="footer" data-pptx-bounds="40 676 1200 30">
+    <text x="40" y="694" font-size="12" fill="#64748B">协作分工智能体 · 昇腾全模态版</text>
+    <text x="1240" y="694" font-size="12" fill="#64748B" text-anchor="end">19 / 29 · v7.1</text>
+  </g>
+</svg>

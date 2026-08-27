@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" data-pptx-page-role="content" font-family="Microsoft YaHei, Arial, sans-serif">
+  <defs>
+    <marker id="arrowTri9" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#375A86" />
+    </marker>
+  </defs>
+  <rect id="bg" x="0" y="0" width="1280" height="720" fill="#FFFFFF" data-pptx-role="background" />
+  <g id="header" data-pptx-bounds="40 40 1200 100">
+    <text x="40" y="66" font-size="16" fill="#375A86" letter-spacing="2">04 · 创新点</text>
+    <text x="40" y="106" font-size="36" font-weight="bold" fill="#1E293B">创新点四：昇腾本地 + 云端双后端统一适配</text>
+    <rect x="40" y="120" width="48" height="4" fill="#C9A227" />
+    <line x1="40" y1="142" x2="1240" y2="142" stroke="#DCE6F0" stroke-width="1" />
+  </g>
+  <g id="lead" data-pptx-bounds="40 156 1200 96">
+    <text fill="#1E293B" font-size="20" x="40" y="188">昇腾赛要求统一昇腾环境复现，但 910C 算力紧张，开发期不可能一直占着。</text><text fill="#1E293B" font-size="20" x="40" y="216">我们的做法，是让同一套系统同时支持两种后端，一键切换——</text><text fill="#1E293B" font-size="20" x="40" y="244">评审用本地昇腾证明复现，开发用云端保证进度。</text></g>
+  <g id="backend-a3" data-pptx-bounds="40 268 570 230">
+    <rect x="40" y="268" width="570" height="230" rx="4" fill="#FFFFFF" stroke="#DCE6F0" stroke-width="1" />
+    <rect x="40" y="268" width="570" height="8" fill="#375A86" />
+    
+  <g transform="translate(70, 298) scale(1.5)" fill="none" stroke="#375A86" stroke-width="2">
+    <path d="M5 6a1 1 0 0 1 1 -1h12a1 1 0 0 1 1 1v12a1 1 0 0 1 -1 1h-12a1 1 0 0 1 -1 -1l0 -12" />
+    <path d="M9 9h6v6h-6l0 -6" />
+    <path d="M3 10h2" />
+    <path d="M3 14h2" />
+    <path d="M10 3v2" />
+    <path d="M14 3v2" />
+    <path d="M21 10h-2" />
+    <path d="M21 14h-2" />
+    <path d="M14 21v-2" />
+    <path d="M10 21v-2" />
+  </g>
+    <text x="122" y="324" font-size="22" font-weight="bold" fill="#1E293B">昇腾 A3 本地 · 评审期主力</text>
+    <text fill="#1E293B" font-size="15" x="70" y="368">Ascend 910C + llama.cpp-omni + MiniCPM-o-4_5-F16（约 16G），</text><text fill="#1E293B" font-size="15" x="70" y="391">用于真实昇腾环境复现；本地能直接听，实听实答。</text><text x="70" y="462" font-size="14" fill="#64748B">ASCEND_OMNI_WS_URL=ws://127.0.0.1:28099/backend</text>
+  </g>
+  <g id="backend-cloud" data-pptx-bounds="670 268 570 230">
+    <rect x="670" y="268" width="570" height="230" rx="4" fill="#FFFFFF" stroke="#DCE6F0" stroke-width="1" />
+    <rect x="670" y="268" width="570" height="8" fill="#7B9DC4" />
+    
+  <g transform="translate(700, 298) scale(1.5)" fill="none" stroke="#375A86" stroke-width="2">
+    <path d="M6.657 18c-2.572 0 -4.657 -2.007 -4.657 -4.483c0 -2.475 2.085 -4.482 4.657 -4.482c.393 -1.762 1.794 -3.2 3.675 -3.773c1.88 -.572 3.956 -.193 5.444 1c1.488 1.19 2.162 3.007 1.77 4.769h.99c1.913 0 3.464 1.56 3.464 3.486c0 1.927 -1.551 3.487 -3.465 3.487h-11.878" />
+  </g>
+    <text x="752" y="324" font-size="22" font-weight="bold" fill="#1E293B">ModelBest 云端 · 开发期兜底</text>
+    <text fill="#1E293B" font-size="15" x="700" y="368">MiniCPM-o-4.5-Realtime API，免费；</text><text fill="#1E293B" font-size="15" x="700" y="391">turn-based 音频先转写再理解，行为经适配层与本地统一。</text><text x="700" y="462" font-size="14" fill="#64748B">MAP_REALTIME_API_KEY + wss://api.modelbest.cn/v1/realtime</text>
+  </g>
+  <g id="switch-badge" data-pptx-bounds="610 310 60 90">
+    <rect x="610" y="310" width="60" height="90" rx="30" fill="#C9A227" />
+    <text x="640" y="348" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="middle">一键</text>
+    <text x="640" y="372" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="middle">切换</text>
+    <text x="640" y="392" font-size="10" fill="#FFFFFF" text-anchor="middle">WebSocket</text>
+  </g>
+  <g id="status-note" data-pptx-bounds="40 524 1200 66">
+    <rect x="40" y="524" width="1200" height="64" rx="4" fill="#F0F6FC" />
+    
+  <g transform="translate(68, 540) scale(1.16667)" fill="none" stroke="#375A86" stroke-width="2">
+    <path d="M4 13h5" />
+    <path d="M12 16v-8h3a2 2 0 0 1 2 2v1a2 2 0 0 1 -2 2h-3" />
+    <path d="M20 8v8" />
+    <path d="M9 16v-5.5a2.5 2.5 0 0 0 -5 0v5.5" />
+  </g>
+    <text x="110" y="564" font-size="16" fill="#1E293B">同一套 WebSocket 协议：配置 ASCEND_OMNI_WS_URL 走本地，注释掉走云端；/api/realtime/status 返回 local 或 map 一键确认。</text>
+  </g>
+  <g id="compliance" data-pptx-bounds="40 606 1200 66">
+    <rect x="40" y="606" width="1200" height="64" rx="4" fill="#FFFFFF" stroke="#DCE6F0" stroke-width="1" />
+    
+  <g transform="translate(68, 620) scale(1.25)" fill="none" stroke="#375A86" stroke-width="2">
+    <path d="M11.46 20.846a12 12 0 0 1 -7.96 -14.846a12 12 0 0 0 8.5 -3a12 12 0 0 0 8.5 3a12 12 0 0 1 -.09 7.06" />
+    <path d="M15 19l2 2l4 -4" />
+  </g>
+    <text x="114" y="638" font-size="16" font-weight="bold" fill="#1E293B">合规是硬要求</text>
+    <text x="114" y="662" font-size="15" fill="#1E293B">APP_MODEL_MODE=minicpm 且 APP_ALLOW_EXTERNAL_MODELS=0 时，全链路仅调用 MiniCPM-o 4.5；API Key 只存 .env，不进版本库。</text>
+  </g>
+  <g id="footer" data-pptx-bounds="40 676 1200 30">
+    <text x="40" y="694" font-size="12" fill="#64748B">协作分工智能体 · 昇腾全模态版</text>
+    <text x="1240" y="694" font-size="12" fill="#64748B" text-anchor="end">22 / 29 · v7.1</text>
+  </g>
+</svg>

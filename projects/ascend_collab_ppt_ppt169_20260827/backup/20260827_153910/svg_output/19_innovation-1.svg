@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" data-pptx-page-role="content" font-family="Microsoft YaHei, Arial, sans-serif">
+  <rect id="bg" x="0" y="0" width="1280" height="720" fill="#FFFFFF" data-pptx-role="background"/>
+  <g id="header" data-pptx-bounds="40 40 1200 100">
+    <text x="40" y="66" font-size="16" fill="#17457F" letter-spacing="2">04 · 创新点</text>
+    <text x="40" y="106" font-size="36" font-weight="bold" fill="#1E293B">创新点一：把多模态模型变成协作流程的入口</text>
+    <rect x="40" y="120" width="48" height="4" fill="#C9A227"/>
+    <line x1="40" y1="142" x2="1240" y2="142" stroke="#D9E1EC" stroke-width="1"/>
+  </g>
+  <g id="traditional" data-pptx-bounds="40 170 360 440">
+    <rect x="40" y="170" width="360" height="440" rx="4" fill="#F2F5FA"/>
+    <use data-icon="tabler-outline/message-circle" x="66" y="196" width="36" height="36" fill="#64748B" stroke-width="2"/>
+    <text x="118" y="222" font-size="22" font-weight="bold" fill="#1E293B">传统用法</text>
+    <text x="66" y="286" font-size="16" fill="#1E293B">· 多模态能力作为“聊天机器人”附加功能</text>
+    <text x="66" y="330" font-size="16" fill="#1E293B">· 单点问答、单点 OCR / 转写</text>
+    <text x="66" y="374" font-size="16" fill="#1E293B">· 结果停留在对话框，不进入业务流程</text>
+    <use data-icon="tabler-outline/alert-circle" x="66" y="420" width="30" height="30" fill="#C9A227" stroke-width="2"/>
+    <text x="108" y="444" font-size="16" fill="#64748B">模型再强，也改变不了协作流程</text>
+  </g>
+  <g id="usage-1" data-pptx-bounds="440 170 400 210">
+    <rect x="440" y="170" width="400" height="210" rx="4" fill="#FFFFFF" stroke="#D9E1EC" stroke-width="1"/>
+    <use data-icon="tabler-outline/camera" x="466" y="194" width="36" height="36" fill="#17457F" stroke-width="2"/>
+    <text x="518" y="220" font-size="20" font-weight="bold" fill="#1E293B">拍照立项</text>
+    <text x="466" y="266" font-size="16" fill="#1E293B">白板、截图、手绘直接进文件分析，<tspan x="466" dy="26">无文字流程图也能理解（不止 OCR）。</tspan></text>
+    <text x="466" y="344" font-size="14" fill="#64748B">/api/analyze-files</text>
+  </g>
+  <g id="usage-2" data-pptx-bounds="860 170 400 210">
+    <rect x="860" y="170" width="400" height="210" rx="4" fill="#FFFFFF" stroke="#D9E1EC" stroke-width="1"/>
+    <use data-icon="tabler-outline/microphone" x="886" y="194" width="36" height="36" fill="#17457F" stroke-width="2"/>
+    <text x="938" y="220" font-size="20" font-weight="bold" fill="#1E293B">说话排期</text>
+    <text x="886" y="266" font-size="16" fill="#1E293B">录音进需求材料或直接对话；</text>
+    <text x="886" y="296" font-size="16" fill="#1E293B">会议录音 / 录像边看边听整理任务。</text>
+    <text x="886" y="344" font-size="14" fill="#64748B">/api/realtime/voice-chat</text>
+  </g>
+  <g id="usage-3" data-pptx-bounds="440 400 400 210">
+    <rect x="440" y="400" width="400" height="210" rx="4" fill="#FFFFFF" stroke="#D9E1EC" stroke-width="1"/>
+    <use data-icon="tabler-outline/video" x="466" y="424" width="36" height="36" fill="#17457F" stroke-width="2"/>
+    <text x="518" y="450" font-size="20" font-weight="bold" fill="#1E293B">答辩直连</text>
+    <text x="466" y="496" font-size="16" fill="#1E293B">评委语音 / 视频点评追问；</text>
+    <text x="466" y="526" font-size="16" fill="#1E293B">答辩录像附逐帧表现观察。</text>
+    <text x="466" y="574" font-size="14" fill="#64748B">/api/realtime/interview-turn</text>
+  </g>
+  <g id="usage-4" data-pptx-bounds="860 400 400 210">
+    <rect x="860" y="400" width="400" height="210" rx="4" fill="#FFFFFF" stroke="#D9E1EC" stroke-width="1"/>
+    <use data-icon="tabler-outline/volume" x="886" y="424" width="36" height="36" fill="#17457F" stroke-width="2"/>
+    <text x="938" y="450" font-size="20" font-weight="bold" fill="#1E293B">语音回复与今日播报</text>
+    <text x="886" y="496" font-size="16" fill="#1E293B">TTS 把计划“说”给成员听；</text>
+    <text x="886" y="526" font-size="16" fill="#1E293B">今日待办自动播报。</text>
+    <text x="886" y="574" font-size="14" fill="#64748B">/api/realtime/tts</text>
+  </g>
+  <g id="footer" data-pptx-bounds="40 676 1200 30">
+    <text x="40" y="694" font-size="12" fill="#64748B">协作分工智能体 · 昇腾全模态版</text>
+    <text x="1240" y="694" font-size="12" fill="#64748B" text-anchor="end">19 / 29 · v7.1</text>
+  </g>
+</svg>

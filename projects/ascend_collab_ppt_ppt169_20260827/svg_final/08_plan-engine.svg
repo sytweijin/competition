@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" data-pptx-page-role="content" font-family="Microsoft YaHei, Arial, sans-serif">
+  <defs>
+    <marker id="arrowTri4" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#375A86" />
+    </marker>
+  </defs>
+  <rect id="bg" x="0" y="0" width="1280" height="720" fill="#FFFFFF" data-pptx-role="background" />
+  <g id="header" data-pptx-bounds="40 40 1200 100">
+    <text x="40" y="66" font-size="16" fill="#375A86" letter-spacing="2">02 · 系统架构与核心机制</text>
+    <text x="40" y="106" font-size="36" font-weight="bold" fill="#1E293B">计划引擎：LLM 创造 × 算法正确</text>
+    <rect x="40" y="120" width="48" height="4" fill="#C9A227" />
+    <line x1="40" y1="142" x2="1240" y2="142" stroke="#DCE6F0" stroke-width="1" />
+  </g>
+  <g id="lead" data-pptx-bounds="40 158 1200 66">
+    <text fill="#1E293B" font-size="20" x="40" y="190">计划是拿来执行的，不是拿来欣赏的。因此我们把引擎拆成两半：</text><text fill="#1E293B" font-size="20" x="40" y="218">AI 负责“想得开”，算法负责“算得准”——各干各擅长的事。</text></g>
+  <g id="pipeline" data-pptx-bounds="40 234 1200 96">
+    <rect x="40" y="240" width="216" height="70" rx="3" fill="#F0F6FC" stroke="#DCE6F0" stroke-width="1" />
+    
+  <g transform="translate(58, 252) scale(1.08333)" fill="none" stroke="#375A86" stroke-width="2">
+    <path d="M16 18a2 2 0 0 1 2 2a2 2 0 0 1 2 -2a2 2 0 0 1 -2 -2a2 2 0 0 1 -2 2m0 -12a2 2 0 0 1 2 2a2 2 0 0 1 2 -2a2 2 0 0 1 -2 -2a2 2 0 0 1 -2 2m-7 12a6 6 0 0 1 6 -6a6 6 0 0 1 -6 -6a6 6 0 0 1 -6 6a6 6 0 0 1 6 6" />
+  </g>
+    <text x="96" y="278" font-size="16" font-weight="bold" fill="#1E293B">任务拆解</text>
+    <line x1="256" y1="275" x2="284" y2="275" stroke="#375A86" stroke-width="2" marker-end="url(#arrowTri4)" />
+    <rect x="288" y="240" width="216" height="70" rx="3" fill="#F0F6FC" stroke="#DCE6F0" stroke-width="1" />
+    
+  <g transform="translate(306, 252) scale(1.08333)" fill="none" stroke="#375A86" stroke-width="2">
+    <path d="M11.46 20.846a12 12 0 0 1 -7.96 -14.846a12 12 0 0 0 8.5 -3a12 12 0 0 0 8.5 3a12 12 0 0 1 -.09 7.06" />
+    <path d="M15 19l2 2l4 -4" />
+  </g>
+    <text x="344" y="278" font-size="16" font-weight="bold" fill="#1E293B">结构化校验</text>
+    <line x1="504" y1="275" x2="532" y2="275" stroke="#375A86" stroke-width="2" marker-end="url(#arrowTri4)" />
+    <rect x="536" y="240" width="216" height="70" rx="3" fill="#F0F6FC" stroke="#DCE6F0" stroke-width="1" />
+    
+  <g transform="translate(554, 252) scale(1.08333)" fill="none" stroke="#375A86" stroke-width="2">
+    <path d="M11 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />
+    <path d="M7 12a5 5 0 1 0 10 0a5 5 0 1 0 -10 0" />
+    <path d="M3 12a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" />
+  </g>
+    <text x="592" y="278" font-size="16" font-weight="bold" fill="#1E293B">技能匹配分工</text>
+    <line x1="752" y1="275" x2="780" y2="275" stroke="#375A86" stroke-width="2" marker-end="url(#arrowTri4)" />
+    <rect x="784" y="240" width="216" height="70" rx="3" fill="#F0F6FC" stroke="#DCE6F0" stroke-width="1" />
+    
+  <g transform="translate(802, 252) scale(1.08333)" fill="none" stroke="#375A86" stroke-width="2">
+    <path d="M4 16l6 -7l5 5l5 -6" />
+    <path d="M14 14a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />
+    <path d="M9 9a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />
+    <path d="M3 16a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />
+    <path d="M19 8a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />
+  </g>
+    <text x="840" y="278" font-size="16" font-weight="bold" fill="#1E293B">CPM 关键路径排期</text>
+    <line x1="1000" y1="275" x2="1028" y2="275" stroke="#375A86" stroke-width="2" marker-end="url(#arrowTri4)" />
+    <rect x="1032" y="240" width="208" height="70" rx="3" fill="#F0F6FC" stroke="#DCE6F0" stroke-width="1" />
+    
+  <g transform="translate(1050, 252) scale(1.08333)" fill="none" stroke="#375A86" stroke-width="2">
+    <path d="M14 3v4a1 1 0 0 0 1 1h4" />
+    <path d="M17 21h-10a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2h7l5 5v11a2 2 0 0 1 -2 2" />
+    <path d="M9 9l1 0" />
+    <path d="M9 13l6 0" />
+    <path d="M9 17l6 0" />
+  </g>
+    <text x="1088" y="278" font-size="16" font-weight="bold" fill="#1E293B">报告生成</text>
+  </g>
+  <g id="split-llm" data-pptx-bounds="40 356 590 250">
+    <rect x="40" y="356" width="590" height="250" rx="4" fill="#FFFFFF" stroke="#DCE6F0" stroke-width="1" />
+    <rect x="40" y="356" width="590" height="8" fill="#C9A227" />
+    
+  <g transform="translate(70, 388) scale(1.41667)" fill="none" stroke="#375A86" stroke-width="2">
+    <path d="M16 18a2 2 0 0 1 2 2a2 2 0 0 1 2 -2a2 2 0 0 1 -2 -2a2 2 0 0 1 -2 2m0 -12a2 2 0 0 1 2 2a2 2 0 0 1 2 -2a2 2 0 0 1 -2 -2a2 2 0 0 1 -2 2m-7 12a6 6 0 0 1 6 -6a6 6 0 0 1 -6 -6a6 6 0 0 1 -6 6a6 6 0 0 1 6 6" />
+  </g>
+    <text x="120" y="412" font-size="22" font-weight="bold" fill="#1E293B">LLM 负责创造</text>
+    <text fill="#1E293B" font-size="16" x="70" y="456">理解自然语言需求、拆解任务、给出工时建议、组织报告表达、</text><text fill="#1E293B" font-size="16" x="70" y="482">提出批判性审查建议——这些工作没有唯一正确答案，</text><text fill="#1E293B" font-size="16" x="70" y="508">适合大模型发挥。</text></g>
+  <g id="split-algo" data-pptx-bounds="650 356 590 250">
+    <rect x="650" y="356" width="590" height="250" rx="4" fill="#FFFFFF" stroke="#DCE6F0" stroke-width="1" />
+    <rect x="650" y="356" width="590" height="8" fill="#375A86" />
+    
+  <g transform="translate(680, 388) scale(1.41667)" fill="none" stroke="#375A86" stroke-width="2">
+    <path d="M4 10a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" />
+    <path d="M6 4v4" />
+    <path d="M6 12v8" />
+    <path d="M10 16a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" />
+    <path d="M12 4v10" />
+    <path d="M12 18v2" />
+    <path d="M16 7a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" />
+    <path d="M18 4v1" />
+    <path d="M18 9v11" />
+  </g>
+    <text x="730" y="412" font-size="22" font-weight="bold" fill="#1E293B">确定性算法负责正确</text>
+    <text fill="#1E293B" font-size="16" x="680" y="456">关键路径与浮动、技能评分、负载均衡、依赖校验、跳过周末与不可用日</text><text fill="#1E293B" font-size="16" x="680" y="482">的日期约束——这些工作必须精确、可复现，</text><text fill="#1E293B" font-size="16" x="680" y="508">绝不能依赖模型输出的偶然正确。</text></g>
+  <g id="fallback-bar" data-pptx-bounds="40 630 1200 56">
+    <rect x="40" y="630" width="1200" height="56" rx="4" fill="#F0F6FC" />
+    
+  <g transform="translate(68, 642) scale(1.16667)" fill="none" stroke="#375A86" stroke-width="2">
+    <path d="M8 12a4 4 0 1 0 8 0a4 4 0 1 0 -8 0" />
+    <path d="M3 12a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" />
+    <path d="M15 15l3.35 3.35" />
+    <path d="M9 15l-3.35 3.35" />
+    <path d="M5.65 5.65l3.35 3.35" />
+    <path d="M18.35 5.65l-3.35 3.35" />
+  </g>
+    <text x="110" y="664" font-size="15" fill="#1E293B">兜底：拆解、分工、排期、审查任一环节的 LLM 失败，自动切换到确定性规则实现；演示不依赖模型持续在线。</text>
+  </g>
+  <g id="footer" data-pptx-bounds="40 676 1200 30">
+    <text x="40" y="694" font-size="12" fill="#64748B">协作分工智能体 · 昇腾全模态版</text>
+    <text x="1240" y="694" font-size="12" fill="#64748B" text-anchor="end">08 / 29 · v7.1</text>
+  </g>
+</svg>

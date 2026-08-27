@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" data-pptx-page-role="content" font-family="Microsoft YaHei, Arial, sans-serif">
+  <rect id="bg" x="0" y="0" width="1280" height="720" fill="#FFFFFF" data-pptx-role="background"/>
+  <g id="header" data-pptx-bounds="40 40 1200 100">
+    <text x="40" y="66" font-size="16" fill="#375A86" letter-spacing="2">03 · 核心功能详解</text>
+    <text x="40" y="106" font-size="36" font-weight="bold" fill="#1E293B">计划引擎：拆解 · 工时 · 匹配 · 均衡</text>
+    <rect x="40" y="120" width="48" height="4" fill="#C9A227"/>
+    <line x1="40" y1="142" x2="1240" y2="142" stroke="#DCE6F0" stroke-width="1"/>
+  </g>
+  <g id="detail-decompose" data-pptx-bounds="40 166 590 250">
+    <rect x="40" y="166" width="590" height="250" rx="4" fill="#FFFFFF" stroke="#DCE6F0" stroke-width="1"/>
+    <rect x="40" y="166" width="590" height="6" fill="#375A86"/>
+    <use data-icon="tabler-outline/clipboard-list" x="66" y="192" width="34" height="34" fill="#375A86" stroke-width="2"/>
+    <text x="116" y="216" font-size="22" font-weight="bold" fill="#1E293B">任务拆解</text>
+    <text x="66" y="258" font-size="15" fill="#1E293B">系统先判断项目规模：小型项目直接拆解分工；大型项目先拆大模块，<tspan x="66" dy="23">由骨干认领，再逐层拆到子任务，最后开放志愿者招募与认领。</tspan></text>
+    <text x="66" y="346" font-size="15" fill="#1E293B">拆解由 LLM 结合知识库的工时案例生成一到八项弹性子任务，<tspan x="66" dy="23">失败时自动切换到确定性拆解规则，保证主链路不断。</tspan></text>
+  </g>
+  <g id="detail-hours" data-pptx-bounds="650 166 590 250">
+    <rect x="650" y="166" width="590" height="250" rx="4" fill="#FFFFFF" stroke="#DCE6F0" stroke-width="1"/>
+    <rect x="650" y="166" width="590" height="6" fill="#375A86"/>
+    <use data-icon="tabler-outline/clock" x="676" y="192" width="34" height="34" fill="#375A86" stroke-width="2"/>
+    <text x="726" y="216" font-size="22" font-weight="bold" fill="#1E293B">工时估算</text>
+    <text x="676" y="258" font-size="15" fill="#1E293B">每一项任务都从结构化工时案例库检索参考工时，<tspan x="676" dy="23">再结合团队成员的实际可用情况校准。</tspan></text>
+    <text x="676" y="346" font-size="15" fill="#1E293B">任务完成后的实际偏差会反馈回知识库，<tspan x="676" dy="23">同类任务下次估算得更准——系统会越用越好用。</tspan></text>
+  </g>
+  <g id="detail-match" data-pptx-bounds="40 436 590 240">
+    <rect x="40" y="436" width="590" height="240" rx="4" fill="#FFFFFF" stroke="#DCE6F0" stroke-width="1"/>
+    <rect x="40" y="436" width="590" height="6" fill="#375A86"/>
+    <use data-icon="tabler-outline/target" x="66" y="462" width="34" height="34" fill="#375A86" stroke-width="2"/>
+    <text x="116" y="486" font-size="22" font-weight="bold" fill="#1E293B">技能匹配分工</text>
+    <text x="66" y="528" font-size="15" fill="#1E293B">分工按中文、近义词和中英文三种方式匹配技能，<tspan x="66" dy="23">把成员排成负责人、主要协助、辅助协助三层角色。</tspan></text>
+    <text x="66" y="616" font-size="15" fill="#1E293B">每一项分工都给出匹配度评分——为什么选这个人，看得见、说得清。</text>
+  </g>
+  <g id="detail-balance" data-pptx-bounds="650 436 590 240">
+    <rect x="650" y="436" width="590" height="240" rx="4" fill="#FFFFFF" stroke="#DCE6F0" stroke-width="1"/>
+    <rect x="650" y="436" width="590" height="6" fill="#375A86"/>
+    <use data-icon="tabler-outline/adjustments" x="676" y="462" width="34" height="34" fill="#375A86" stroke-width="2"/>
+    <text x="726" y="486" font-size="22" font-weight="bold" fill="#1E293B">负载均衡</text>
+    <text x="676" y="528" font-size="15" fill="#1E293B">在分工基础上，系统按成员可用工时与阶段负载自动均衡，<tspan x="676" dy="23">避免有人连轴转、有人闲着。</tspan></text>
+    <text x="676" y="616" font-size="15" fill="#1E293B">均衡后重算匹配评分并说明调整理由，改动可追溯。</text>
+  </g>
+  <g id="footer" data-pptx-bounds="40 676 1200 30">
+    <text x="40" y="694" font-size="12" fill="#64748B">协作分工智能体 · 昇腾全模态版</text>
+    <text x="1240" y="694" font-size="12" fill="#64748B" text-anchor="end">13 / 29 · v7.1</text>
+  </g>
+</svg>

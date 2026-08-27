@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" data-pptx-page-role="content" font-family="Microsoft YaHei, Arial, sans-serif">
+  <rect id="bg" x="0" y="0" width="1280" height="720" fill="#FFFFFF" data-pptx-role="background"/>
+  <g id="header" data-pptx-bounds="40 40 1200 100">
+    <text x="40" y="66" font-size="16" fill="#375A86" letter-spacing="2">04 · 创新点</text>
+    <text x="40" y="106" font-size="36" font-weight="bold" fill="#1E293B">创新点二：确定性正确性保证</text>
+    <rect x="40" y="120" width="48" height="4" fill="#C9A227"/>
+    <line x1="40" y1="142" x2="1240" y2="142" stroke="#DCE6F0" stroke-width="1"/>
+  </g>
+  <g id="lead" data-pptx-bounds="40 156 1200 96">
+    <text x="40" y="188" font-size="20" fill="#1E293B">AI 规划工具最大的问题是输出不稳定：同一个需求，模型这次给三周、下次给五天；<tspan x="40" dy="28">今天推荐的负责人和明天不一样。计划是要拿来执行的，不确定性就是成本。</tspan><tspan x="40" dy="28">所以我们把架构拆成两半——模型负责创造，算法负责正确。</tspan></text>
+  </g>
+  <g id="engine-llm" data-pptx-bounds="40 276 560 260">
+    <rect x="40" y="276" width="560" height="260" rx="4" fill="#FFFFFF" stroke="#DCE6F0" stroke-width="1"/>
+    <rect x="40" y="276" width="560" height="8" fill="#C9A227"/>
+    <use data-icon="tabler-outline/sparkles" x="70" y="308" width="34" height="34" fill="#375A86" stroke-width="2"/>
+    <text x="120" y="332" font-size="22" font-weight="bold" fill="#1E293B">LLM 负责创造</text>
+    <text x="70" y="378" font-size="16" fill="#1E293B">理解自然语言需求、拆解任务、给出工时建议、组织报告、<tspan x="70" dy="26">提出批判性审查建议——这些没有唯一正确答案，</tspan><tspan x="70" dy="26">适合大模型发挥。</tspan></text>
+  </g>
+  <g id="engine-algo" data-pptx-bounds="680 276 560 260">
+    <rect x="680" y="276" width="560" height="260" rx="4" fill="#FFFFFF" stroke="#DCE6F0" stroke-width="1"/>
+    <rect x="680" y="276" width="560" height="8" fill="#375A86"/>
+    <use data-icon="tabler-outline/adjustments" x="710" y="308" width="34" height="34" fill="#375A86" stroke-width="2"/>
+    <text x="760" y="332" font-size="22" font-weight="bold" fill="#1E293B">确定性算法负责正确</text>
+    <text x="710" y="378" font-size="16" fill="#1E293B">关键路径与浮动、技能评分、负载均衡、依赖校验、<tspan x="710" dy="26">跳过周末与不可用日的日期约束——</tspan><tspan x="710" dy="26">这些必须精确、可复现，绝不能依赖模型输出的偶然正确。</tspan></text>
+  </g>
+  <g id="split-badge" data-pptx-bounds="600 330 80 90">
+    <rect x="600" y="330" width="80" height="90" rx="40" fill="#375A86"/>
+    <text x="640" y="375" font-size="16" font-weight="bold" fill="#FFFFFF" text-anchor="middle">分工</text>
+    <text x="640" y="400" font-size="14" fill="#D5E0EE" text-anchor="middle">明确</text>
+  </g>
+  <g id="closing" data-pptx-bounds="40 560 1200 112">
+    <rect x="40" y="560" width="1200" height="112" rx="4" fill="#F0F6FC"/>
+    <use data-icon="tabler-outline/shield-check" x="70" y="582" width="34" height="34" fill="#375A86" stroke-width="2"/>
+    <text x="122" y="604" font-size="18" font-weight="bold" fill="#1E293B">这相当于给 AI 规划加了一条“算法安全带”</text>
+    <text x="70" y="646" font-size="16" fill="#1E293B">模型发挥创造，算法保证正确；任何 LLM 环节失败都自动切到确定性规则，断网、模型离线时主链路依然完整。</text>
+  </g>
+  <g id="footer" data-pptx-bounds="40 676 1200 30">
+    <text x="40" y="694" font-size="12" fill="#64748B">协作分工智能体 · 昇腾全模态版</text>
+    <text x="1240" y="694" font-size="12" fill="#64748B" text-anchor="end">20 / 29 · v7.1</text>
+  </g>
+</svg>

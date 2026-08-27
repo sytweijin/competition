@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" data-pptx-page-role="section" font-family="Microsoft YaHei, Arial, sans-serif">
+  <rect id="bg" x="0" y="0" width="1280" height="720" fill="#375A86" data-pptx-role="background"/>
+  <rect id="accent-bar" x="0" y="0" width="8" height="720" fill="#C9A227" data-pptx-role="decoration"/>
+  <g id="section-head" data-pptx-bounds="80 150 1120 180">
+    <text x="80" y="208" font-size="16" fill="#D5E0EE" letter-spacing="3">03 / 核心功能详解</text>
+    <text x="80" y="266" font-size="38" font-weight="bold" fill="#FFFFFF">五大能力模块，围绕计划引擎展开</text>
+    <line x1="80" y1="300" x2="200" y2="300" stroke="#C9A227" stroke-width="3"/>
+  </g>
+  <g id="section-list" data-pptx-bounds="80 370 1120 240">
+    <!-- icon: tabler-outline/stack -->
+  <g transform="translate(80, 370) scale(1.5)" fill="none" stroke="#FFFFFF" stroke-width="2">
+    <path d="M12 6l-8 4l8 4l8 -4l-8 -4" />
+    <path d="M4 14l8 4l8 -4" />
+  </g>
+    <text x="140" y="396" font-size="20" fill="#FFFFFF">功能总览矩阵：五大模块全景（P12）</text>
+    <!-- icon: tabler-outline/clipboard-list -->
+  <g transform="translate(80, 430) scale(1.5)" fill="none" stroke="#FFFFFF" stroke-width="2">
+    <path d="M9 5h-2a2 2 0 0 0 -2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-12a2 2 0 0 0 -2 -2h-2" />
+    <path d="M9 5a2 2 0 0 1 2 -2h2a2 2 0 0 1 2 2a2 2 0 0 1 -2 2h-2a2 2 0 0 1 -2 -2" />
+    <path d="M9 12l.01 0" />
+    <path d="M13 12l2 0" />
+    <path d="M9 16l.01 0" />
+    <path d="M13 16l2 0" />
+  </g>
+    <text x="140" y="456" font-size="20" fill="#FFFFFF">计划引擎：拆解 / 工时 / 匹配 / 均衡（P13–P14）</text>
+    <!-- icon: tabler-outline/refresh -->
+  <g transform="translate(80, 490) scale(1.5)" fill="none" stroke="#FFFFFF" stroke-width="2">
+    <path d="M20 11a8.1 8.1 0 0 0 -15.5 -2m-.5 -4v4h4" />
+    <path d="M4 13a8.1 8.1 0 0 0 15.5 2m.5 4v-4h-4" />
+  </g>
+    <text x="140" y="516" font-size="20" fill="#FFFFFF">动态协作与版本管理：可编辑 · 拖拽 · 重算 · 回滚（P15）</text>
+    <!-- icon: tabler-outline/send -->
+  <g transform="translate(80, 550) scale(1.5)" fill="none" stroke="#FFFFFF" stroke-width="2">
+    <path d="M10 14l11 -11" />
+    <path d="M21 3l-6.5 18a.55 .55 0 0 1 -1 0l-3.5 -7l-7 -3.5a.55 .55 0 0 1 0 -1l18 -6.5" />
+  </g>
+    <text x="140" y="576" font-size="20" fill="#FFFFFF">成员汇报与群通知：免登录 · 语音/照片 · Webhook（P16）</text>
+  </g>
+  <g id="section-footer" data-pptx-bounds="80 656 1120 40">
+    <text x="80" y="684" font-size="14" fill="#D5E0EE">P11–P17</text>
+    <text x="1200" y="684" font-size="12" fill="#D5E0EE" text-anchor="end">11 / 29 · v7.1</text>
+  </g>
+</svg>

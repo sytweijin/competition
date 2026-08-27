@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" data-pptx-page-role="content" font-family="Microsoft YaHei, Arial, sans-serif">
+  <rect id="bg" x="0" y="0" width="1280" height="720" fill="#FFFFFF" data-pptx-role="background" />
+  <g id="header" data-pptx-bounds="40 40 1200 100">
+    <text x="40" y="66" font-size="16" fill="#375A86" letter-spacing="2">03 · 核心功能详解</text>
+    <text x="40" y="106" font-size="36" font-weight="bold" fill="#1E293B">动态协作：计划随现实变化实时重算</text>
+    <rect x="40" y="120" width="48" height="4" fill="#C9A227" />
+    <line x1="40" y1="142" x2="1240" y2="142" stroke="#DCE6F0" stroke-width="1" />
+  </g>
+  <g id="lead" data-pptx-bounds="40 156 1200 66">
+    <text fill="#1E293B" font-size="20" x="40" y="188">计划的价值不在于生成的那一刻，而在于之后每一次变化都能跟得上。</text><text fill="#1E293B" font-size="20" x="40" y="216">人改一步，系统就重算一步，计划永远是“现在时”。</text></g>
+  <g id="interact-1" data-pptx-bounds="40 238 590 128">
+    <rect x="40" y="238" width="590" height="128" rx="4" fill="#F0F6FC" />
+    
+  <g transform="translate(66, 260) scale(1.33333)" fill="none" stroke="#375A86" stroke-width="2">
+    <path d="M7 7h-1a2 2 0 0 0 -2 2v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2 -2v-1" />
+    <path d="M20.385 6.585a2.1 2.1 0 0 0 -2.97 -2.97l-8.415 8.385v3h3l8.385 -8.415" />
+    <path d="M16 5l3 3" />
+  </g>
+    <text x="114" y="284" font-size="20" font-weight="bold" fill="#1E293B">可编辑草案</text>
+    <text x="66" y="324" font-size="15" fill="#1E293B">任务与模块可以增删改、拆分合并，确认前的每一步都可以自由调整。</text>
+  </g>
+  <g id="interact-2" data-pptx-bounds="40 380 590 128">
+    <rect x="40" y="380" width="590" height="128" rx="4" fill="#F0F6FC" />
+    
+  <g transform="translate(66, 402) scale(1.33333)" fill="none" stroke="#375A86" stroke-width="2">
+    <path d="M18 4l3 3l-3 3" />
+    <path d="M18 20l3 -3l-3 -3" />
+    <path d="M3 7h3a5 5 0 0 1 5 5a5 5 0 0 0 5 5h5" />
+    <path d="M21 7h-5a4.978 4.978 0 0 0 -3 1m-4 8a4.984 4.984 0 0 1 -3 1h-3" />
+  </g>
+    <text x="114" y="426" font-size="20" font-weight="bold" fill="#1E293B">拖拽分工</text>
+    <text x="66" y="466" font-size="15" fill="#1E293B">看板上直接拖拽负责人与协作者；改乱了，一键恢复自动分工。</text>
+  </g>
+  <g id="interact-3" data-pptx-bounds="40 522 590 128">
+    <rect x="40" y="522" width="590" height="128" rx="4" fill="#F0F6FC" />
+    
+  <g transform="translate(66, 544) scale(1.33333)" fill="none" stroke="#375A86" stroke-width="2">
+    <path d="M20 11a8.1 8.1 0 0 0 -15.5 -2m-.5 -4v4h4" />
+    <path d="M4 13a8.1 8.1 0 0 0 15.5 2m.5 4v-4h-4" />
+  </g>
+    <text x="114" y="568" font-size="20" font-weight="bold" fill="#1E293B">即时重算</text>
+    <text x="66" y="608" font-size="15" fill="#1E293B">任务状态切换、成员变动、工时调整，都会触发排期与分工的自动重算。</text>
+  </g>
+  <g id="member-mgmt" data-pptx-bounds="650 238 590 128">
+    <rect x="650" y="238" width="590" height="128" rx="4" fill="#F0F6FC" />
+    
+  <g transform="translate(676, 260) scale(1.33333)" fill="none" stroke="#375A86" stroke-width="2">
+    <path d="M5 7a4 4 0 1 0 8 0a4 4 0 1 0 -8 0" />
+    <path d="M3 21v-2a4 4 0 0 1 4 -4h4a4 4 0 0 1 4 4v2" />
+    <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+    <path d="M21 21v-2a4 4 0 0 0 -3 -3.85" />
+  </g>
+    <text x="724" y="284" font-size="20" font-weight="bold" fill="#1E293B">成员管理</text>
+    <text x="676" y="324" font-size="15" fill="#1E293B">增删成员、调整每日工时、角色与不可用日期，应用后自动重排分工与排期。</text>
+  </g>
+  <g id="version-flow" data-pptx-bounds="650 380 590 270">
+    <rect x="650" y="380" width="590" height="270" rx="4" fill="#FFFFFF" stroke="#DCE6F0" stroke-width="1" />
+    <rect x="650" y="380" width="590" height="6" fill="#375A86" />
+    
+  <g transform="translate(676, 408) scale(1.33333)" fill="none" stroke="#375A86" stroke-width="2">
+    <path d="M5 18a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" />
+    <path d="M5 6a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" />
+    <path d="M15 6a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" />
+    <path d="M7 8l0 8" />
+    <path d="M9 18h6a2 2 0 0 0 2 -2v-5" />
+    <path d="M14 14l3 -3l3 3" />
+  </g>
+    <text x="724" y="432" font-size="20" font-weight="bold" fill="#1E293B">版本管理</text>
+    <text x="676" y="474" font-size="15" fill="#1E293B">保存即生成版本快照；相似任务形成版本树，支持差异对比与分支回滚。</text>
+    <text x="676" y="512" font-size="15" fill="#1E293B">每一次调整都可追溯、可恢复，试错没有代价。</text>
+    <text x="676" y="604" font-size="14" fill="#64748B">大型项目模式：大模块 → 骨干认领 → 子任务 → 志愿者招募，多阶段连续推进</text>
+  </g>
+  <g id="footer" data-pptx-bounds="40 676 1200 30">
+    <text x="40" y="694" font-size="12" fill="#64748B">协作分工智能体 · 昇腾全模态版</text>
+    <text x="1240" y="694" font-size="12" fill="#64748B" text-anchor="end">15 / 29 · v7.1</text>
+  </g>
+</svg>
