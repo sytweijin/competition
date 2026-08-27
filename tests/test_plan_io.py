@@ -40,6 +40,7 @@ def _plan():
 def test_plan_to_csv_and_ics():
     plan = _plan()
     csv_text = plan_to_csv(plan)
+    assert csv_text.startswith("\ufeff")  # Excel 中文兼容
     assert "编号" in csv_text
     assert "T1" in csv_text
     assert "调研" in csv_text

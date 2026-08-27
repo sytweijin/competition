@@ -13,26 +13,26 @@ services:
         generateValue: true
       - key: APP_HTTPS
         value: "0"
-      - key: LLM_API_KEY
+      # 创新应用赛道合规模式：仅使用 MiniCPM-o 4.5，禁用一切外部模型兜底。
+      # 与 .env.example 参赛交付模板保持一致，不再配置 DeepSeek/DashScope。
+      - key: APP_MODEL_MODE
+        value: minicpm
+      - key: APP_ALLOW_EXTERNAL_MODELS
+        value: "0"
+      - key: MAP_REALTIME_API_KEY
         sync: false
-      - key: LLM_BASE_URL
+      - key: MAP_REALTIME_MODEL
+        value: MiniCPM-o-4.5-Realtime
+      - key: MAP_REALTIME_BASE_URL
+        value: wss://api.modelbest.cn/v1/realtime
+      - key: MAP_REALTIME_MAX_TOKENS
+        value: "1024"
+      - key: MAP_REALTIME_TIMEOUT
+        value: "60"
+      # 本地昇腾 A3：Render 等公网环境通常不可达，保持留空即可走云端 API；
+      # 自托管评审环境可填入 ws://<A3地址>:28099/backend
+      - key: ASCEND_OMNI_WS_URL
         sync: false
-      - key: LLM_MODEL
-        value: DeepSeek-V3.2
-      - key: APP_VISION_MODEL
-        value: qwen3.7-plus
-      - key: APP_ASR_MODEL
-        value: qwen-audio-3.0-asr-flash
-      - key: APP_VISION_API_KEY
-        sync: false
-      - key: APP_VISION_BASE_URL
-        value: https://dashscope.aliyuncs.com/compatible-mode/v1
-      - key: APP_ASR_API_KEY
-        sync: false
-      - key: APP_ASR_BASE_URL
-        value: https://dashscope.aliyuncs.com/compatible-mode/v1
-      - key: APP_ASR_TRANSCRIPTION_MODE
-        value: auto
       - key: STORAGE_BACKEND
         value: local
       - key: S3_BUCKET

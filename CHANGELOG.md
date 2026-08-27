@@ -15,6 +15,110 @@
 llama-omni-server 的能力边界（whisper 位置编码越界、分条多轮消息被忽略、指令遵循差），
 应用层通过分片/摊平/校验在边界内规避；同时审计发现两处应用层真实 bug。
 
+### 同步修改：比赛前整体审查修复——模块负责人 KeyError/志愿者认领回归、Matcher JSON 修复、交付配置与文档对齐（2026-08-27 追加）
+
+**定位：** 比赛提交前的整体审查收尾：修复大型项目"确认最终分工"在志愿者认领模块/旧数据下
+400/500 的真实缺陷，恢复 v5.47 的志愿者认领模块设计；把 LLM 本地修复扩展到 Matcher 输出，
+提升云端 MiniCPM-o 分工成功率；render.yaml、文档与参赛合规模板对齐。
+
+**审查/修改背景：** 全量审查（373 测试基线 + 冒烟链路）发现三处与交付直接相关的问题：
+① `apply_manual_assignment` 的 `member_map` 在 v5.76 合并时把志愿者角色过滤掉，导致
+v5.47 明确支持的"志愿者可认领模块"在最终确认时 400/500，且旧存档里模块负责人指向已移除
+成员时会 KeyError 500；② LLM 本地修复只覆盖 PlanOutput，Matcher 输出（QAOutput）在
+MiniCPM-o 回吐"主讲/主答/辅答"等旧字段或截断时必然失败并静默降级为确定性 B3；
+③ render.yaml 仍带 DeepSeek/DashScope 开发期配置，与"仅使用 MiniCPM-o"的合规模板矛盾。
+
+#### A. [P1] 恢复志愿者认领模块并修复模块负责人 KeyError
+
+1. **问题：** 大型项目最终确认分工时，若模块负责人是志愿者（v5.47 明确支持）或旧存档里
+模块负责人已被移除/改名，`apply_manual_assignment` 会 400/500（KeyError），"确认最终分工"当场翻车。
+2. **修改前：** `member_map` 按角色过滤掉志愿者，模块兜底赋值后未校验成员有效性：
+   ```python
+   member_map = {
+       member.name: member for member in fp.input.members
+       if "志愿者" not in member.role and "外部协作者" not in member.role
+   }
+   ...
+   if not owner and task.module_id:
+       owner = module_owner.get(task.module_id)
+   score = skill_score(member_map[owner], ...)   # KeyError
+   ```
+3. **修改后：** 恢复"所有认领成员（含志愿者）均可担任模块负责人"，并对旧数据兜底清空：
+   ```python
+   member_map = {member.name: member for member in fp.input.members}
+   ...
+   if not owner and task.module_id:
+       owner = module_owner.get(task.module_id)
+   if owner and owner not in member_map:
+       owner = None
+   ```
+   模块列表同样清理指向已移除成员的 `assignee_id`；`edit-members` 移除成员时同步清空模块负责人。
+4. **为什么这样改：** v5.76 合并时静默回退了 v5.47 的产品模型（CHANGELOG 有明确记录
+"志愿者可认领模块，其子任务继承该负责人"），与前端"骨干与志愿者都可以认领模块"及
+评分器/负载统计的成员口径都不一致；统一成员口径后前后端不再打架，残留数据也不会再触发 500。
+5. **收益：** ① 大型项目志愿者认领模块后可正常完成最终分工；② 旧存档/成员变动不再导致 500；
+   ③ 前后端与 v5.47 产品设计一致。
+
+#### B. [P1] LLM 本地修复扩展到 Matcher（QAOutput）
+
+1. **问题：** MiniCPM-o 对 QAOutput 常回吐"主讲/主答/辅答"等旧字段名、字符串形式的
+协作者列表或百分制分数，且 JSON 可能截断；本地修复只处理 PlanOutput，导致 Matcher
+整轮失败并静默降级为确定性 B3，"AI 智能分工"在演示中体现不出来。
+2. **修改前：** `_repair_response` 对 PlanOutput 之外的模型直接返回 None。
+3. **修改后：** 新增 `_repair_qa_output` / `_normalize_assignment_objs` / `_coerce_score` /
+`_salvage_assignment_objs`：归一化字段别名与类型、百分制转 0-1、截断时抢救完整分工对象。
+4. **为什么这样改：** "AI 智能分工"是产品核心卖点，演示时静默降级会削弱全模态产品表达；
+把修复覆盖到 Matcher 后，模型格式瑕疵不再整轮失败，确定性 B3 仍保留作最终兜底。
+5. **收益：** ① 云端/本地 MiniCPM-o 分工成功率提升；② 截断输出可抢救已生成分工；
+   ③ 兜底链路不弱化。
+
+#### C. [P2] render.yaml 对齐参赛合规模板
+
+1. **问题：** render.yaml 仍配置 DeepSeek-V3.2 / qwen3.7-plus / qwen-audio-3.0-asr-flash，
+与"仅使用 MiniCPM-o"的合规声明矛盾，评审按此部署会困惑。
+2. **修改前：** 含 `LLM_MODEL=DeepSeek-V3.2`、`APP_VISION_MODEL=qwen3.7-plus`、
+`APP_ASR_MODEL=qwen-audio-3.0-asr-flash` 及 DashScope 地址。
+3. **修改后：** 改为 `APP_MODEL_MODE=minicpm`、`APP_ALLOW_EXTERNAL_MODELS=0` +
+`MAP_REALTIME_*` 全套，移除全部外部模型配置；配套部署就绪测试同步改为断言合规模板。
+4. **为什么这样改：** 与 `.env.example` 参赛交付模板统一，评审看到的部署配置即合规配置。
+5. **收益：** ① 部署配置不再与合规声明矛盾；② 评审可一键用云端 MiniCPM-o 跑通 Demo。
+
+#### D. [P3] 导出、依赖与文档细节
+
+1. **问题：** ① CSV 无 UTF-8 BOM，Windows Excel 打开中文会乱码（ICS 已有 BOM）；
+② `import fitz` 触发 pymupdf 弃用警告；③ `merge_modules` 有一段被后续 list comprehension
+覆盖的无效循环；④ 三份文档仍写"客户端必须用 websocket-client，不要用 websockets"，
+与应用实际实现（`websockets` + 本地禁用 keepalive ping）矛盾。
+2. **修改前：** `plan_to_csv` 直接返回无 BOM 文本；`render_pdf_pages` 用 `import fitz`；
+`merge_modules` 先循环赋值再整体重赋值；文档沿用旧排查结论。
+3. **修改后：** CSV 返回 `"\ufeff" + output.getvalue()`；PDF 渲染优先
+`import pymupdf as fitz` 再回退 `import fitz`；删除无效循环；文档统一为
+"应用侧用 websockets 并对本地后端禁用 keepalive ping，独立冒烟脚本用 websocket-client"。
+备赛手册的仓库说明同步更新：昇腾版已推送为交付仓库 main（比赛期间私有），
+`competition` 本地目录是基础版存档、禁止 push。
+4. **为什么这样改：** 导出与依赖告警影响评审体验与复现；文档表述与代码不一致会误导评审排障。
+5. **收益：** ① Excel 打开 CSV 不乱码；② 无弃用警告；③ 代码更短更清晰；
+   ④ 复现文档与实现一致，避免误用旧方案。
+
+#### E. [P3] 密码哈希与会话加固
+
+1. **问题：** 密码用无盐 sha256、会话永不过期，公网 Demo 暴露后有离线爆破与会话长期有效的风险。
+2. **修改前：** `_hash` 为 sha256 裸哈希；会话为 `{token: username}` 永久有效。
+3. **修改后：** 新密码存 PBKDF2-SHA256（随机盐、10 万次迭代，格式
+`sha256$<salt>$<digest>`），旧的无盐哈希仍可验证（兼容存量 users.json）；新会话 30 天过期，
+旧版裸用户名会话按长期有效兼容，过期会话在创建新会话时顺带清理。
+4. **为什么这样改：** 加盐提高离线爆破成本，会话过期降低令牌泄露后的暴露窗口，
+同时不破坏现有账号与存量会话。
+5. **收益：** ① 存量账号无需迁移即可继续登录；② 新写入凭证与会话更安全；
+   ③ 会话文件不会无限膨胀。
+
+**同步修改：** `app/services/project_service.py`、`app/web/routers/members.py`、
+`app/llm/client.py`、`app/services/plan_io.py`、`app/services/media_analysis.py`、
+`app/services/auth_store.py`、`render.yaml`、3 份文档；新增/更新测试 8 个
+（志愿者认领模块、残留模块负责人不崩溃、成员移除清理模块负责人、QAOutput 修复、
+CSV BOM、auth 加盐哈希/会话过期、render 合规模板）；全量测试 373 → 379 passed；
+前端无静态文件改动，`?v=` 缓存哈希不变。
+
 ### 同步修改：云端/本地守卫按后端隔离，恢复云端语音识别与答辩模拟（2026-08-26 追加）
 
 **定位：** 本地 A3 修复中引入的"客套拦截/防复读/空转标记"被无差别套到云端，

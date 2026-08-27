@@ -424,10 +424,14 @@ class LLMClient:
         """本地修复 Planner 的轻微 JSON/字段问题，不再次请求模型。
 
         兼容两类异常：
-        1) 字段缺失/类型偏差：走 _normalize_task_objs 规范化；
+        1) 字段缺失/类型偏差：走 _normalize_task_objs / _normalize_assignment_objs 规范化；
         2) JSON 被截断/不完整（推理模型 max_tokens 预算被思考吃掉）：
            走 _salvage_task_objs 抢救已完整落地的任务对象，而非整次失败。
         """
+        if response_model.__name__ == "QAOutput":
+            # Matcher 输出：模型可能回吐「主讲/主答/辅答」等旧术语或字符串
+            # 形式的 qa_support / 百分制 score，统一归一化后仍可校验通过。
+            return LLMClient._repair_qa_output(raw, response_model)
         if response_model.__name__ != "PlanOutput":
             return None
         try:
@@ -466,6 +470,162 @@ class LLMClient:
             return None
 
     @staticmethod
+    def _repair_qa_output(raw: str, response_model: type[T]) -> T | None:
+        """本地修复 Matcher（QAOutput）的轻微 JSON/字段问题，不再次请求模型。
+
+        MiniCPM-o 等模型对 QAOutput 常见两类退化：
+        1) 字段别名/类型偏差：回吐「主讲/主答/辅答」等旧字段名、字符串形式
+           qa_support、0-100 百分制 score，统一归一化；
+        2) JSON 被截断/不完整：抢救已完整落地的 assignment 对象。
+        全部失败时返回 None，交由上层确定性 B3 兜底。
+        """
+        try:
+            payload = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            payload = None
+        if payload is None:
+            payload = {
+                "assignments": LLMClient._salvage_assignment_objs(raw),
+                "note": "AI 返回被截断，系统已尽力保留已生成的分工",
+            }
+        if isinstance(payload, list):
+            payload = {"assignments": payload}
+        if not isinstance(payload, dict):
+            return None
+        for wrapper in ("qa_matrix", "result", "data"):
+            if isinstance(payload.get(wrapper), dict):
+                payload = payload[wrapper]
+                break
+        assign_objs = payload.get(
+            "assignments", payload.get("assignment_list"))
+        if not isinstance(assign_objs, list):
+            return None
+        normalized = LLMClient._normalize_assignment_objs(assign_objs)
+        if not normalized:
+            return None
+        repaired_payload = {
+            "assignments": normalized,
+            "note": str(payload.get("note", "本地修复的自动分工")),
+            "workload": payload.get("workload") or {},
+        }
+        try:
+            return response_model.model_validate(repaired_payload)
+        except (ValidationError, ValueError):
+            return None
+
+    @staticmethod
+    def _normalize_assignment_objs(assign_objs: list) -> list[dict] | None:
+        """把原始分工对象列表规范化为 QAAssignment 兼容的 dict 列表。"""
+        normalized: list[dict] = []
+        for item in assign_objs[:80]:
+            if not isinstance(item, dict):
+                continue
+            task_id_raw = item.get(
+                "task_id",
+                item.get("taskId", item.get("id", item.get("task", ""))))
+            if isinstance(task_id_raw, dict):
+                continue
+            task_id = str(task_id_raw or "").strip()
+            if not task_id:
+                continue
+            task_name = str(
+                item.get(
+                    "task_name",
+                    item.get("taskName",
+                             item.get("name", item.get("title", "")))),
+            ).strip() or task_id
+            presenter = str(
+                item.get(
+                    "presenter",
+                    item.get("主讲",
+                             item.get("owner",
+                                      item.get("assignee",
+                                               item.get("负责人", ""))))),
+            ).strip()
+            qa_primary = str(
+                item.get(
+                    "qa_primary",
+                    item.get("主答",
+                             item.get("primary",
+                                      item.get("主要协助",
+                                               item.get("协助", ""))))),
+            ).strip()
+            support_raw = item.get(
+                "qa_support",
+                item.get("辅答",
+                         item.get("support",
+                                  item.get("supporters",
+                                           item.get("qa_support_list", [])))))
+            if isinstance(support_raw, str):
+                support = [
+                    value.strip()
+                    for value in re.split(r"[,，、/;；]", support_raw)
+                    if value.strip()
+                ]
+            else:
+                support = [
+                    str(value).strip()
+                    for value in (support_raw or [])
+                    if str(value).strip()
+                ]
+            support = list(dict.fromkeys(
+                name for name in support
+                if name and name != presenter and name != qa_primary))
+            normalized.append({
+                "task_id": task_id,
+                "task_name": task_name,
+                "presenter": presenter,
+                "qa_primary": qa_primary,
+                "qa_support": support,
+                "score": LLMClient._coerce_score(item.get(
+                    "score",
+                    item.get("match_score",
+                             item.get("matching",
+                                      item.get("匹配度", 0.0))))),
+                "reasoning": str(
+                    item.get("reasoning",
+                             item.get("reason", item.get("why", "")))),
+            })
+        return normalized or None
+
+    @staticmethod
+    def _coerce_score(raw) -> float:
+        """把模型输出的匹配分归一化到 0-1：百分制自动除以 100。"""
+        if raw is None:
+            return 0.0
+        if isinstance(raw, (int, float)):
+            value = float(raw)
+        else:
+            match = re.search(r"\d+(?:\.\d+)?", str(raw))
+            value = float(match.group()) if match else 0.0
+        if value > 1.0:
+            value = value / 100.0
+        return max(0.0, min(1.0, value))
+
+    @staticmethod
+    def _salvage_assignment_objs(raw: str) -> list[dict]:
+        """从截断的 QA JSON 中抢救已完整闭合的 assignment 对象。"""
+        if not raw:
+            return []
+        candidate = None
+        for key in ("assignments", "assignment_list"):
+            match = re.search(rf'"{key}"\s*:\s*\[', raw)
+            if match:
+                candidate = raw[match.end():]
+                break
+        keys = ("task_id", "task_name", "presenter", "name")
+        if candidate is not None:
+            return LLMClient._extract_balanced_objs(
+                candidate, required_keys=keys)
+        return [
+            obj for obj in LLMClient._extract_balanced_objs(
+                raw, required_keys=keys)
+            if isinstance(obj, dict)
+            and (obj.get("task_id") or obj.get("task_name")
+                 or obj.get("presenter"))
+        ]
+
+    @staticmethod
     def _salvage_task_objs(raw: str) -> list[dict]:
         """AI 返回 JSON 被截断/不完整时，尽量抽取其中已完整闭合的任务对象。
 
@@ -494,7 +654,9 @@ class LLMClient:
         ]
 
     @staticmethod
-    def _extract_balanced_objs(body: str) -> list[dict]:
+    def _extract_balanced_objs(
+        body: str, required_keys: tuple = ("name",),
+    ) -> list[dict]:
         """括号配平扫描，逐条取出深度归零的 {...} 对象。"""
         objs: list[dict] = []
         depth = 0
@@ -531,7 +693,8 @@ class LLMClient:
                     seg = "".join(buf)
                     try:
                         obj = json.loads(seg)
-                        if isinstance(obj, dict) and obj.get("name"):
+                        if isinstance(obj, dict) and any(
+                                key in obj for key in required_keys):
                             objs.append(obj)
                     except (json.JSONDecodeError, TypeError):
                         pass

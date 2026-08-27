@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import secrets
+import time
 import uuid
 from pathlib import Path
 
@@ -13,9 +15,32 @@ USERS_FILE = MEMORY_DIR / "users.json"
 SESSIONS_FILE = MEMORY_DIR / "sessions.json"
 ACL_FILE = MEMORY_DIR / "acl.json"
 
+_PBKDF2_ITERATIONS = 100_000
+_SALT_BYTES = 16
+SESSION_TTL_SECONDS = 30 * 24 * 3600  # 会话 30 天有效
+
 
 def _hash(password: str) -> str:
-    return hashlib.sha256(password.encode("utf-8")).hexdigest()
+    """返回带随机盐的 PBKDF2-SHA256 哈希，格式 sha256$<salt_hex>$<digest_hex>。"""
+    salt = secrets.token_bytes(_SALT_BYTES)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), salt, _PBKDF2_ITERATIONS)
+    return f"sha256${salt.hex()}${digest.hex()}"
+
+
+def _verify(password: str, stored: str) -> bool:
+    """校验密码；兼容旧版无盐 sha256 哈希（users.json 已存在的数据）。"""
+    if stored.startswith("sha256$"):
+        try:
+            _, salt_hex, digest_hex = stored.split("$", 2)
+            digest = hashlib.pbkdf2_hmac(
+                "sha256", password.encode("utf-8"),
+                bytes.fromhex(salt_hex), _PBKDF2_ITERATIONS)
+            return secrets.compare_digest(digest.hex(), digest_hex)
+        except (ValueError, TypeError):
+            return False
+    legacy = hashlib.sha256(password.encode("utf-8")).hexdigest()
+    return secrets.compare_digest(legacy, stored)
 
 
 def seed_users() -> None:
@@ -60,7 +85,7 @@ def verify_login(username: str, password: str) -> bool:
     except (json.JSONDecodeError, OSError):
         return False
     user = users.get(username)
-    return bool(user and user.get("password_hash") == _hash(password))
+    return bool(user and _verify(password, str(user.get("password_hash") or "")))
 
 
 def create_session(username: str) -> str:
@@ -71,13 +96,29 @@ def create_session(username: str) -> str:
             sessions = json.loads(SESSIONS_FILE.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             sessions = {}
+    # 顺带清理已过期会话，避免会话文件无限膨胀
+    sessions = {
+        token: entry for token, entry in sessions.items()
+        if _session_valid(entry)
+    }
     token = uuid.uuid4().hex
-    sessions[token] = username
+    sessions[token] = {
+        "username": username,
+        "expires": time.time() + SESSION_TTL_SECONDS,
+    }
     SESSIONS_FILE.write_text(
         json.dumps(sessions, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     return token
+
+
+def _session_valid(entry) -> bool:
+    """旧版会话是裸用户名（无过期时间），视为长期有效以兼容存量数据。"""
+    if isinstance(entry, dict):
+        expires = entry.get("expires")
+        return expires is None or time.time() < float(expires)
+    return bool(entry)
 
 
 def username_by_token(token: str) -> str | None:
@@ -91,7 +132,12 @@ def username_by_token(token: str) -> str | None:
         sessions = json.loads(SESSIONS_FILE.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return None
-    return sessions.get(token)
+    entry = sessions.get(token)
+    if not _session_valid(entry):
+        return None
+    if isinstance(entry, dict):
+        return str(entry.get("username") or "")
+    return entry  # 旧版裸用户名
 
 
 def _load_acl() -> dict:

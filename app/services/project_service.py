@@ -175,9 +175,6 @@ def mutate_draft(plan: PlanOutput, operations: list[DraftOperation]) -> PlanOutp
                     "name": merged_name,
                     "description": merged_desc,
                 })
-            for t in tasks:
-                if t.module_id in merge_set and t.module_id != target.id:
-                    t = t.model_copy(update={"module_id": target.id})
             tasks = [
                 t.model_copy(update={
                     "module_id": target.id if t.module_id in merge_set else t.module_id
@@ -353,10 +350,11 @@ def apply_manual_assignment(req: ManualAssignmentRequest) -> FullPlan:
     from app.agents.timeline import TimelineAgent, sync_task_dates
 
     fp = req.plan
-    member_map = {
-        member.name: member for member in fp.input.members
-        if "志愿者" not in member.role and "外部协作者" not in member.role
-    }
+    # 大型项目认领成员（含志愿者角色）均可作为模块负责人/任务负责人：
+    # v5.47 产品模型明确"志愿者可认领模块，其子任务继承该负责人"，
+    # 与 assign_with_balance / workload_snapshot 的成员口径保持一致；
+    # 若按角色过滤会导致"认领模块"后无法确认最终分工（400/500）。
+    member_map = {member.name: member for member in fp.input.members}
     module_map = {module.id: module for module in fp.plan.modules}
     module_assignees = req.module_assignees or {}
     for module_id, owner in module_assignees.items():
@@ -364,12 +362,15 @@ def apply_manual_assignment(req: ManualAssignmentRequest) -> FullPlan:
             raise ProjectServiceError(f"模块不存在：{module_id}")
         if owner and owner not in member_map:
             raise ProjectServiceError(f"模块负责人不在团队成员中：{owner}")
-    updated_modules = [
-        module.model_copy(update={
-            "assignee_id": module_assignees.get(module.id, module.assignee_id) or None,
-        })
-        for module in fp.plan.modules
-    ]
+    updated_modules = []
+    for module in fp.plan.modules:
+        owner = module_assignees.get(module.id, module.assignee_id) or None
+        # 旧存档中模块负责人可能已被移除/改名：统一清空为未认领，
+        # 保证返回计划里模块负责人始终是当前成员名单中的有效姓名。
+        if owner and owner not in member_map:
+            owner = None
+        updated_modules.append(
+            module.model_copy(update={"assignee_id": owner}))
     module_owner = {module.id: module.assignee_id for module in updated_modules}
     assignments: list[QAAssignment] = []
     updated_tasks: list[SubTask] = []
@@ -392,6 +393,10 @@ def apply_manual_assignment(req: ManualAssignmentRequest) -> FullPlan:
         # 骨干认领模块后，模块下未单独指定负责人的子任务默认归模块负责人
         if not owner and task.module_id:
             owner = module_owner.get(task.module_id)
+        # 模块负责人可能来自旧存档（成员已被移除/改名）：兜底为未分配，
+        # 而不是让 skill_score(member_map[owner]) 抛 KeyError 导致 500。
+        if owner and owner not in member_map:
+            owner = None
         collaborators = [
             name for name in req.collaborators.get(task.id, task.collaborator_ids)
             if name in member_map and name != owner

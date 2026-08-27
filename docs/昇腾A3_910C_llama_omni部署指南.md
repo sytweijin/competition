@@ -490,9 +490,12 @@ echo ""
 
 ### 7.2 WebSocket 连接被立即关闭
 
-原因：使用了 `websockets` 库，其默认 keepalive ping 在模型加载期间超时。
+原因：早期使用 `websockets` 库时，其默认 keepalive ping 在模型加载/推理期间
+超时导致 1011 断开；`websocket-client` 无内置 ping，可规避。
 
-解决：使用 `websocket-client` 库，并关闭 ping：
+现状：应用侧已改为 `websockets` 并对本地后端禁用客户端 ping
+（`ping_interval=None`、`ping_timeout=None`），直接连接即可；
+独立冒烟脚本仍用 `websocket-client`：
 
 ```python
 ws = websocket.WebSocket()

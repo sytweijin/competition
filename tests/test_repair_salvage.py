@@ -3,7 +3,7 @@
 import json
 
 from app.llm.client import LLMClient
-from app.models.schemas import PlanOutput
+from app.models.schemas import PlanOutput, QAOutput
 
 
 def test_repair_full_plan():
@@ -39,9 +39,60 @@ def test_salvage_empty_returns_none():
 
 
 def test_repair_non_plan_model_returns_none():
-    # _repair_response 仅支持 PlanOutput；其余模型直接放弃（交给上层兜底）
-    from app.models.schemas import QAOutput
+    # 非法内容没有可修复的 assignments，仍返回 None（交给上层兜底）
     assert LLMClient._repair_response('{"x": 1}', QAOutput) is None
+
+
+def test_repair_qa_output_normalizes_legacy_field_names():
+    """Matcher 输出回吐旧术语/字符串支持/百分制分数时应归一化成功。"""
+    payload = {
+        "assignments": [
+            {
+                "task_id": "T1",
+                "task_name": "调研",
+                "主讲": "张三",
+                "主答": "李四",
+                "辅答": "王五、赵六",
+                "匹配度": "85",
+                "reasoning": "技能匹配",
+            },
+            {
+                "id": 2,
+                "name": "设计",
+                "presenter": "李四",
+                "qa_primary": "",
+                "qa_support": ["王五", "王五"],
+                "score": 0.72,
+            },
+        ]
+    }
+    result = LLMClient._repair_response(
+        json.dumps(payload, ensure_ascii=False), QAOutput)
+    assert result is not None
+    assert len(result.assignments) == 2
+    first = result.assignments[0]
+    assert first.task_id == "T1"
+    assert first.presenter == "张三"
+    assert first.qa_primary == "李四"
+    assert first.qa_support == ["王五", "赵六"]
+    assert abs(first.score - 0.85) < 1e-6
+    second = result.assignments[1]
+    assert second.task_id == "2"
+    assert second.task_name == "设计"
+    assert second.qa_support == ["王五"]
+
+
+def test_repair_qa_output_salvages_truncated_assignments():
+    """截断的 Matcher JSON 应抢救出已完整闭合的分工对象。"""
+    raw = '''{
+      "assignments": [
+        {"task_id": "T1", "task_name": "调研", "presenter": "张三", "qa_primary": "李四"},
+        {"task_id": "T2", "task_name": "设计", "presenter": "李四", "qa_primary": "王五"
+    '''
+    result = LLMClient._repair_response(raw, QAOutput)
+    assert result is not None
+    assert [a.task_id for a in result.assignments] == ["T1"]
+    assert result.assignments[0].presenter == "张三"
 
 
 def test_salvage_alternative_array_keys():

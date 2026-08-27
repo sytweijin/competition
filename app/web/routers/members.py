@@ -95,6 +95,19 @@ def edit_members_endpoint(req: MemberEditRequest):
         raise HTTPException(status_code=400, detail="不能删除所有成员")
 
     new_input = fp.input.model_copy(update={"members": new_members})
+    # 移除成员后同步清理模块负责人引用，避免旧模块 assignee 指向已移除成员，
+    # 否则后续"确认最终分工"会因成员校验失败或 KeyError 而 500。
+    new_member_names = {member.name for member in new_members}
+    updated_modules = [
+        module.model_copy(update={
+            "assignee_id": (
+                module.assignee_id
+                if module.assignee_id in new_member_names
+                else None
+            ),
+        })
+        for module in fp.plan.modules
+    ]
     qa_matrix = assign_with_balance(fp.plan, new_members)
 
     assignments_by_task = {item.task_id: item for item in qa_matrix.assignments}
@@ -112,7 +125,10 @@ def edit_members_endpoint(req: MemberEditRequest):
         })
         for task in fp.plan.tasks
     ]
-    updated_plan = fp.plan.model_copy(update={"tasks": updated_tasks})
+    updated_plan = fp.plan.model_copy(update={
+        "tasks": updated_tasks,
+        "modules": updated_modules,
+    })
 
     timeline_assignments = {}
     for item in qa_matrix.assignments:

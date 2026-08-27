@@ -362,7 +362,10 @@ def analyze_image(filename: str, content: bytes) -> str:
 def render_pdf_pages(content: bytes) -> list[bytes]:
     """把 PDF 页面渲染成 PNG，供扫描版 OCR 使用。"""
     try:
-        import fitz
+        try:
+            import pymupdf as fitz  # pymupdf>=1.24 新入口
+        except ImportError:
+            import fitz  # 旧版本兼容
     except ImportError as exc:
         raise ValueError("PDF 渲染组件不可用（pymupdf 未安装）") from exc
     try:

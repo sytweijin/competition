@@ -11,8 +11,8 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.models.schemas import (
     AssignmentInput, CourseInfo, FullPlan, PlanOutput, SubTask,
-    TeamMember, TimelineOutput, QAOutput, QAAssignment, ReportOutput,
-    TaskStatus,
+    ProjectModule, TeamMember, TimelineOutput, QAOutput, QAAssignment,
+    ReportOutput, TaskStatus,
 )
 
 
@@ -72,6 +72,37 @@ def test_member_removal_recomputes():
     # Members list should not contain Bob
     member_names = [m["name"] for m in data["input"]["members"]]
     assert "Bob" not in member_names
+
+
+def test_member_removal_clears_stale_module_owner():
+    """移除成员后，模块负责人引用必须一并清空，避免后续手动分工 500。"""
+    client = TestClient(app)
+    fp = _make_test_plan()
+    fp = fp.model_copy(update={
+        "input": fp.input.model_copy(update={
+            "project_mode": "large_project",
+        }),
+        "plan": fp.plan.model_copy(update={
+            "modules": [
+                ProjectModule(
+                    id="M1", name="后端模块", assignee_id="Bob",
+                    order=1),
+            ],
+            "tasks": [
+                task.model_copy(update={"module_id": "M1"})
+                for task in fp.plan.tasks
+            ],
+        }),
+    })
+    resp = client.post("/api/edit-members", json={
+        "plan": json.loads(fp.model_dump_json()),
+        "removed_members": ["Bob"],
+        "updated_members": {},
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    module = data["plan"]["modules"][0]
+    assert module["assignee_id"] is None
 
 
 def test_member_hours_change_recomputes():

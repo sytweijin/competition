@@ -131,7 +131,8 @@ def test_apply_manual_assignment_persists_module_assignees():
     )
 
 
-def test_legacy_volunteer_role_member_is_not_used_as_module_owner():
+def test_volunteer_can_claim_module_and_subtasks_inherit_owner():
+    """v5.47 产品模型：志愿者可认领模块，其下子任务继承负责人。"""
     fp = _large_full_plan()
     volunteer = TeamMember(
         name="Volunteer A", role="志愿者 / 外部协作者",
@@ -142,11 +143,51 @@ def test_legacy_volunteer_role_member_is_not_used_as_module_owner():
             "members": [*fp.input.members, volunteer],
         }),
     })
-    with pytest.raises(ProjectServiceError):
-        apply_manual_assignment(ManualAssignmentRequest(
-            plan=fp,
-            module_assignees={"M1": "Volunteer A"},
-        ))
+    plan = fp.plan.model_copy(update={
+        "tasks": [
+            task.model_copy(update={"assignee_id": None})
+            for task in fp.plan.tasks
+        ],
+    })
+    fp = fp.model_copy(update={"plan": plan})
+
+    updated = apply_manual_assignment(ManualAssignmentRequest(
+        plan=fp,
+        module_assignees={"M1": "Volunteer A"},
+    ))
+    m1 = next(module for module in updated.plan.modules if module.id == "M1")
+    assert m1.assignee_id == "Volunteer A"
+    assert all(
+        task.assignee_id == "Volunteer A"
+        for task in updated.plan.tasks
+        if task.module_id == "M1" and task.status != "completed"
+    )
+
+
+def test_apply_manual_assignment_stale_module_owner_does_not_crash():
+    """模块负责人指向已移除成员时兜底为未分配，而不是 KeyError 500。"""
+    fp = _large_full_plan()
+    plan = fp.plan.model_copy(update={
+        "tasks": [
+            task.model_copy(update={"assignee_id": None})
+            for task in fp.plan.tasks
+        ],
+        "modules": [
+            module.model_copy(update={"assignee_id": "已移除成员"})
+            for module in fp.plan.modules
+        ],
+    })
+    fp = fp.model_copy(update={"plan": plan})
+
+    updated = apply_manual_assignment(ManualAssignmentRequest(
+        plan=fp,
+    ))
+    # 残留模块负责人被清空，任务保持未分配（或走正常分配路径），不抛异常
+    assert all(
+        module.assignee_id != "已移除成员"
+        for module in updated.plan.modules
+    )
+    assert updated.qa_matrix.assignments
 
 
 def test_apply_manual_assignment_rejects_unknown_module():

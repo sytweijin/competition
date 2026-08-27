@@ -32,15 +32,21 @@ def test_env_example_covers_deployment_variables():
         assert key in env
 
 
-def test_render_config_has_health_and_media_models():
+def test_render_config_is_compliant_minicpm_template():
+    """render.yaml 必须与参赛合规模板一致：仅 MiniCPM-o，无外部模型配置。"""
     render = (ROOT / "render.yaml").read_text(encoding="utf-8")
     assert "healthCheckPath: /api/health" in render
-    assert "APP_VISION_MODEL" in render
-    assert "APP_ASR_MODEL" in render
-    assert "APP_VISION_API_KEY" in render
-    assert "APP_ASR_API_KEY" in render
-    assert "APP_ASR_TRANSCRIPTION_MODE" in render
+    assert "APP_MODEL_MODE" in render
+    assert "minicpm" in render
+    assert "APP_ALLOW_EXTERNAL_MODELS" in render
+    assert "MAP_REALTIME_API_KEY" in render
+    assert "MAP_REALTIME_MODEL" in render
+    assert "ASCEND_OMNI_WS_URL" in render
     assert "S3_BUCKET" in render
+    # 合规模式不得再出现 DeepSeek/DashScope 等外部模型配置
+    assert "LLM_MODEL" not in render
+    assert "APP_VISION_MODEL" not in render
+    assert "APP_ASR_MODEL" not in render
 
 
 def test_rollback_document_exists():

@@ -38,7 +38,7 @@ def test_assign_with_balance_distributes():
     ]
     out = assign_with_balance(plan, members)
     assert len(out.assignments) == 2
-    # 前端任务主讲应是前端哥
+    # 前端任务负责人应是前端哥
     t1 = next(a for a in out.assignments if a.task_id == "T1")
     assert t1.presenter == "前端哥"
     t2 = next(a for a in out.assignments if a.task_id == "T2")

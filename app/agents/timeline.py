@@ -298,7 +298,7 @@ class TimelineAgent(BaseAgent[TimelineOutput]):
         # 内部 CPM 全部用 half-day 整数运算，避免浮点误差。
         def _task_daily_capacity(task_id: str) -> float:
             """根据任务负责人计算每天可用工时。
-            主讲(first assigned)按全产能，其他参与者按0.5折算(部分并行假设)。"""
+            负责人(first assigned)按全产能，其他参与者按0.5折算(部分并行假设)。"""
             assigned = assignments.get(task_id, [])
             if not assigned or not member_daily:
                 return global_daily

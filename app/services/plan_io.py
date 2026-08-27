@@ -156,7 +156,8 @@ def plan_to_csv(plan: FullPlan) -> str:
         ["任务", "计划工时", "实际工时", "偏差", "实际完成"],
         review_rows,
     )
-    return output.getvalue()
+    # UTF-8 BOM：Windows Excel 直接打开中文 CSV 不乱码（ICS 已有 BOM）
+    return "\ufeff" + output.getvalue()
 
 
 def plan_to_ics(plan: FullPlan) -> str:
