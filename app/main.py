@@ -85,7 +85,6 @@ async def admin_auth_middleware(request: Request, call_next):
             "/api/export/docx",
             "/api/export/pdf",
             "/api/chat",
-            "/api/report",
             "/api/interview/materials",
             "/api/interview",
             "/api/interview/chat",

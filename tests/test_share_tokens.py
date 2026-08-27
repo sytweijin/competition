@@ -79,3 +79,31 @@ def test_read_share_link_loads_plan():
 def test_invalid_share_link_is_404():
     client = _client()
     assert client.get("/api/share/does-not-exist").status_code == 404
+
+
+def test_share_readonly_blocks_report_generation():
+    """只读分享令牌不允许触发报告生成：POST /api/report 应被中间件拒绝。"""
+    client = _client()
+    plan = _plan().model_dump(mode="json")
+    saved = client.post("/api/save", json=plan)
+    assert saved.status_code == 200
+    filename = saved.json()["filename"]
+
+    shared = client.post("/api/share", json={"filename": filename})
+    assert shared.status_code == 200
+    token = shared.json()["token"]
+
+    blocked = client.post(
+        "/api/report",
+        json=plan,
+        headers={"X-Share-Token": token},
+    )
+    assert blocked.status_code == 403
+
+    # 只读查询类接口不受影响
+    ok = client.post(
+        "/api/workload",
+        json=plan,
+        headers={"X-Share-Token": token},
+    )
+    assert ok.status_code == 200

@@ -16,6 +16,7 @@ from app.config import MEMORY_DIR
 from app.models.schemas import FullPlan, TaskStatus
 from app.services.notifier import notify_event
 from app.services.project_service import recompute_plan, record_task_actual
+from app.services.audit_store import list_versions, load_version, save_version
 from app.services.report_link import (
     add_report_activity,
     create_report_token,
@@ -77,9 +78,48 @@ def _load_plan(filename: str) -> FullPlan:
             status_code=500, detail=f"方案读取失败：{type(exc).__name__}") from exc
 
 
-def _save_plan(filename: str, plan: FullPlan) -> None:
-    _safe_plan_path(filename).write_text(
-        plan.model_dump_json(indent=2), encoding="utf-8")
+def _stable_plan_json(raw: str) -> str:
+    """去掉每次运行都会变化的 performance 字段后做稳定序列化，用于比对。
+
+    FullPlan 里的 performance（各阶段耗时毫秒数）每次重算都不同，直接比较
+    完整 JSON 会把"重复提交同一状态"误判成实质变更，导致版本树被刷屏。
+    """
+    data = json.loads(raw)
+    data.pop("performance", None)
+    return json.dumps(data, ensure_ascii=False, sort_keys=True)
+
+
+def _save_plan(filename: str, plan: FullPlan, *, summary: str = "") -> None:
+    """写回方案文件，并在版本树里落一条"成员汇报"快照。
+
+    版本树原本只记录工作台手动"保存方案"，成员语音/照片/状态汇报直接覆写
+    文件而不留痕：评审演示版本回滚时看不到汇报过程，且汇报前的状态一旦被
+    覆盖就再也回不去。这里在每次汇报落盘时同步生成快照：
+    - 首次汇报前先落一条"汇报前基线"，保证版本树能回滚到汇报之前；
+    - 与最新版本内容完全一致（剔除 performance）时视为无实质变化，不刷版本。
+    """
+    path = _safe_plan_path(filename)
+    old_raw = path.read_text(encoding="utf-8") if path.exists() else None
+    new_raw = plan.model_dump_json(indent=2)
+    path.write_text(new_raw, encoding="utf-8")
+    try:
+        versions = list_versions(filename)
+        if not versions and old_raw:
+            save_version(
+                json.loads(old_raw), filename,
+                action="成员汇报前基线",
+                summary="成员汇报开始前的方案状态（首次汇报自动生成）")
+            versions = list_versions(filename)
+        if versions:
+            prev = load_version(filename, versions[0]["version_id"])
+            if _stable_plan_json(json.dumps(prev, ensure_ascii=False)) \
+                    == _stable_plan_json(new_raw):
+                return  # 无实质变化（重复提交同状态），不新增版本
+        save_version(
+            json.loads(new_raw), filename,
+            action="成员汇报", summary=summary or "成员更新任务进度/状态")
+    except Exception:
+        logger.exception("成员汇报版本快照保存失败（不影响主流程）")
 
 
 def _task_member_names(plan: FullPlan, task) -> set[str]:
@@ -345,7 +385,11 @@ def _apply_update(
             note=note,
         )
         plan = recompute_plan(plan)
-        _save_plan(filename, plan)
+        _save_plan(
+            filename, plan,
+            summary=(f"{member} 确认 {target_member}「{task.name}」"
+                     f"{'完成' if member_status == 'confirmed' else '状态更新'}"),
+        )
         if member_status == "confirmed":
             notify_event(
                 plan,
@@ -434,7 +478,20 @@ def _apply_update(
         )
 
     plan = recompute_plan(plan)
-    _save_plan(filename, plan)
+    change_parts = []
+    if status:
+        change_parts.append(f"状态→{status}")
+    if actual_hours:
+        change_parts.append(f"上报 {actual_hours:g}h")
+    if photo:
+        change_parts.append("上传交付物照片")
+    if note:
+        change_parts.append("备注")
+    _save_plan(
+        filename, plan,
+        summary=(f"{member} 更新「{task.name}」"
+                 + ("：" + "、".join(change_parts) if change_parts else "")),
+    )
 
     hours_suffix = (
         f"（实际 {actual_hours:g}h）" if actual_hours else "")

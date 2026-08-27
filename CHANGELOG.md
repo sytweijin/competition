@@ -273,6 +273,88 @@ CSV BOM、auth 加盐哈希/会话过期、render 合规模板）；本地昇腾
 与完整版本表；docs 删除 6 个旧课程作业文件及已打勾的"多模态落地改造清单"；
 功能验证清单移除外部模型兜底内容；交接-P2起点 引用同步清理。
 
+### 同步修改：比赛前二轮审查修复——预检脚本 Windows 编码崩溃、成员汇报版本快照、分享只读收紧、memory 测试数据清理（2026-08-27 追加）
+
+**定位：** 对项目做整体质量审查（389 测试基线 + 全链路冒烟）后，修复演示链路真实缺陷并补齐协作闭环留痕：预检脚本在 Windows 中文控制台直接崩溃；成员汇报覆写方案文件不留版本痕迹；分享只读白名单放行报告生成；本地 memory 累积数百份"保存测试"噪音文件。
+
+**审查/修改背景：** 全量冒烟发现 `preflight_demo.py` 的 emoji 输出在 GBK 控制台抛 UnicodeEncodeError；版本树只记录工作台保存，成员语音/照片/状态汇报直接覆写文件导致"版本管理"与协作闭环脱节；分享令牌白名单按"不改数据"放行 `POST /api/report`（会触发 LLM 报告生成，消耗配额）。
+
+#### A. [P1] 预检脚本 Windows 中文控制台编码崩溃
+
+1. **问题：** `scripts/preflight_demo.py` 用 ✅/❌/⚠️ 输出检查结果，中文 Windows 默认 GBK 控制台无法编码这些 emoji，脚本打印第一行就抛 UnicodeEncodeError 并带堆栈退出，预检根本没执行完。
+2. **修改前：** 脚本直接 print emoji，无任何输出编码处理：
+   ```python
+   def ok(text: str) -> None:
+       print(f"{GREEN}✅ {text}{RESET}")
+   ```
+3. **修改后：** 脚本开头强制 stdout/stderr 为 UTF-8：
+   ```python
+   for _stream in (sys.stdout, sys.stderr):
+       try:
+           _stream.reconfigure(encoding="utf-8", errors="replace")
+       except (AttributeError, ValueError):
+           pass
+   ```
+4. **为什么这样改：** Windows 控制台默认用系统代码页（中文系统是 GBK）而源码是 UTF-8，emoji 超出 GBK 可编码范围直接抛异常；reconfigure 是 Python 3.7+ 标准做法，失败静默跳过不影响 Linux/macOS。
+5. **收益：** ① 演示前预检在任何 Windows 中文环境都能完整跑完；② 状态符号正常显示；③ 同类脚本可复用该写法。
+
+#### B. [P2] 成员汇报写入版本树（汇报前基线 + 无实质变化防刷版）
+
+1. **问题：** 版本树只记录工作台手动"保存方案"；成员语音/照片/状态汇报直接覆写 memory 里的方案文件，汇报过程与汇报前状态在版本树中无痕，评审演示"版本回滚"看不到协作演变，且汇报覆盖后无法回退。
+2. **修改前：** `_save_plan` 只写文件：
+   ```python
+   def _save_plan(filename: str, plan: FullPlan) -> None:
+       _safe_plan_path(filename).write_text(
+           plan.model_dump_json(indent=2), encoding="utf-8")
+   ```
+3. **修改后：** 写文件后落版本快照，首次汇报先落"汇报前基线"，剔除 `performance` 字段比对、无实质变化不刷版：
+   ```python
+   def _save_plan(filename: str, plan: FullPlan, *, summary: str = "") -> None:
+       path = _safe_plan_path(filename)
+       old_raw = path.read_text(encoding="utf-8") if path.exists() else None
+       new_raw = plan.model_dump_json(indent=2)
+       path.write_text(new_raw, encoding="utf-8")
+       try:
+           versions = list_versions(filename)
+           if not versions and old_raw:
+               save_version(json.loads(old_raw), filename,
+                            action="成员汇报前基线",
+                            summary="成员汇报开始前的方案状态（首次汇报自动生成）")
+               versions = list_versions(filename)
+           if versions:
+               prev = load_version(filename, versions[0]["version_id"])
+               if _stable_plan_json(json.dumps(prev, ensure_ascii=False)) \
+                       == _stable_plan_json(new_raw):
+                   return
+           save_version(json.loads(new_raw), filename,
+                        action="成员汇报", summary=summary or "成员更新任务进度/状态")
+       except Exception:
+           logger.exception("成员汇报版本快照保存失败（不影响主流程）")
+   ```
+4. **为什么这样改：** 汇报本身就是"协作闭环"的一部分，版本树只记工作台保存会漏掉成员端发生的所有变化；直接比较完整 JSON 会被每次重算都变的 `performance` 字段误判为变更，因此先剔除再比对；快照失败降级为写文件成功，不阻断成员汇报。
+5. **收益：** ① 版本树完整呈现"工作台编辑 + 成员汇报"的演进历史；② 汇报前的状态可回滚；③ 重复提交同状态不刷版本；④ 汇报产生新版本后，工作台保存会正确触发 409 并发提示，与既有并发保护联动。
+
+#### C. [P2] 分享只读白名单收紧：不再放行报告生成
+
+1. **问题：** 分享令牌只读白名单含 `/api/report`，持只读链接者可触发 LLM 报告生成（消耗模型配额），与"只读"语义不符。
+2. **修改前：** `app/main.py` 的 readonly_safe 含 `"/api/report"`。
+3. **修改后：** 从白名单移除该路径；前端在只读模式下报告未生成时直接提示由所有者生成：
+   ```js
+   if(state.shareToken)throw Error('只读分享不生成新报告：请由方案所有者生成报告后重新分享');
+   ```
+4. **为什么这样改：** "只读"应严格限定为查询与查看；报告生成属于"创建内容"操作。已生成的报告仍随方案 JSON 一起展示，分享视图体验不受影响，只是不再代为触发模型调用。
+5. **收益：** ① 只读语义严格化；② 分享链接不再消耗模型配额；③ 未生成报告的分享视图给出明确指引而非 403 白屏。
+
+#### D. [P3] 文档测试数同步 + 仓库杂物归位 + memory 测试数据清理
+
+1. **问题：** AGENTS.md 与《比赛全量备赛手册》仍写旧测试数（352/326，实际 389）；仓库根目录残留 PPT 提取稿与拼图未跟踪；memory/ 累积 600+ 份"保存测试/只读分享测试"计划与同名版本目录，属纯测试噪音。
+2. **修改前：** `AGENTS.md` 要求 "必须 352 passed"；手册写 326；根目录有 `_ppt_text_extract.txt`、`_deck_montage.png`；memory 有 431 份"保存测试" + 204 份"只读分享测试"。
+3. **修改后：** 测试数统一为 389；杂物移入 gitignore 的 `projects/` 工作目录；删除 635 份测试计划文件及对应版本目录，并同步清理 report_tokens/shares/report_notes/acl 中指向已删方案的条目；保留 27 份真实项目方案与运行状态文件。
+4. **为什么这样改：** 提交材料中的测试数必须与实测一致，否则评审会看到数字打架；测试噪音不影响功能但污染演示"方案列表"与版本树，删掉后演示页更干净。
+5. **收益：** ① 文档数字与实测一致；② 仓库根目录干净；③ memory 从 666 份计划收敛到 31 份真实方案，演示与审查都清爽。
+
+**同步修改：** `scripts/preflight_demo.py`、`app/web/routers/report.py`、`app/main.py`、`app/web/static/app.js`（`?v=` → 0da59d7e）、`app/web/templates/index.html`、`AGENTS.md`、`docs/比赛全量备赛手册.md`；新增 2 个回归测试（成员汇报版本树、分享只读拦截报告生成，全量 387 → 389 passed）；memory 测试数据清理为一次性运维操作（非代码文件）。
+
 ### 同步修改：云端/本地守卫按后端隔离，恢复云端语音识别与答辩模拟（2026-08-26 追加）
 
 **定位：** 本地 A3 修复中引入的"客套拦截/防复读/空转标记"被无差别套到云端，

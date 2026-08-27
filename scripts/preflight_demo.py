@@ -21,6 +21,15 @@ import urllib.request
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
+# Windows 中文控制台默认 GBK 编码，无法输出 ✅/❌/⚠️ 会直接 UnicodeEncodeError
+# 崩溃，导致"演示前预检"在打印第一行就带着堆栈退出而不是完成检查。
+# 这里统一把 stdout/stderr 强制为 UTF-8（失败则忽略，不影响其他平台）。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 APP_URL = "http://127.0.0.1:8000"
 A3_HEALTH_URL = "http://127.0.0.1:28099/health"
 

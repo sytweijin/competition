@@ -138,6 +138,72 @@ async def test_report_link_state_and_update(saved_plan):
 
 
 @pytest.mark.asyncio
+async def test_report_update_creates_version_snapshot(saved_plan):
+    """成员汇报写入版本树：首次自动落基线、实质更新落快照、重复提交不刷版。"""
+    from app.services.audit_store import AUDIT_DIR, VERSION_DIR, list_versions
+    import shutil
+
+    # 先清空该方案的历史版本树，保证断言确定，且不依赖用例执行顺序
+    shutil.rmtree(VERSION_DIR / TEST_PLAN, ignore_errors=True)
+    try:
+        (AUDIT_DIR / f"{TEST_PLAN}.jsonl").unlink()
+    except OSError:
+        pass
+
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            token = await _make_token(client)
+
+            # 首次实质更新：版本树应出现"成员汇报前基线" + "成员汇报"两条
+            up = await client.post("/api/report/update", json={
+                "token": token,
+                "task_id": "T1",
+                "status": "in_progress",
+                "actual_hours": 2.0,
+                "note": "开始做",
+            })
+            assert up.status_code == 200
+            versions = list_versions(TEST_PLAN)
+            assert [v["action"] for v in versions] == [
+                "成员汇报", "成员汇报前基线"]
+            first_count = len(versions)
+
+            # 重复提交同一状态（无实质变化）：不应新增版本
+            noop = await client.post("/api/report/update", json={
+                "token": token,
+                "task_id": "T1",
+                "status": "in_progress",
+                "note": "重复确认",
+            })
+            assert noop.status_code == 200
+            assert len(list_versions(TEST_PLAN)) == first_count
+
+            # 再次实质更新（改状态/工时）：应新增一条"成员汇报"
+            up2 = await client.post("/api/report/update", json={
+                "token": token,
+                "task_id": "T1",
+                "status": "completed",
+                "actual_hours": 4.0,
+                "note": "完成了",
+            })
+            assert up2.status_code == 200
+            versions3 = list_versions(TEST_PLAN)
+            assert len(versions3) == first_count + 1
+            assert versions3[0]["action"] == "成员汇报"
+            assert "张三" in versions3[0]["summary"]
+    finally:
+        # 无论断言成败都清理本测试产生的版本快照与审计记录
+        shutil.rmtree(VERSION_DIR / TEST_PLAN, ignore_errors=True)
+        try:
+            (AUDIT_DIR / f"{TEST_PLAN}.jsonl").unlink()
+        except OSError:
+            pass
+
+
+@pytest.mark.asyncio
 async def test_report_voice_parses_action(saved_plan, monkeypatch):
     import app.services.media_analysis as media
     import app.services.realtime_client as rt
