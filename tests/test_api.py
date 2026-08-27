@@ -106,6 +106,11 @@ async def test_analyze_files_returns_per_file_statuses(client, monkeypatch):
     assert by_name["损坏.pdf"]["status"] == "unreadable"
     assert by_name["超大.txt"]["status"] == "too_large"
     assert by_name["录音.mp3"]["status"] == "needs_confirmation"
+    # 逐文件文本只包含成功提取的文件，供前端增量合并
+    assert "要求.txt" in payload["texts"]
+    assert "校园调研报告" in payload["texts"]["要求.txt"]
+    assert "损坏.pdf" not in payload["texts"]
+    assert "超大.txt" not in payload["texts"]
 
 
 @pytest.mark.asyncio

@@ -104,6 +104,7 @@ async def analyze_files(files: list[UploadFile] = File(...), background: str = F
     """提取文件文字后汇总分析；仅记录文件元数据，不落盘、不输出原文日志。"""
     from app.file_analysis import MAX_FILE_SIZE, analyze_locally
     texts, metadata, errors = [], [], []
+    texts_by_name: dict[str, str] = {}
     for upload in files[:8]:
         raw = await upload.read(MAX_FILE_SIZE + 1)
         if len(raw) > MAX_FILE_SIZE:
@@ -117,6 +118,9 @@ async def analyze_files(files: list[UploadFile] = File(...), background: str = F
             text = await asyncio.to_thread(
                 _cached_extract_text, upload.filename or "upload", raw)
             texts.append(text)
+            # 返回逐文件文本，供前端增量合并：新增一条需求时，旧文件无需
+            # 重新上传，把已合并文本作为 background 传给后端即可。
+            texts_by_name[upload.filename or "upload"] = text[:60000]
             metadata.append({
                 "name": upload.filename,
                 "size": len(raw),
@@ -134,7 +138,12 @@ async def analyze_files(files: list[UploadFile] = File(...), background: str = F
     # 文件阶段只做本地提取、清理和事实归类；随后 Planner 只调用一次 LLM。
     # 避免“文件分析 LLM + 任务拆解 LLM”串行造成一分钟以上等待。
     analysis = analyze_locally(merged)
-    return {"files": metadata, "errors": errors, "analysis": analysis}
+    return {
+        "files": metadata,
+        "errors": errors,
+        "analysis": analysis,
+        "texts": texts_by_name,
+    }
 
 
 @router.post("/interview/materials")
