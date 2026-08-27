@@ -152,6 +152,13 @@ VOICE_CHAT_INSTRUCTION = (
     "不要以'你说的是''你的问题是''你提到'等开头，直接给出自然、简洁的回答。"
 )
 
+VOICE_REQUIREMENT_INSTRUCTION = (
+    "用户用语音补充项目/答辩需求。请理解用户想表达的需求要点，"
+    "整理成简洁的中文要点（不超过几行）："
+    "不要转写原话，不要复述，不要客套，不要提问，不要输出思考过程，"
+    "只输出整理后的需求要点。"
+)
+
 class RealtimeChatRequest(BaseModel):
     messages: list[dict] = Field(
         default_factory=list,
@@ -341,15 +348,13 @@ async def realtime_voice_chat(
 
 @router.post("/realtime/voice-requirement")
 async def realtime_voice_requirement(file: UploadFile = File(...)):
-    """语音需求转写：把用户的语音原话逐字转成文字，供加入答辩稿/评委关注点。
+    """语音需求输入：本地逐字转写；云端保持"整理需求要点"行为。
 
-    v7.0 曾改为"模型整理需求要点"（本地转写指令被当对话回答），但实测本地
-    连"整理要点"也会被当成对话回答（输出"您可以从以下几个角度入手…"建议）。
-    2026-08-27 改回逐字转写，并复用配置页同一套音频转写链路
-    （audio_transcribe_text：本地 12 秒分片 + 乱码/客套守卫 + 重试），
-    两端行为一致：返回用户原话，而不是模型的整理或回答。
+    本地 A3 实测会把"整理要点/转写"指令当对话回答（输出"您可以从以下几个
+    角度入手…"建议），因此本地复用配置页同款 audio_transcribe_text 逐字转写
+    链路（12 秒分片 + 乱码/客套守卫 + 重试）；云端 MiniCPM-o 行为正常
+    （返回需求要点），保持原逻辑不变（2026-08-27 按后端隔离）。
     """
-    from app.services.media_analysis import audio_transcribe_text
 
     if not (MAP_REALTIME_API_KEY or ASCEND_OMNI_WS_URL):
         raise HTTPException(
@@ -360,20 +365,48 @@ async def realtime_voice_requirement(file: UploadFile = File(...)):
     if len(raw) > MAX_TRANSCRIBE_SIZE:
         raise HTTPException(status_code=413, detail="录音文件超过 15MB 限制")
     filename = file.filename or "语音需求.webm"
-    try:
-        text = await asyncio.to_thread(
-            audio_transcribe_text, filename, raw, False)
-    except ValueError as exc:
-        hint = "语音转写失败"
-        if ASCEND_OMNI_WS_URL:
-            hint += (
-                "：本地昇腾未返回有效转写文本（模型可能把转写指令当成了对话），"
-                "请重试或改用云端后端（临时注释 .env 中 ASCEND_OMNI_WS_URL）"
+    if ASCEND_OMNI_WS_URL:
+        from app.services.media_analysis import audio_transcribe_text
+
+        try:
+            text = await asyncio.to_thread(
+                audio_transcribe_text, filename, raw, False)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "语音转写失败：本地昇腾未返回有效转写文本"
+                    "（模型可能把转写指令当成了对话），请重试或改用云端后端"
+                    "（临时注释 .env 中 ASCEND_OMNI_WS_URL）"
+                    f"（{exc}）"
+                ),
             )
-        raise HTTPException(status_code=502, detail=f"{hint}（{exc}）")
-    text = (text or "").strip()
+        text = (text or "").strip()
+        if not text:
+            raise HTTPException(status_code=502, detail="未能转写到语音内容")
+        return {"text": text}
+
+    # 云端：保持原有"整理需求要点"行为（实测正常）
+    from app.services.media_analysis import _decode_audio_to_pcm16k
+    from app.services.omni_chat import understand_audio
+
+    try:
+        pcm = await asyncio.to_thread(_decode_audio_to_pcm16k, raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    audio_b64 = base64.b64encode(pcm).decode("utf-8")
+    try:
+        result = await understand_audio(
+            audio_b64,
+            "",
+            VOICE_REQUIREMENT_INSTRUCTION,
+            max_new_tokens=512,
+        )
+    except RealtimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    text = (result.text or "").strip()
     if not text:
-        raise HTTPException(status_code=502, detail="未能转写到语音内容")
+        raise HTTPException(status_code=502, detail="未能理解语音需求")
     return {"text": text}
 
 

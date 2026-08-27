@@ -1183,15 +1183,16 @@ async def test_realtime_chat_local_garbage_retries_with_bare_question(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_voice_requirement_returns_verbatim_transcript(monkeypatch):
-    """答辩语音需求：返回逐字转写原话，而不是模型的整理或回答。"""
+async def test_voice_requirement_local_returns_verbatim_transcript(monkeypatch):
+    """本地答辩语音需求：返回逐字转写原话，而不是模型的整理或回答。"""
     import app.services.media_analysis as media
     import app.web.routers.realtime as realtime_router
 
     monkeypatch.setattr(
-        realtime_router, "MAP_REALTIME_API_KEY", "test-key")
+        realtime_router, "MAP_REALTIME_API_KEY", "")
     monkeypatch.setattr(
-        realtime_router, "ASCEND_OMNI_WS_URL", "")
+        realtime_router, "ASCEND_OMNI_WS_URL",
+        "ws://127.0.0.1:28099/backend")
 
     def fake_transcribe(filename, raw, labeled):
         return "老师关注选题的切入点新颖性、论证逻辑的顺畅和严密性"
@@ -1209,6 +1210,48 @@ async def test_voice_requirement_returns_verbatim_transcript(monkeypatch):
     assert resp.status_code == 200
     assert resp.json()["text"] == (
         "老师关注选题的切入点新颖性、论证逻辑的顺畅和严密性")
+
+
+@pytest.mark.asyncio
+async def test_voice_requirement_cloud_returns_understanding(monkeypatch):
+    """云端答辩语音需求：保持原有"整理需求要点"行为（转写 → 理解）。"""
+    import app.services.media_analysis as media
+    import app.services.omni_chat as omni_chat
+    import app.services.realtime_client as rt
+    import app.web.routers.realtime as realtime_router
+
+    monkeypatch.setattr(
+        realtime_router, "MAP_REALTIME_API_KEY", "test-key")
+    monkeypatch.setattr(
+        realtime_router, "ASCEND_OMNI_WS_URL", "")
+    monkeypatch.setattr(omni_chat, "ASCEND_OMNI_WS_URL", "")
+    call_count = [0]
+
+    def fake_decode(content):
+        return b"pcm"
+
+    async def fake_chat(self, **kwargs):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return RealtimeChatResult(text="我需要重点围绕创新点提问")
+        return RealtimeChatResult(
+            text="需求要点：请评委重点围绕创新点与技术架构提问。")
+
+    monkeypatch.setattr(media, "_decode_audio_to_pcm16k", fake_decode)
+    monkeypatch.setattr(rt.RealtimeClient, "chat", fake_chat)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/api/realtime/voice-requirement",
+            files={"file": ("v.webm", b"fake-audio", "audio/webm")},
+        )
+    assert resp.status_code == 200
+    assert resp.json()["text"] == (
+        "需求要点：请评委重点围绕创新点与技术架构提问。")
+    assert call_count[0] == 2  # 云端两步：转写 → 理解
 
 
 @pytest.mark.asyncio
