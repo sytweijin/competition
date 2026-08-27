@@ -15,6 +15,176 @@
 llama-omni-server 的能力边界（whisper 位置编码越界、分条多轮消息被忽略、指令遵循差），
 应用层通过分片/摊平/校验在边界内规避；同时审计发现两处应用层真实 bug。
 
+### 同步修改：状态双端同步 + 版本策略回退——负责人行跟随、阻塞传播、撤回回退、主页面改状态落盘、版本仅保存时生成（2026-08-27 追加）
+
+**定位：** 打通主页面（任务计划）与成员汇报页的状态双向一致：成员上报推动任务状态（含阻塞传播、撤回回退），主页面改任务状态后自动落盘、汇报页负责人行跟随；同时回退"状态变更自动生成版本"的过度设计——版本树只保留"保存方案"检查点，不再被每次状态微调刷屏。
+
+**审查/修改背景：** 用户实测发现四类问题并明确产品预期：① 协作者报阻塞不传播到任务整体状态；② 主页面改状态不落盘、汇报页看不到，且负责人行被 notes 旧上报卡住；③ 协作者把"进行中"改回"待开始"后任务永远卡在"进行中"；④ 版本树随每次状态变更滚动、迭代过快且难以区分，用户确认"保存方案已保存成员进度，状态微调没必要再迭代版本"。
+
+#### A. [P1] 协作者上报阻塞未传播到任务整体状态
+
+1. **问题：** 协作者报 blocked 时任务状态不变（pending 保持 pending、in_progress 保持 in_progress），主页面显示的"整体状态"不代表真实进度；已完成任务被协作者改回阻塞时也只回退"进行中"而非"阻塞"。
+2. **修改前：** 协作者分支只处理"推动进行中"与"已完成回退"，blocked 被忽略：
+   ```python
+   else:
+       if current == "pending":
+           if status in ("in_progress", "completed"):
+               task.status = TaskStatus("in_progress")
+       elif current == "completed" and status in (
+               "pending", "in_progress", "blocked"):
+           task.status = TaskStatus("in_progress")
+   ```
+3. **修改后：** 阻塞优先，任何成员报 blocked 任务整体立即置为阻塞；已完成任务被改回阻塞视为回退阻塞：
+   ```python
+   else:
+       if status == "blocked":
+           if current == "completed":
+               reverted = True
+               if not note:
+                   note = ("报告阻塞（任务已由负责人确认完成，"
+                           "任务状态已回退为阻塞，等待负责人重新处理）")
+           task.status = TaskStatus("blocked")
+       elif current == "pending":
+           if status in ("in_progress", "completed"):
+               task.status = TaskStatus("in_progress")
+       elif current == "completed" and status in ("pending", "in_progress"):
+           task.status = TaskStatus("in_progress")
+           reverted = True
+   ```
+4. **为什么这样改：** 任务状态是"整体状态"，任何成员阻塞都会卡住整体交付，阻塞应优先传播；completed→blocked 是回退为阻塞而非进行中，更准确反映现状。
+5. **收益：** ① 主页面/汇报页显示的任务状态反映真实进度；② 阻塞优先不丢失；③ 通知与备注区分"回退阻塞/回退进行中"。
+
+#### B. [P1] 协作者把"进行中"改回"待开始"时任务卡死
+
+1. **问题：** 协作者报 in_progress 会把任务从 pending 向上推到 in_progress，但改回 pending 时没有任何分支匹配，任务永远卡在"进行中"，负责人行也同步卡住。
+2. **修改前：** in_progress→pending 静默忽略。
+3. **修改后：** 协作者改回 pending 时，若没有其他成员仍活跃（进行中/完成/已确认/阻塞），任务回退 pending：
+   ```python
+   elif current == "in_progress" and status == "pending":
+       if not _other_members_active(plan, filename, task, member):
+           task.status = TaskStatus("pending")
+           if not note:
+               note = "改回待开始（自己的部分暂停）"
+   ```
+   `_other_members_active` 遍历任务成员（排除当前协作者）的最新活动状态，未上报按"未开始"算。
+4. **为什么这样改：** 任务状态是"成员进度的聚合快照"：推动者撤回且无人继续时任务回到待开始；负责人或其他成员仍在做则保持进行中，避免误拉回。
+5. **收益：** ① 状态不再卡死；② 负责人行/主页面与成员上报一致；③ 有活跃成员时不会误回退。
+
+#### C. [P2] 主页面改状态自动落盘 + 任务徽章同步 + 全员确认
+
+1. **问题：** 主页面改状态只 recompute 不落盘，汇报页读磁盘看不到；直接把任务改 completed 可绕过"全员完成"不变量。
+2. **修改前：** `bindStatusControls` 仅 `jsonRequest('/api/recompute', ...)`，不保存、不校验成员状态。
+3. **修改后：** 新增 `POST /api/task-status`：主页面改状态直接落盘（任务徽章在汇报页同步），completed 时若存在未完成上报的成员返回 400 + 成员清单，前端确认后带 confirm_members 重发，把这些成员写为 confirmed（保留其上报历史）再完成。
+4. **为什么这样改：** 状态必须持久化才能被汇报页/分享页读取；"completed ⟺ 全员完成"消除"已完成+成员阻塞"矛盾组合；强制完成 = 管理员/负责人确认所有参与成员。
+5. **收益：** ① 主页面改状态后汇报页任务徽章立刻可见；② 杜绝矛盾组合；③ 版本树记录保存检查点。
+
+#### G. [P1] 成员行状态不再被任务整体状态劫持
+
+1. **问题：** 负责人行此前直接显示任务整体状态，导致协作者报阻塞时负责人行也显示阻塞、主页面改状态时负责人行被强加为进行中——成员行不再代表成员自己的上报，用户看到"负责人没动却阻塞/进行中"的矛盾。
+2. **修改前：** `_task_members_detail` 负责人行 `status = task_status`。
+3. **修改后：** 负责人行与协作者行同规则——只显示自己最近上报状态，从未上报显示"未开始"：
+   ```python
+   if role == "负责人":
+       status = act["status"] if act and act["status"] else "pending"
+       awaiting = False
+   ```
+   主页面强制完成（`/api/task-status` completed）时，确认范围从"仅协作者"扩展为"所有有未完成上报记录的成员（含负责人）"，保证任务完成时每个参与成员行都有明确状态。
+4. **为什么这样改：** 任务徽章是整体状态（聚合：阻塞优先、主页面权威、全员确认），成员行是个人进度——两者职责不同，成员行不应被整体状态强加；负责人本人在汇报页上报时其状态即任务状态（is_owner 直接设置），上报后两处仍一致。
+5. **收益：** ① 协作者报阻塞不再把负责人行带成阻塞；② 主页面改状态不再强加负责人行；③ 每个成员行如实反映自己的上报；④ 任务整体状态仍由徽章正确表达。
+
+#### H. [P1] 解除阻塞同样需要确认（与"改成完成"对称）
+
+1. **问题：** 主页面把任务从"阻塞"改成"进行中/待开始"，等于单方面否定成员的阻塞报告，但没有任何确认——成员行还挂着阻塞、任务却显示进行中，用户看到"任务进行中+协作者仍阻塞"的矛盾。
+2. **修改前：** `task-status` 只对 completed 做全员确认，解除阻塞直接改。
+3. **修改后：** 任务当前为 blocked 且改为 in_progress/pending 时，若有成员仍报阻塞（含负责人），返回 400 + 阻塞成员清单；前端确认后带 confirm_members 重发，把这些成员写为处理状态（in_progress/pending，备注"主页面确认阻塞已处理（原上报：阻塞）"），活动历史保留曾报阻塞：
+   ```python
+   elif (req.status in ("in_progress", "pending")
+           and _status_str(task.status) == "blocked" and filename):
+       blocked_names = {item["name"] for item in blocked}
+       missing = blocked_names - set(req.confirm_members)
+       if missing:
+           return JSONResponse(status_code=400, content={
+               "detail": detail, "blocked_members": blocked})
+       for name in req.confirm_members:
+           if name in blocked_names:
+               add_report_activity(filename, task.id, name,
+                   status=req.status,
+                   note="主页面确认阻塞已处理（原上报：阻塞）")
+   ```
+4. **为什么这样改：** "完成需全员确认、解除阻塞需确认处理"两条不变量对称——任何推翻成员上报状态的主页面操作都必须显式确认，不能静默覆盖；确认后成员行与任务状态一致，历史仍可追溯。
+5. **收益：** ① 解除阻塞有明确提示与确认，不再静默覆盖成员报告；② 确认后成员行与任务状态一致，矛盾消失；③ 活动历史完整（曾报阻塞→管理员确认处理）。
+
+#### I. [P1] 大型项目：已确认志愿者纳入"完成需全员确认"
+
+1. **问题：** 大型项目里已确认志愿者是招募并认领任务的正式成员，但主页面完成任务时只要求"有未完成上报记录"的成员确认——志愿者从未上报就不在清单里，任务完成后志愿者行悬挂"待开始"，负责人还需要另外手动代确认。
+2. **修改前：** `_unfinished_member_list` 对从未上报的成员一律不要求确认。
+3. **修改后：** 已确认志愿者即使从未上报也纳入确认清单（未上报按"待开始"）：
+   ```python
+   volunteer_names = {
+       v.name for v in (plan.volunteer_pool or [])
+       if v.task_id == task.id and v.status == "已确认"
+   }
+   ...
+   if not act or not act.get("status"):
+       if name in volunteer_names:
+           out.append({"name": name, "status": "pending"})
+       continue
+   ```
+   主页面完成任务时确认清单包含该志愿者，确认后写 confirmed 活动；负责人代确认（汇报页"标记完成"按钮）接口不变，仍可用。
+4. **为什么这样改：** "completed ⟺ 全员完成"对大型项目同样成立，且志愿者是任务级认领成员（`_task_member_names` 已包含），完成时必须显式确认其交付，否则出现"任务完成+志愿者待开始"的悬挂矛盾。
+5. **收益：** ① 主页面完成任务时志愿者进入确认清单，不再悬挂；② 确认后志愿者行显示"已确认"，历史完整；③ 与小型项目"有上报才确认"的差异明确化为"志愿者认领即需确认"。
+
+#### J. [P1] 负责人代确认成员后任务状态未同步
+
+1. **问题：** 负责人代确认成员（target_member 分支）只写 confirmed 活动、不更新任务状态——已完成任务被成员改回"进行中"后，负责人代确认该成员，主页面任务仍显示"进行中"，汇报页与主页面不同步。
+2. **修改前：** `_apply_update` 的 target_member 分支 `add_report_activity(...)` 后直接 `recompute_plan`，任务状态不变。
+3. **修改后：** 代确认成功（confirmed）后，若负责人自己也已完成（completed/confirmed）且其余成员无未完成记录，任务整体自动回已完成：
+   ```python
+   if member_status == "confirmed":
+       owner = task.assignee_id
+       owner_done = False
+       for act in reversed(get_report_activities(filename, task_id)):
+           if act["member"] == owner:
+               owner_done = str(act["status"]) in ("completed", "confirmed")
+               break
+       if owner_done and not _unfinished_member_list(plan, filename, task):
+           task.status = TaskStatus("completed")
+   ```
+4. **为什么这样改：** 任务完成的不变量是"负责人完成 + 全员完成/已确认"；代确认是完成闭环的一环，确认后应重新评估整体状态，否则主页面/汇报页不同步。负责人自己未完成时（无 completed/confirmed 记录）不自动完成，避免"任务完成但负责人未动"。
+5. **收益：** ① 负责人代确认成员后主页面任务状态同步；② 已完成任务被成员改回后再代确认可自动回已完成；③ 负责人未完成时不误判完成。
+
+#### D. [P1] 主页面版本号过期后 409 死锁
+
+1. **问题：** 成员汇报页每次操作都会生成新版本，主页面持有旧 base_version 后被 409 拦截，前端只弹错不恢复，陷入"改不了→保存不了"死循环。
+2. **修改前：** `bindStatusControls` 与 `savePlan` 的 catch 只 `showNotice(e.message)`。
+3. **修改后：** `jsonRequest` 把 HTTP 状态码挂到错误对象（`err.status`），两处 catch 识别 409 后确认重载最新版本；新增 `reloadLatestPlan()` 调 `loadPlan(state.lastSavedFilename)` 刷新版本号与全量状态。
+4. **为什么这样改：** 409 表示磁盘已有成员更新，唯一正确的恢复路径是重载最新版本；与既有 `syncPlanFromDisk` 的聚焦同步形成双保险。
+5. **收益：** ① 死锁解除；② 未保存修改在确认后才丢弃；③ 与版本策略回退后（状态变更不再滚动版本）配合，409 触发频率大幅下降。
+
+#### E. [P2] 版本策略回退：状态变更不再自动生成版本
+
+1. **问题：** 成员汇报/主页面改状态每次都会生成版本（`_save_plan` 自动落版本），版本树被状态微调刷屏、迭代过快且难以区分；用户确认"保存方案已保存成员进度，状态微调没必要再迭代版本"。
+2. **修改前：** `_save_plan` 写文件后自动 `save_version`（含"成员汇报前基线"、防刷版比对），主页面 `task-status` 也生成"主页面状态变更"版本。
+3. **修改后：** `_save_plan` 只写方案文件（保证双端同步）；版本树只记录用户主动"保存方案"（`/api/save`）的检查点：
+   ```python
+   def _save_plan(filename: str, plan: FullPlan) -> None:
+       """写回方案文件，保证成员汇报页与主页面读到最新状态。"""
+       _safe_plan_path(filename).write_text(
+           plan.model_dump_json(indent=2), encoding="utf-8")
+   ```
+4. **为什么这样改：** 版本树的正确语义是"用户认可的检查点"（保存方案），成员操作流水由汇报页 activities（谁、什么时候、报了什么）承担，版本树重复记录状态微调只会膨胀且不可区分。
+5. **收益：** ① 版本树只含保存方案，数量可控、语义清晰；② 成员操作历史仍在汇报页 activities 可见。
+
+#### F. [P1] 内容指纹并发校验：成员汇报不再生成版本后防止主页面覆盖
+
+1. **问题：** 回退"状态变更自动生成版本"后，base_version 只随"保存方案"前进，成员汇报落盘不再推进版本号——主页面基于过期数据改状态/保存时校验通过，会把成员刚汇报的状态与工时直接覆盖冲掉（实测：汇报实际工时 3h 被主页面旧数据改状态清空）。
+2. **修改前：** `task-status` 与 `/api/save` 只做 base_version 校验，无法感知成员汇报落盘。
+3. **修改后：** 新增方案内容指纹（sha1，剔除 performance/version 后键排序序列化）：`GET /api/plan-fingerprint` 返回当前磁盘指纹；主页面加载/保存/同步时维护 `state.planFingerprint`；`task-status` 与 `/api/save` 写前校验"前端基线指纹 == 磁盘当前指纹"，不等即 409，前端确认后自动重载最新版本。
+4. **为什么这样改：** 并发保护的语义应从"版本号是否前进"改为"磁盘内容是否与前端所见一致"——内容指纹精确检测成员汇报落盘，且不引入版本膨胀；指纹只由后端计算，前端存返回值，无哈希不一致问题。
+5. **收益：** ① 成员汇报的进度/工时不会被主页面过期操作覆盖；② 无版本膨胀；③ 与既有 409 自动重载配合，冲突可一键恢复。
+
+**同步修改：** `app/web/routers/report.py`（负责人行、阻塞传播、撤回回退、`/api/task-status`、`_save_plan` 去版本化、指纹并发校验、解除阻塞确认、主页面改状态写负责人记录、已确认志愿者纳入完成确认、负责人代确认后任务状态同步）、`app/services/plan_io.py`（`plan_fingerprint`）、`app/web/routes.py`（`GET /api/plan-fingerprint`、`/api/save` 指纹校验）、`app/web/static/app.js`（`?v=` → 2cd0dce5，`err.status`、`reloadLatestPlan`、两处 409 处理、`bindStatusControls` 改走 `task-status` 且不再预改内存状态、`planFingerprint` 维护、解除阻塞确认）、`app/web/templates/index.html`、`tests/test_report.py`（新增 10 个用例、改造 2 个用例：阻塞传播、撤回回退×2、强制完成确认、解除阻塞确认、志愿者纳入完成确认、代确认后任务回完成、常规改状态不生成版本、错误版本 409、指纹冲突 409、成员汇报不生成版本，全量 389 → 399 passed）、`AGENTS.md` 等 5 份文档测试数同步。
+
 ### 同步修改：比赛前整体审查修复——模块负责人 KeyError/志愿者认领回归、Matcher JSON 修复、交付配置与文档对齐（2026-08-27 追加）
 
 **定位：** 比赛提交前的整体审查收尾：修复大型项目"确认最终分工"在志愿者认领模块/旧数据下

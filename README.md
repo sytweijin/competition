@@ -165,7 +165,7 @@ python -m app.main        # 默认 http://127.0.0.1:8000
 ## 验证与测试
 
 ```bash
-# 全量自动化测试（389 passed）
+# 全量自动化测试（399 passed）
 python -m pytest tests/ -q
 
 # 演示前一键预检（应用 / 后端 / A3 health / MiniCPM-o 暖机）
@@ -196,7 +196,7 @@ app/
 ├── services/                # project_service / realtime_client / omni_chat / media_analysis / report
 ├── llm/                     # LLM 客户端（合规模式仅 MiniCPM-o）+ 提示词
 └── web/                     # FastAPI 路由 + 原生前端（index.html / app.js）
-tests/                       # 389 项自动化测试
+tests/                       # 399 项自动化测试
 docs/                        # 项目说明、复现文档、部署指南、演示脚本
 scripts/                     # 演示预检、A3 冒烟、模型下载
 ```

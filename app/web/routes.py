@@ -578,6 +578,7 @@ async def save_plan(
     plan: FullPlan,
     filename: str = "",
     base_version: str = "",
+    base_fingerprint: str = "",
 ):
     """保存计划到 memory 目录。"""
     MEMORY_DIR.mkdir(parents=True, exist_ok=True)
@@ -607,6 +608,14 @@ async def save_plan(
                 status_code=409,
                 detail="方案已被其他人更新，请先载入最新版本再保存",
             )
+    if filename and base_fingerprint:
+        from app.services.plan_io import plan_fingerprint
+        if filepath.exists() and plan_fingerprint(
+                filepath.read_text(encoding="utf-8")) != base_fingerprint:
+            raise HTTPException(
+                status_code=409,
+                detail="方案已被其他人更新（如成员汇报），请刷新后再保存",
+            )
     filepath.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
     if username:
         if existing:
@@ -626,7 +635,14 @@ async def save_plan(
     except Exception:
         pass
     logger.info("Plan saved to %s", filepath)
-    return {"status": "ok", "filename": filename, "version_id": version_id}
+    from app.services.plan_io import plan_fingerprint
+    return {
+        "status": "ok",
+        "filename": filename,
+        "version_id": version_id,
+        "fingerprint": plan_fingerprint(
+            filepath.read_text(encoding="utf-8")),
+    }
 
 
 @router.get("/plans")
@@ -832,6 +848,23 @@ async def load_plan(request: Request, filename: str):
             raise HTTPException(status_code=403, detail="无权查看该方案")
         data = json.loads(filepath.read_text(encoding="utf-8"))
         return data
+    except HTTPException:
+        raise
+
+
+@router.get("/plan-fingerprint")
+async def plan_fingerprint_endpoint(request: Request, filename: str):
+    """返回方案当前内容的并发指纹（sha1），供前端写操作前校验。"""
+    try:
+        filepath = _safe_filepath(filename)
+        if not filepath.exists():
+            raise HTTPException(status_code=404, detail="Plan not found")
+        username = getattr(request.state, "username", None)
+        if auth_enabled() and not can_read(username, filename):
+            raise HTTPException(status_code=403, detail="无权查看该方案")
+        from app.services.plan_io import plan_fingerprint
+        return {"fingerprint": plan_fingerprint(
+            filepath.read_text(encoding="utf-8"))}
     except HTTPException:
         raise
 

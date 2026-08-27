@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
+import json
 import re
 import zipfile
 import unicodedata
@@ -11,6 +13,20 @@ from datetime import date, datetime, timedelta, timezone
 from xml.sax.saxutils import escape
 
 from app.models.schemas import FullPlan, PlanOutput, ProjectModule, SubTask
+
+
+def plan_fingerprint(raw: str) -> str:
+    """计算方案内容的稳定指纹（sha1），用于并发冲突检测。
+
+    剔除每次重算都会变化的 performance 与版本号字段，再做键排序序列化，
+    保证"内容相同则指纹相同"。指纹只由后端计算，前端存储后端返回值，
+    不存在前后端哈希算法不一致的问题。
+    """
+    data = json.loads(raw)
+    data.pop("performance", None)
+    data.pop("version", None)
+    normalized = json.dumps(data, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha1(normalized.encode("utf-8")).hexdigest()
 
 
 def _as_date(value) -> date | None:

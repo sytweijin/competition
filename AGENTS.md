@@ -77,7 +77,7 @@
 
 3. **Unicode 转义排查**：JS 字符串中不能使用 `\u0022` 表示双引号，必须用 `\"`。`\uXXXX` 只在 HTML 层面有效，在 JS 源码中会被提前解析破坏字符串边界。
 
-4. **运行全部测试**：`python -m pytest tests/ -q`，必须 389 passed。
+4. **运行全部测试**：`python -m pytest tests/ -q`，必须 399 passed。
    conftest 已为 legacy 模式打桩 `LLM_API_KEY`，无需配置任何密钥即可复现。
 
 **以上 4 步全部通过才能提交。改完不验证就提交 = 极大概率引入 404 或页面无响应 bug。**

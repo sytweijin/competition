@@ -10,13 +10,13 @@ from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from app.config import MEMORY_DIR
 from app.models.schemas import FullPlan, TaskStatus
 from app.services.notifier import notify_event
 from app.services.project_service import recompute_plan, record_task_actual
-from app.services.audit_store import list_versions, load_version, save_version
+from app.services.audit_store import list_versions
 from app.services.report_link import (
     add_report_activity,
     create_report_token,
@@ -59,6 +59,21 @@ class ReportUpdateRequest(BaseModel):
     )
 
 
+class TaskStatusRequest(BaseModel):
+    plan: FullPlan
+    task_id: str = Field(..., min_length=1)
+    status: str = Field(..., description="pending/in_progress/completed/blocked")
+    confirm_members: list[str] = Field(
+        default_factory=list,
+        description="强制完成时一并确认的成员姓名",
+    )
+    filename: str = Field(
+        default="", description="已保存的方案文件名（空则不落盘）"
+    )
+    base_version: str = Field(default="", description="并发校验用版本号")
+    base_fingerprint: str = Field(default="", description="并发校验用内容指纹")
+
+
 def _safe_plan_path(filename: str) -> Path:
     safe = Path(filename).name
     if not safe or safe in (".", "..") or not safe.endswith(".json"):
@@ -78,48 +93,14 @@ def _load_plan(filename: str) -> FullPlan:
             status_code=500, detail=f"方案读取失败：{type(exc).__name__}") from exc
 
 
-def _stable_plan_json(raw: str) -> str:
-    """去掉每次运行都会变化的 performance 字段后做稳定序列化，用于比对。
+def _save_plan(filename: str, plan: FullPlan) -> None:
+    """写回方案文件，保证成员汇报页与主页面读到最新状态。
 
-    FullPlan 里的 performance（各阶段耗时毫秒数）每次重算都不同，直接比较
-    完整 JSON 会把"重复提交同一状态"误判成实质变更，导致版本树被刷屏。
+    版本树只记录用户主动"保存方案"（/api/save）的检查点；成员汇报/状态
+    变更只更新方案文件，不滚动版本——版本不应被状态微调刷屏。
     """
-    data = json.loads(raw)
-    data.pop("performance", None)
-    return json.dumps(data, ensure_ascii=False, sort_keys=True)
-
-
-def _save_plan(filename: str, plan: FullPlan, *, summary: str = "") -> None:
-    """写回方案文件，并在版本树里落一条"成员汇报"快照。
-
-    版本树原本只记录工作台手动"保存方案"，成员语音/照片/状态汇报直接覆写
-    文件而不留痕：评审演示版本回滚时看不到汇报过程，且汇报前的状态一旦被
-    覆盖就再也回不去。这里在每次汇报落盘时同步生成快照：
-    - 首次汇报前先落一条"汇报前基线"，保证版本树能回滚到汇报之前；
-    - 与最新版本内容完全一致（剔除 performance）时视为无实质变化，不刷版本。
-    """
-    path = _safe_plan_path(filename)
-    old_raw = path.read_text(encoding="utf-8") if path.exists() else None
-    new_raw = plan.model_dump_json(indent=2)
-    path.write_text(new_raw, encoding="utf-8")
-    try:
-        versions = list_versions(filename)
-        if not versions and old_raw:
-            save_version(
-                json.loads(old_raw), filename,
-                action="成员汇报前基线",
-                summary="成员汇报开始前的方案状态（首次汇报自动生成）")
-            versions = list_versions(filename)
-        if versions:
-            prev = load_version(filename, versions[0]["version_id"])
-            if _stable_plan_json(json.dumps(prev, ensure_ascii=False)) \
-                    == _stable_plan_json(new_raw):
-                return  # 无实质变化（重复提交同状态），不新增版本
-        save_version(
-            json.loads(new_raw), filename,
-            action="成员汇报", summary=summary or "成员更新任务进度/状态")
-    except Exception:
-        logger.exception("成员汇报版本快照保存失败（不影响主流程）")
+    _safe_plan_path(filename).write_text(
+        plan.model_dump_json(indent=2), encoding="utf-8")
 
 
 def _task_member_names(plan: FullPlan, task) -> set[str]:
@@ -187,6 +168,73 @@ def _member_tasks(plan: FullPlan, filename: str, member: str) -> list[dict]:
     return out
 
 
+def _unfinished_member_list(plan: FullPlan, filename: str, task) -> list[dict]:
+    """返回任务完成前仍需确认的成员（含负责人与已确认志愿者）。
+
+    - 有未完成上报记录（pending/in_progress/blocked）的成员一律要求确认；
+    - 已确认志愿者即使从未上报也要求确认——志愿者是认领了任务并招募进来的
+      正式参与者，主页面完成任务必须覆盖他们，否则任务完成而志愿者行悬挂
+      "待开始"；
+    - 其他成员（骨干/协作者）从未上报不要求确认。
+    """
+    latest: dict[str, dict] = {}
+    for act in get_report_activities(filename, task.id):
+        if act["member"]:
+            latest[act["member"]] = act
+    volunteer_names = {
+        v.name for v in (plan.volunteer_pool or [])
+        if v.task_id == task.id and v.status == "已确认"
+    }
+    out: list[dict] = []
+    for name in sorted(_task_member_names(plan, task)):
+        act = latest.get(name)
+        if not act or not act.get("status"):
+            if name in volunteer_names:
+                out.append({"name": name, "status": "pending"})
+            continue  # 从未上报：仅已确认志愿者要求确认
+        status = str(act["status"])
+        if status in ("pending", "in_progress", "blocked"):
+            out.append({"name": name, "status": status})
+    return out
+
+
+def _blocked_member_list(plan: FullPlan, filename: str, task) -> list[dict]:
+    """返回任务里仍报告阻塞的成员（含负责人），用于解除阻塞时的确认。"""
+    latest: dict[str, dict] = {}
+    for act in get_report_activities(filename, task.id):
+        if act["member"]:
+            latest[act["member"]] = act
+    out: list[dict] = []
+    for name in sorted(_task_member_names(plan, task)):
+        act = latest.get(name)
+        if act and act.get("status") == "blocked":
+            out.append({"name": name, "status": "blocked"})
+    return out
+
+
+def _other_members_active(
+    plan: FullPlan, filename: str, task, except_name: str,
+) -> bool:
+    """除 except_name 外，是否有成员的最新状态仍处于活跃。
+
+    活跃 = 进行中 / 已完成 / 已确认 / 阻塞；未上报的成员按"未开始"算，
+    不视为活跃。用于协作者把任务"拉回待开始"时判断任务整体是否还有人
+    在做——若没有任何人活跃，任务应回退 pending，而不是卡在被撤回的
+    "进行中"上。
+    """
+    latest: dict[str, str] = {}
+    for act in get_report_activities(filename, task.id):
+        if act["member"] and act.get("status"):
+            latest[act["member"]] = str(act["status"])
+    for name in _task_member_names(plan, task):
+        if name == except_name:
+            continue
+        if latest.get(name, "pending") in (
+                "in_progress", "completed", "confirmed", "blocked"):
+            return True
+    return False
+
+
 def _status_str(status) -> str:
     return str(status.value if hasattr(status, "value") else status)
 
@@ -230,7 +278,12 @@ def _task_members_detail(
         )
         act = latest.get(name)
         if role == "负责人":
-            status = act["status"] if act and act["status"] else task_status
+            # 负责人行只反映负责人自己的上报状态（与协作者同规则），
+            # 不被任务整体状态劫持：协作者报阻塞/主页面改状态都不会
+            # 强加给负责人行，避免"负责人没动却显示阻塞/进行中"。
+            # 负责人本人在汇报页上报时，其上报状态即任务状态（is_owner
+            # 直接设置），因此负责人上报后两处仍一致。
+            status = act["status"] if act and act["status"] else "pending"
             awaiting = False
         else:
             status = act["status"] if act and act["status"] else "pending"
@@ -384,12 +437,22 @@ def _apply_update(
             status=member_status,
             note=note,
         )
+        if member_status == "confirmed":
+            # 负责人代确认该成员完成：若负责人自己也已完成（completed/
+            # confirmed）且其余成员无未完成记录，任务整体自动完成，
+            # 保证主页面与汇报页同步（否则代确认后任务仍卡在进行中）。
+            owner = task.assignee_id
+            owner_done = False
+            for act in reversed(get_report_activities(filename, task_id)):
+                if act["member"] == owner:
+                    owner_done = str(act["status"]) in (
+                        "completed", "confirmed")
+                    break
+            if owner_done and not _unfinished_member_list(
+                    plan, filename, task):
+                task.status = TaskStatus("completed")
         plan = recompute_plan(plan)
-        _save_plan(
-            filename, plan,
-            summary=(f"{member} 确认 {target_member}「{task.name}」"
-                     f"{'完成' if member_status == 'confirmed' else '状态更新'}"),
-        )
+        _save_plan(filename, plan)
         if member_status == "confirmed":
             notify_event(
                 plan,
@@ -433,22 +496,35 @@ def _apply_update(
                     )
             task.status = TaskStatus(status)
         else:
-            if current == "pending":
+            if status == "blocked":
+                # 阻塞优先：任何成员报告阻塞，任务整体立即置为阻塞
+                #（负责人/主页面可随后显式调整）。已完成任务被协作者
+                # 改回阻塞时视为回退，通知负责人重新处理。
+                if current == "completed":
+                    reverted = True
+                    if not note:
+                        note = ("报告阻塞（任务已由负责人确认完成，"
+                                "任务状态已回退为阻塞，等待负责人重新处理）")
+                task.status = TaskStatus("blocked")
+            elif current == "pending":
                 # 协作者开始或完成自己的部分：任务至少显示"进行中"
                 if status in ("in_progress", "completed"):
                     task.status = TaskStatus("in_progress")
-            elif current == "completed" and status in (
-                    "pending", "in_progress", "blocked"):
+            elif current == "completed" and status in ("pending", "in_progress"):
                 # 协作者把已完成改回未完成：任务不能保持"已完成"，回退进行中
                 task.status = TaskStatus("in_progress")
                 reverted = True
                 if not note:
-                    note = (
-                        "报告阻塞（任务状态已回退为进行中，等待负责人处理）"
-                        if status == "blocked" else
-                        "改回未完成（任务状态已回退为进行中，"
-                        "等待负责人重新确认）"
-                    )
+                    note = ("改回未完成（任务状态已回退为进行中，"
+                            "等待负责人重新确认）")
+            elif current == "in_progress" and status == "pending":
+                # 协作者把自己的部分改回未开始：若没有其他成员仍在进行/
+                # 完成/阻塞，任务回退 pending，避免任务状态卡在被撤回的
+                # "进行中"上（负责人行跟随任务状态，同步回退）。
+                if not _other_members_active(plan, filename, task, member):
+                    task.status = TaskStatus("pending")
+                    if not note:
+                        note = "改回待开始（自己的部分暂停）"
 
     end_date = None
     if actual_end_date:
@@ -487,11 +563,7 @@ def _apply_update(
         change_parts.append("上传交付物照片")
     if note:
         change_parts.append("备注")
-    _save_plan(
-        filename, plan,
-        summary=(f"{member} 更新「{task.name}」"
-                 + ("：" + "、".join(change_parts) if change_parts else "")),
-    )
+    _save_plan(filename, plan)
 
     hours_suffix = (
         f"（实际 {actual_hours:g}h）" if actual_hours else "")
@@ -506,13 +578,12 @@ def _apply_update(
                 f"{member} 更新了「{task.name}」进度" + hours_suffix,
             )
     elif reverted:
-        msg = (
-            f"{member} 报告「{task.name}」自己的部分遇到阻塞"
-            "（任务状态已回退为进行中）"
-            if status == "blocked" else
-            f"{member} 将「{task.name}」改回未完成"
-            "（任务状态已回退为进行中）"
-        )
+        if status == "blocked":
+            msg = (f"{member} 报告「{task.name}」自己的部分遇到阻塞"
+                   "（任务状态已回退为阻塞，等待负责人重新处理）")
+        else:
+            msg = (f"{member} 将「{task.name}」改回未完成"
+                   "（任务状态已回退为进行中，等待负责人重新确认）")
         notify_event(plan, msg)
     elif status in ("completed", "blocked"):
         verb = "已完成" if status == "completed" else "报告遇到阻塞"
@@ -746,3 +817,133 @@ def report_update(req: ReportUpdateRequest):
         req.actual_hours, req.actual_end_date, req.note,
         target_member=req.member,
     )
+
+
+@router.post("/task-status")
+def update_task_status(req: TaskStatusRequest):
+    """主页面直接修改任务状态（整体状态，管理员/负责人视角）。
+
+    - 非 completed：直接设置状态并落盘（不生成版本——版本只在"保存方案"时生成）；
+    - completed：任务完成 ⟺ 全员完成——有成员仍未完成/未确认时返回 400
+      与成员清单，前端确认后带 confirm_members 重发，把这些成员标记为
+      "已确认"（活动历史保留）后再完成；
+    - 落盘前做 base_version 并发校验，防止覆盖汇报页刚写入的进度。
+    """
+    task = next((t for t in req.plan.plan.tasks if t.id == req.task_id), None)
+    if task is None:
+        raise HTTPException(status_code=400, detail=f"任务不存在：{req.task_id}")
+    if req.status not in ("pending", "in_progress", "completed", "blocked"):
+        raise HTTPException(status_code=400, detail=f"状态不合法：{req.status}")
+
+    plan = req.plan
+    filename = req.filename or ""
+    if req.base_version and filename:
+        versions = list_versions(filename)
+        if versions and versions[0]["version_id"] != req.base_version:
+            raise HTTPException(
+                status_code=409,
+                detail="方案已被其他人更新（如成员汇报），请刷新后再改状态",
+            )
+    if filename and req.base_fingerprint:
+        from app.services.plan_io import plan_fingerprint
+        filepath = _safe_plan_path(filename)
+        if filepath.exists() and plan_fingerprint(
+                filepath.read_text(encoding="utf-8")) != req.base_fingerprint:
+            raise HTTPException(
+                status_code=409,
+                detail="方案已被其他人更新（如成员汇报），请刷新后再改状态",
+            )
+
+    unfinished = (
+        _unfinished_member_list(plan, filename, task) if filename else [])
+    blocked = (
+        _blocked_member_list(plan, filename, task) if filename else [])
+    if req.status == "completed" and filename:
+        unfinished_names = {item["name"] for item in unfinished}
+        missing = unfinished_names - set(req.confirm_members)
+        if missing:
+            detail = (
+                "以下成员仍显示未完成："
+                + "、".join(
+                    f"{item['name']}（{_status_str(item['status'])}）"
+                    for item in unfinished)
+                + "；确认完成将同时确认其完成"
+            )
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "detail": detail,
+                    "unfinished_members": unfinished,
+                },
+            )
+        # 确认成员：写入 confirmed 活动，保留其此前上报的历史（含阻塞）
+        for name in req.confirm_members:
+            if name in unfinished_names:
+                add_report_activity(
+                    filename, task.id, name,
+                    status="confirmed",
+                    note="主页面确认任务完成时由管理员确认",
+                )
+    elif (req.status in ("in_progress", "pending")
+            and _status_str(task.status) == "blocked" and filename):
+        # 解除阻塞同样需要确认：把任务从"阻塞"改为进行中/待开始，等于
+        # 单方面否定成员的阻塞报告，必须提示并确认，不能静默覆盖。
+        blocked_names = {item["name"] for item in blocked}
+        missing = blocked_names - set(req.confirm_members)
+        if missing:
+            label = "进行中" if req.status == "in_progress" else "待开始"
+            detail = (
+                "以下成员仍报告阻塞："
+                + "、".join(item["name"] for item in blocked)
+                + f"；确认后其状态将标记为已处理（{label}）"
+            )
+            return JSONResponse(
+                status_code=400,
+                content={"detail": detail, "blocked_members": blocked},
+            )
+        for name in req.confirm_members:
+            if name in blocked_names:
+                label = "进行中" if req.status == "in_progress" else "待开始"
+                add_report_activity(
+                    filename, task.id, name,
+                    status=req.status,
+                    note=(f"主页面将任务改为{label}时确认阻塞已处理"
+                          "（原上报：阻塞）"),
+                )
+
+    task.status = TaskStatus(req.status)
+    if filename and task.assignee_id:
+        # 主页面改状态 = 管理员/负责人确认任务状态：写负责人活动，
+        # 让负责人行同步（协作者上报只影响任务整体，不碰负责人行）。
+        # 保留负责人此前上报的工时，避免 status-only 活动误清工时。
+        owner = task.assignee_id
+        owner_hours = None
+        for act in reversed(get_report_activities(filename, task.id)):
+            if act["member"] == owner and act.get("actual_hours") is not None:
+                owner_hours = act["actual_hours"]
+                break
+        status_label = {
+            "pending": "待开始", "in_progress": "进行中",
+            "completed": "已完成", "blocked": "阻塞",
+        }.get(req.status, req.status)
+        add_report_activity(
+            filename, task.id, owner,
+            status=req.status,
+            actual_hours=owner_hours,
+            note=f"主页面将任务改为{status_label}（管理员/负责人确认）",
+        )
+    plan = recompute_plan(plan)
+    if filename:
+        _save_plan(filename, plan)
+    from app.services.plan_io import plan_fingerprint
+    fingerprint = None
+    if filename:
+        filepath = _safe_plan_path(filename)
+        fingerprint = plan_fingerprint(filepath.read_text(encoding="utf-8"))
+    return {
+        "ok": True,
+        "plan": plan,
+        "unfinished_members": unfinished,
+        "blocked_members": blocked,
+        "fingerprint": fingerprint,
+    }

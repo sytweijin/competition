@@ -102,6 +102,12 @@ async def _make_token(client, member="张三"):
     return resp.json()["token"]
 
 
+def _load_saved_plan() -> FullPlan:
+    path = MEMORY_DIR / TEST_PLAN
+    return FullPlan.model_validate(
+        json.loads(path.read_text(encoding="utf-8")))
+
+
 @pytest.mark.asyncio
 async def test_report_link_state_and_update(saved_plan):
     transport = ASGITransport(app=app)
@@ -138,8 +144,8 @@ async def test_report_link_state_and_update(saved_plan):
 
 
 @pytest.mark.asyncio
-async def test_report_update_creates_version_snapshot(saved_plan):
-    """成员汇报写入版本树：首次自动落基线、实质更新落快照、重复提交不刷版。"""
+async def test_report_update_does_not_create_version(saved_plan):
+    """成员汇报只落盘方案文件，不滚动版本树（版本仅保存方案时生成）。"""
     from app.services.audit_store import AUDIT_DIR, VERSION_DIR, list_versions
     import shutil
 
@@ -157,7 +163,7 @@ async def test_report_update_creates_version_snapshot(saved_plan):
         ) as client:
             token = await _make_token(client)
 
-            # 首次实质更新：版本树应出现"成员汇报前基线" + "成员汇报"两条
+            # 实质更新：方案文件更新，但版本树不新增
             up = await client.post("/api/report/update", json={
                 "token": token,
                 "task_id": "T1",
@@ -166,12 +172,9 @@ async def test_report_update_creates_version_snapshot(saved_plan):
                 "note": "开始做",
             })
             assert up.status_code == 200
-            versions = list_versions(TEST_PLAN)
-            assert [v["action"] for v in versions] == [
-                "成员汇报", "成员汇报前基线"]
-            first_count = len(versions)
+            assert list_versions(TEST_PLAN) == []
 
-            # 重复提交同一状态（无实质变化）：不应新增版本
+            # 重复提交同一状态：仍不生成版本
             noop = await client.post("/api/report/update", json={
                 "token": token,
                 "task_id": "T1",
@@ -179,9 +182,9 @@ async def test_report_update_creates_version_snapshot(saved_plan):
                 "note": "重复确认",
             })
             assert noop.status_code == 200
-            assert len(list_versions(TEST_PLAN)) == first_count
+            assert list_versions(TEST_PLAN) == []
 
-            # 再次实质更新（改状态/工时）：应新增一条"成员汇报"
+            # 再次实质更新：方案文件反映最新状态，版本树仍为空
             up2 = await client.post("/api/report/update", json={
                 "token": token,
                 "task_id": "T1",
@@ -190,10 +193,11 @@ async def test_report_update_creates_version_snapshot(saved_plan):
                 "note": "完成了",
             })
             assert up2.status_code == 200
-            versions3 = list_versions(TEST_PLAN)
-            assert len(versions3) == first_count + 1
-            assert versions3[0]["action"] == "成员汇报"
-            assert "张三" in versions3[0]["summary"]
+            assert list_versions(TEST_PLAN) == []
+            plan = FullPlan.model_validate(
+                json.loads((MEMORY_DIR / TEST_PLAN).read_text(encoding="utf-8")))
+            assert plan.plan.tasks[0].status == "completed"
+            assert plan.plan.tasks[0].actual_hours == 4.0
     finally:
         # 无论断言成败都清理本测试产生的版本快照与审计记录
         shutil.rmtree(VERSION_DIR / TEST_PLAN, ignore_errors=True)
@@ -536,7 +540,7 @@ async def test_report_only_owner_sets_completion_date(saved_plan):
 
 @pytest.mark.asyncio
 async def test_report_collaborator_can_report_blocked(saved_plan):
-    """协作者可报阻塞：成员状态置为阻塞，任务若已完成则回退进行中。"""
+    """协作者可报阻塞：阻塞优先——任务整体置为阻塞（已完成任务也回退阻塞）。"""
     transport = ASGITransport(app=app)
     async with AsyncClient(
         transport=transport, base_url="http://test"
@@ -556,15 +560,372 @@ async def test_report_collaborator_can_report_blocked(saved_plan):
             "token": li, "task_id": "T1", "status": "blocked",
         })
         assert r.status_code == 200
+        assert r.json()["status"] == "blocked"
+
+        st = (await client.get(
+            "/api/report/state", params={"token": zhang})).json()
+        t1 = next(t for t in st["tasks"] if t["id"] == "T1")
+        assert t1["status"] == "blocked"
+        li_row = next(m for m in t1["members"] if m["name"] == "李四")
+        assert li_row["status"] == "blocked"
+        assert "阻塞" in li_row["note"]
+        # 负责人行只反映负责人自己的上报（已完成），不被协作者阻塞强加
+        zhang_row = next(m for m in t1["members"] if m["name"] == "张三")
+        assert zhang_row["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_report_collaborator_blocked_propagates_to_task(saved_plan):
+    """协作者在任务未开始时报阻塞：任务整体立即置为阻塞。"""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        li = await _make_token(client, member="李四")
+        r = await client.post("/api/report/update", json={
+            "token": li, "task_id": "T1", "status": "blocked",
+            "note": "外部接口挂了",
+        })
+        assert r.status_code == 200
+        assert r.json()["status"] == "blocked"
+
+        zhang = await _make_token(client, member="张三")
+        st = (await client.get(
+            "/api/report/state", params={"token": zhang})).json()
+        t1 = next(t for t in st["tasks"] if t["id"] == "T1")
+        assert t1["status"] == "blocked"
+        # 负责人从未上报：负责人行保持"未开始"，不被任务阻塞强加
+        zhang_row = next(m for m in t1["members"] if m["name"] == "张三")
+        assert zhang_row["status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_report_collaborator_revert_to_pending_resets_task(saved_plan):
+    """协作者把"进行中"改回"待开始"且无其他活跃成员：任务回退待开始。"""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        li = await _make_token(client, member="李四")
+        r1 = await client.post("/api/report/update", json={
+            "token": li, "task_id": "T1", "status": "in_progress",
+            "note": "我先开始",
+        })
+        assert r1.status_code == 200
+        assert r1.json()["status"] == "in_progress"
+
+        r2 = await client.post("/api/report/update", json={
+            "token": li, "task_id": "T1", "status": "pending",
+        })
+        assert r2.status_code == 200
+        assert r2.json()["status"] == "pending"
+
+        zhang = await _make_token(client, member="张三")
+        st = (await client.get(
+            "/api/report/state", params={"token": zhang})).json()
+        t1 = next(t for t in st["tasks"] if t["id"] == "T1")
+        assert t1["status"] == "pending"
+        zhang_row = next(m for m in t1["members"] if m["name"] == "张三")
+        assert zhang_row["status"] == "pending"
+        li_row = next(m for m in t1["members"] if m["name"] == "李四")
+        assert li_row["status"] == "pending"
+        assert "改回待开始" in li_row["note"]
+
+
+@pytest.mark.asyncio
+async def test_report_collaborator_revert_keeps_task_when_owner_active(saved_plan):
+    """负责人仍在进行时，协作者改回待开始不把任务拉回。"""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        li = await _make_token(client, member="李四")
+        await client.post("/api/report/update", json={
+            "token": li, "task_id": "T1", "status": "in_progress",
+        })
+        zhang = await _make_token(client, member="张三")
+        await client.post("/api/report/update", json={
+            "token": zhang, "task_id": "T1", "status": "in_progress",
+        })
+
+        r = await client.post("/api/report/update", json={
+            "token": li, "task_id": "T1", "status": "pending",
+        })
+        assert r.status_code == 200
         assert r.json()["status"] == "in_progress"
 
         st = (await client.get(
             "/api/report/state", params={"token": zhang})).json()
         t1 = next(t for t in st["tasks"] if t["id"] == "T1")
         assert t1["status"] == "in_progress"
+
+
+@pytest.mark.asyncio
+async def test_task_status_complete_requires_confirm(saved_plan):
+    """主页面强制完成任务：有成员未完成时需确认，确认后成员行变"已确认"。"""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        # 协作者李四报阻塞 → 任务整体阻塞
+        li = await _make_token(client, member="李四")
+        r = await client.post("/api/report/update", json={
+            "token": li, "task_id": "T1", "status": "blocked",
+            "note": "数据源挂了",
+        })
+        assert r.status_code == 200
+        assert r.json()["status"] == "blocked"
+
+        plan = _load_saved_plan()
+        # 不带 confirm_members 强制完成 → 400 + 未完成成员清单
+        blocked = await client.post("/api/task-status", json={
+            "plan": plan.model_dump(mode="json"),
+            "task_id": "T1",
+            "status": "completed",
+            "filename": TEST_PLAN,
+        })
+        assert blocked.status_code == 400
+        body = blocked.json()
+        assert body["unfinished_members"] == [
+            {"name": "李四", "status": "blocked"}]
+        # 任务仍是阻塞，未被改动
+        plan = _load_saved_plan()
+        assert plan.plan.tasks[0].status == "blocked"
+
+        # 带 confirm_members 重发 → 完成，李四行变"已确认"
+        ok = await client.post("/api/task-status", json={
+            "plan": plan.model_dump(mode="json"),
+            "task_id": "T1",
+            "status": "completed",
+            "filename": TEST_PLAN,
+            "confirm_members": ["李四"],
+        })
+        assert ok.status_code == 200
+        data = ok.json()
+        assert data["plan"]["plan"]["tasks"][0]["status"] == "completed"
+
+        st = (await client.get(
+            "/api/report/state", params={"token": li})).json()
+        t1 = next(t for t in st["tasks"] if t["id"] == "T1")
+        assert t1["status"] == "completed"
         li_row = next(m for m in t1["members"] if m["name"] == "李四")
-        assert li_row["status"] == "blocked"
-        assert "阻塞" in li_row["note"]
+        assert li_row["status"] == "confirmed"
+        # 主页面确认任务完成：负责人行同步为已完成
+        zhang_row = next(m for m in t1["members"] if m["name"] == "张三")
+        assert zhang_row["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_task_status_regular_change_saves_and_syncs(saved_plan):
+    """主页面改状态（非完成）：直接落盘但不生成版本，汇报页负责人行同步。"""
+    from app.services.audit_store import list_versions
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        plan = _load_saved_plan()
+        r = await client.post("/api/task-status", json={
+            "plan": plan.model_dump(mode="json"),
+            "task_id": "T1",
+            "status": "in_progress",
+            "filename": TEST_PLAN,
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert data["plan"]["plan"]["tasks"][0]["status"] == "in_progress"
+        # 状态变更不生成版本（版本仅保存方案时生成）
+        assert list_versions(TEST_PLAN) == []
+
+        # 汇报页（负责人视角）：任务徽章为整体状态，负责人行只反映自己上报
+        zhang = await _make_token(client, member="张三")
+        st = (await client.get(
+            "/api/report/state", params={"token": zhang})).json()
+        t1 = next(t for t in st["tasks"] if t["id"] == "T1")
+        assert t1["status"] == "in_progress"
+        # 主页面改状态 = 负责人确认：负责人行同步为进行中
+        zhang_row = next(m for m in t1["members"] if m["name"] == "张三")
+        assert zhang_row["status"] == "in_progress"
+        li_row = next(m for m in t1["members"] if m["name"] == "李四")
+        assert li_row["status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_task_status_rejects_stale_base_version(saved_plan):
+    """主页面改状态带不匹配的版本号：并发校验拦截（409）。"""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        # 先保存一次生成版本号
+        plan = _load_saved_plan()
+        saved = await client.post(
+            "/api/save",
+            params={"filename": TEST_PLAN},
+            json=plan.model_dump(mode="json"),
+        )
+        assert saved.status_code == 200
+        version_id = saved.json()["version_id"]
+
+        # 用错误版本号改状态 → 409
+        r = await client.post("/api/task-status", json={
+            "plan": plan.model_dump(mode="json"),
+            "task_id": "T1",
+            "status": "in_progress",
+            "filename": TEST_PLAN,
+            "base_version": "wrong-version",
+        })
+        assert r.status_code == 409
+
+        # 用正确版本号 → 成功
+        r2 = await client.post("/api/task-status", json={
+            "plan": plan.model_dump(mode="json"),
+            "task_id": "T1",
+            "status": "in_progress",
+            "filename": TEST_PLAN,
+            "base_version": version_id,
+        })
+        assert r2.status_code == 200
+
+    try:
+        from app.services.audit_store import AUDIT_DIR, VERSION_DIR
+        import shutil
+        shutil.rmtree(VERSION_DIR / TEST_PLAN, ignore_errors=True)
+        (AUDIT_DIR / f"{TEST_PLAN}.jsonl").unlink()
+    except OSError:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_status_and_save_reject_stale_fingerprint(saved_plan):
+    """成员汇报后主页面用旧指纹改状态/保存：并发校验拦截（409），不覆盖汇报。"""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        # 保存并获取指纹
+        plan = _load_saved_plan()
+        saved = await client.post(
+            "/api/save",
+            params={"filename": TEST_PLAN},
+            json=plan.model_dump(mode="json"),
+        )
+        assert saved.status_code == 200
+        fp1 = saved.json()["fingerprint"]
+
+        # 成员汇报：落盘但版本树不前进（版本仅保存时生成）
+        li = await _make_token(client, member="李四")
+        rep = await client.post("/api/report/update", json={
+            "token": li, "task_id": "T1", "status": "in_progress",
+            "actual_hours": 3.0,
+        })
+        assert rep.status_code == 200
+
+        # 主页面用旧指纹改状态 → 409，成员汇报的工时不被覆盖
+        stale = await client.post("/api/task-status", json={
+            "plan": plan.model_dump(mode="json"),
+            "task_id": "T1",
+            "status": "blocked",
+            "filename": TEST_PLAN,
+            "base_fingerprint": fp1,
+        })
+        assert stale.status_code == 409
+        disk = _load_saved_plan()
+        assert disk.plan.tasks[0].status == "in_progress"
+        assert disk.plan.tasks[0].actual_hours == 3.0
+
+        # 主页面用旧指纹保存 → 409
+        stale_save = await client.post(
+            "/api/save",
+            params={"filename": TEST_PLAN, "base_fingerprint": fp1},
+            json=plan.model_dump(mode="json"),
+        )
+        assert stale_save.status_code == 409
+
+        # 用最新指纹（模拟重载后）改状态 → 成功
+        fresh_fp = (await client.get(
+            "/api/plan-fingerprint", params={"filename": TEST_PLAN}
+        )).json()["fingerprint"]
+        fresh_plan = _load_saved_plan()
+        ok = await client.post("/api/task-status", json={
+            "plan": fresh_plan.model_dump(mode="json"),
+            "task_id": "T1",
+            "status": "blocked",
+            "filename": TEST_PLAN,
+            "base_fingerprint": fresh_fp,
+        })
+        assert ok.status_code == 200
+
+    try:
+        from app.services.audit_store import AUDIT_DIR, VERSION_DIR
+        import shutil
+        shutil.rmtree(VERSION_DIR / TEST_PLAN, ignore_errors=True)
+        (AUDIT_DIR / f"{TEST_PLAN}.jsonl").unlink()
+    except OSError:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_task_status_unblock_requires_confirm(saved_plan):
+    """主页面解除阻塞（blocked→in_progress）：成员仍报阻塞时需确认处理。"""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        # 协作者李四报阻塞 → 任务整体阻塞
+        li = await _make_token(client, member="李四")
+        rep = await client.post("/api/report/update", json={
+            "token": li, "task_id": "T1", "status": "blocked",
+            "note": "数据源挂了",
+        })
+        assert rep.status_code == 200
+        assert rep.json()["status"] == "blocked"
+
+        plan = _load_saved_plan()
+        # 不带确认解除阻塞 → 400 + 阻塞成员清单
+        blocked = await client.post("/api/task-status", json={
+            "plan": plan.model_dump(mode="json"),
+            "task_id": "T1",
+            "status": "in_progress",
+            "filename": TEST_PLAN,
+        })
+        assert blocked.status_code == 400
+        body = blocked.json()
+        assert body["blocked_members"] == [
+            {"name": "李四", "status": "blocked"}]
+        # 任务仍是阻塞
+        assert _load_saved_plan().plan.tasks[0].status == "blocked"
+
+        # 带确认解除阻塞 → 任务进行中，李四行标记为已处理
+        ok = await client.post("/api/task-status", json={
+            "plan": plan.model_dump(mode="json"),
+            "task_id": "T1",
+            "status": "in_progress",
+            "filename": TEST_PLAN,
+            "confirm_members": ["李四"],
+        })
+        assert ok.status_code == 200
+        assert ok.json()["plan"]["plan"]["tasks"][0]["status"] == "in_progress"
+
+        zhang = await _make_token(client, member="张三")
+        st = (await client.get(
+            "/api/report/state", params={"token": zhang})).json()
+        t1 = next(t for t in st["tasks"] if t["id"] == "T1")
+        assert t1["status"] == "in_progress"
+        li_row = next(m for m in t1["members"] if m["name"] == "李四")
+        assert li_row["status"] == "in_progress"
+        assert "阻塞已处理" in li_row["note"]
+        # 主页面解除阻塞 = 负责人确认：负责人行同步为进行中
+        zhang_row = next(m for m in t1["members"] if m["name"] == "张三")
+        assert zhang_row["status"] == "in_progress"
+
+    try:
+        from app.services.audit_store import AUDIT_DIR, VERSION_DIR
+        import shutil
+        shutil.rmtree(VERSION_DIR / TEST_PLAN, ignore_errors=True)
+        (AUDIT_DIR / f"{TEST_PLAN}.jsonl").unlink()
+    except OSError:
+        pass
 
 
 @pytest.mark.asyncio
@@ -664,6 +1025,95 @@ async def test_report_confirmed_volunteer_can_report():
     finally:
         try:
             path.unlink()
+        except OSError:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_task_status_complete_confirms_volunteer_even_unreported():
+    """主页面完成任务：已确认但从未上报的志愿者必须纳入确认，完成时不悬挂。"""
+    plan = FullPlan(
+        input=AssignmentInput(
+            course=CourseInfo(name="志愿者完成测试", description=""),
+            members=[TeamMember(
+                name="张三", role="骨干 / 模块负责人",
+                daily_available_hours=4, unavailable_dates=[])],
+            deadline=date(2026, 9, 18),
+            project_mode="large_project",
+        ),
+        plan=PlanOutput(
+            tasks=[SubTask(
+                id="T1", name="模块子任务", estimated_hours=6,
+                assignee_id="张三", extra_helpers_needed=1,
+                status="pending")],
+            summary="测试",
+        ),
+        timeline=TimelineOutput(
+            tasks=[], critical_path=[], total_days=0, note="", reasoning=""),
+        qa_matrix=QAOutput(assignments=[], workload={}, note=""),
+        report=ReportOutput(
+            summary="", timeline_section="",
+            qa_matrix_section="", risk_note=""),
+        volunteer_pool=[
+            Volunteer(name="王五", task_id="T1", status="已确认"),
+        ],
+    )
+    filename = "test_report_volunteer_complete.json"
+    path = MEMORY_DIR / filename
+    path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            # 志愿者从未上报：主页面完成必须确认志愿者
+            blocked = await client.post("/api/task-status", json={
+                "plan": plan.model_dump(mode="json"),
+                "task_id": "T1",
+                "status": "completed",
+                "filename": filename,
+            })
+            assert blocked.status_code == 400
+            body = blocked.json()
+            assert body["unfinished_members"] == [
+                {"name": "王五", "status": "pending"}]
+
+            ok = await client.post("/api/task-status", json={
+                "plan": plan.model_dump(mode="json"),
+                "task_id": "T1",
+                "status": "completed",
+                "filename": filename,
+                "confirm_members": ["王五"],
+            })
+            assert ok.status_code == 200
+
+            zhang = await client.post(
+                "/api/report/link",
+                json={"filename": filename, "member": "张三"},
+            )
+            st = (await client.get(
+                "/api/report/state",
+                params={"token": zhang.json()["token"]})).json()
+            t1 = next(t for t in st["tasks"] if t["id"] == "T1")
+            assert t1["status"] == "completed"
+            wang_row = next(m for m in t1["members"] if m["name"] == "王五")
+            assert wang_row["role"] == "志愿者"
+            assert wang_row["status"] == "confirmed"
+    finally:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        try:
+            from app.services.report_link import NOTES_FILE
+            data = json.loads(NOTES_FILE.read_text(encoding="utf-8"))
+            data = {
+                k: v for k, v in data.items()
+                if not k.startswith(filename + "::")
+            }
+            NOTES_FILE.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2),
+                encoding="utf-8")
         except OSError:
             pass
 
@@ -813,6 +1263,49 @@ async def test_report_owner_can_confirm_member_status(saved_plan):
             "status": "completed", "member": "张三",
         })
         assert r3.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_owner_confirm_after_member_revert_completes_task(saved_plan):
+    """已完成任务被成员改回进行中后，负责人代确认该成员：任务自动回已完成。"""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        li = await _make_token(client, member="李四")
+        await client.post("/api/report/update", json={
+            "token": li, "task_id": "T1", "status": "completed",
+            "actual_hours": 3.0,
+        })
+        zhang = await _make_token(client, member="张三")
+        r1 = await client.post("/api/report/update", json={
+            "token": zhang, "task_id": "T1", "status": "completed",
+        })
+        assert r1.status_code == 200
+        assert r1.json()["status"] == "completed"
+
+        # 协作者把已完成改回进行中 → 任务回退进行中
+        r2 = await client.post("/api/report/update", json={
+            "token": li, "task_id": "T1", "status": "in_progress",
+        })
+        assert r2.status_code == 200
+        assert r2.json()["status"] == "in_progress"
+
+        # 负责人代确认协作者 → 负责人已 completed、协作者 confirmed，
+        # 任务应自动回已完成（主页面同步）
+        r3 = await client.post("/api/report/update", json={
+            "token": zhang, "task_id": "T1",
+            "status": "completed", "member": "李四",
+        })
+        assert r3.status_code == 200
+        assert r3.json()["status"] == "completed"
+
+        st = (await client.get(
+            "/api/report/state", params={"token": zhang})).json()
+        t1 = next(t for t in st["tasks"] if t["id"] == "T1")
+        assert t1["status"] == "completed"
+        li_row = next(m for m in t1["members"] if m["name"] == "李四")
+        assert li_row["status"] == "confirmed"
 
 
 @pytest.mark.asyncio
