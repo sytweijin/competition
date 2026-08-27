@@ -894,61 +894,6 @@ def _fallback_interview_questions(req: InterviewRequest) -> list[str]:
     return questions
 
 
-def _split_questions(raw: str) -> list[str]:
-    """把模型输出的问题列表拆成单条问题。
-
-    兼容两种形态：每行一问，以及本地模型偶发的"多题挤在一行、
-    用【高】【中】【低】标记内联"（如"【高】q1【高】q2…"）。
-    只要输出中出现优先级标记即按"标记模式"解析：非标记行视为开场白丢弃，
-    避免"以下是评委可能提出的问题："被当成第一条问题。
-    """
-    lines = [
-        line.strip()
-        for line in str(raw or "").splitlines()
-        if line.strip()
-    ]
-    if not lines:
-        return []
-    has_markers = any(
-        "【高】" in line or "【中】" in line or "【低】" in line
-        for line in lines
-    )
-    parts: list[str] = []
-    for line in lines:
-        if not has_markers:
-            parts.append(line.lstrip("-• "))
-            continue
-        chunks = re.split(r"(?=【(?:高|中|低)】)", line)
-        for chunk in chunks:
-            chunk = chunk.strip().lstrip("-• ")
-            if chunk and chunk.startswith("【"):
-                parts.append(chunk)
-    return parts
-
-
-def _dedupe_questions(
-    questions: list[str], max_count: int = 12,
-) -> list[str]:
-    """去掉完全重复与近似重复的问题（本地模型复读机防刷屏），保留顺序。
-
-    近似阈值 0.95：只有近乎相同的重复会被去掉，语义不同的问题不受影响。
-    """
-    from difflib import SequenceMatcher
-
-    seen: list[str] = []
-    for question in questions:
-        question = (question or "").strip()
-        if not question:
-            continue
-        if any(
-            SequenceMatcher(None, question, existing).ratio() >= 0.95
-            for existing in seen
-        ):
-            continue
-        seen.append(question)
-    return seen[:max_count]
-
-
 @router.post("/interview")
 def interview_sim(req: InterviewRequest):
     """基于实际答辩要求和用户提交材料生成模拟问题。"""
@@ -961,7 +906,11 @@ def interview_sim(req: InterviewRequest):
         material_text=req.material_text,
         material_names=req.material_names,
     )
-    questions = _dedupe_questions(_split_questions(result))
+    questions = [
+        line.strip().lstrip("-• ")
+        for line in str(result or "").splitlines()
+        if line.strip()
+    ]
     warning = ""
     if not questions:
         questions = _fallback_interview_questions(req)
