@@ -1,1 +1,0 @@
-本页是系统总体架构图。前端层包括 Web 工作台与成员轻量汇报页，工作台承载文本、语音、拍照、录像、TTS、甘特图、导出与提醒，汇报页通过 token 链接免登录、只看自己的任务。后端层是 FastAPI，按业务域组织为计划引擎、多模态适配 omni_chat、媒体分析与协作闭环四个模块。模型层通过 WebSocket 连接昇腾 A3 本地的 llama.cpp-omni 与 MiniCPM-o-4_5-F16，或 ModelBest 云端的 MiniCPM-o-4.5-Realtime API。双后端可一键切换：配置 ASCEND_OMNI_WS_URL 即走本地，注释掉走云端；/api/realtime/status 返回 local 或 map 直观确认当前链路。

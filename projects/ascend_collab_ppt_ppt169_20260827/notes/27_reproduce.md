@@ -1,1 +1,0 @@
-本页说明统一昇腾环境复现步骤。应用环境为 Python 3.11 及以上；A3 环境为 Ascend 910C、CANN 9.1.0-beta.1 与 Python 3.12.13；模型为 MiniCPM-o-4_5-F16，约 16G；推理服务为以 GGML_CANN 编译的 llama.cpp-omni。复现分三步：安装依赖、配置后端二选一（云端填 MAP_REALTIME_API_KEY，本地填 ASCEND_OMNI_WS_URL 指向 28099 端口）、启动应用并访问本机 8000 端口。验证入口包括 /api/health 健康检查、/api/realtime/status 返回 local 或 map，以及演示前一键预检脚本，脚本包含暖机步骤。版本固定、链路可验证，评审可对照核验。

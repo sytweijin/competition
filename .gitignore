@@ -46,3 +46,6 @@ _diag_voice.*
 _fix*.py
 
 .workbuddy/
+
+# PPT/演示制作工作目录（本地工作区，不纳入仓库；最终交付件另行提交）
+projects/
