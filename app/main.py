@@ -3,7 +3,9 @@ FastAPI 应用入口（A5）
 """
 
 import logging
+import json
 import os
+import re
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -20,6 +22,7 @@ from app.config import (
 )
 from app.metrics import request_metrics
 from app.services.auth_store import auth_enabled, username_by_token
+from app.services.report_link import get_report_token
 from app.services.share_store import get_share_entry
 
 configure_timezone()
@@ -47,6 +50,46 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="协作分工智能体", version="7.1", lifespan=lifespan)
 request_metrics.mark_started(datetime.now(timezone.utc).isoformat())
 
+# 成员汇报令牌免登录的端点：这些端点各自用 report token 做成员/任务鉴权，
+# 中间件只负责确认"携带了有效令牌"即可放行；生成令牌的 /api/report/link
+# 仍是创建令牌的写操作，必须留在登录保护内。
+_REPORT_MEMBER_PATHS = {
+    "/api/report/state",
+    "/api/report/update",
+    "/api/report/voice",
+    "/api/report/photo",
+    "/api/report/attachment",
+}
+
+
+async def _extract_report_token(request: Request) -> str:
+    """从成员汇报请求中提取 report token。
+
+    GET 走 query 参数；POST JSON 从 body 取 token 字段；
+    multipart（语音/照片上传）直接从原始字节提取 name="token" 字段，
+    避免整表单解析（大文件上传会触发 multipart 分片大小限制）。
+    """
+    if request.method == "GET":
+        return request.query_params.get("token", "")
+    content_type = request.headers.get("content-type", "")
+    raw = await request.body()
+    if not raw:
+        return ""
+    if "application/json" in content_type:
+        try:
+            data = json.loads(raw)
+            return str(data.get("token") or "") if isinstance(data, dict) else ""
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return ""
+    match = re.search(
+        rb"(?:^|\r\n)Content-Disposition:\s*form-data;\s*name=\"token\"\r\n\r\n([^\r\n]*)",
+        raw,
+    )
+    if match:
+        return match.group(1).decode("utf-8", "replace")
+    return ""
+
+
 # 全局异常处理器：意外错误不暴露代码堆栈，返回 JSON 错误信息
 _DEBUG = os.getenv("DEBUG", "").lower() in ("1", "true", "yes")
 
@@ -61,7 +104,11 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 @app.middleware("http")
 async def admin_auth_middleware(request: Request, call_next):
-    """启用 APP_ADMIN_TOKEN 时保护 /api 接口（登录、健康检查、分享读取除外）。"""
+    """启用 APP_ADMIN_TOKEN 时保护 /api 接口。
+
+    放行：登录/健康检查、只读分享（x-share-token）、以及携带有效
+    report token 的成员汇报端点（免登录，端点自身校验成员与任务权限）。
+    """
     share_token = request.headers.get("x-share-token", "")
     if share_token and request.url.path.startswith("/api/"):
         entry = get_share_entry(share_token)
@@ -105,7 +152,12 @@ async def admin_auth_middleware(request: Request, call_next):
             "/api/auth/login",
         }
         allow_share = request.method == "GET" and path.startswith("/api/share/")
-        if path not in allow and not allow_share:
+        allow_report_member = False
+        if path in _REPORT_MEMBER_PATHS:
+            report_token = await _extract_report_token(request)
+            allow_report_member = bool(
+                report_token and get_report_token(report_token))
+        if path not in allow and not allow_share and not allow_report_member:
             auth = request.headers.get("authorization", "")
             token = auth[7:] if auth.startswith("Bearer ") else ""
             username = username_by_token(token)

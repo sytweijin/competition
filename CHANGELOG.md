@@ -15,6 +15,98 @@
 llama-omni-server 的能力边界（whisper 位置编码越界、分条多轮消息被忽略、指令遵循差），
 应用层通过分片/摊平/校验在边界内规避；同时审计发现两处应用层真实 bug。
 
+### 同步修改：整体审查三项修复——鉴权开启后成员汇报令牌免登录、汇报页完成不变量与主页面统一、汇报页回退警告转义（2026-08-29 追加）
+
+**定位：** 修复对全项目做整体审查时确认的三处真实缺陷：① 开启 `APP_ADMIN_TOKEN` 鉴权后成员汇报链接全部 401（推荐公网部署形态下核心演示环节不可用）；② 汇报页负责人标完成绕过"已确认但从未上报志愿者"校验，仍可产生"任务已完成+志愿者待开始"矛盾；③ 汇报页"回退警告"把成员姓名未转义拼进 HTML（低危存储型 XSS 隐患）。
+
+**审查/修改背景：** 用户要求对项目做整体 bug 审查并对照比赛要求评估质量。审查发现 399 项测试全部在 `APP_ADMIN_TOKEN` 为空的环境下运行，鉴权+汇报链路的组合场景未被覆盖；实测复现三处问题后逐一修复并补回归测试（全量测试 399 → 401 passed）。
+
+#### A. [P0] 鉴权开启后成员汇报链接全部 401（功能不可用）
+
+1. **问题：** `render.yaml` 与 README 都建议公网部署配置 `APP_ADMIN_TOKEN`，但 `admin_auth_middleware` 只放行 health/login/分享路径，`/api/report/state|update|voice|photo|attachment` 全部要求 Bearer 登录；成员汇报页前端只带 `?report=token`，不传任何鉴权头，"免登录汇报链接"直接返回 401 并弹出登录框，与使用说明书"无需登录"的承诺冲突。
+2. **修改前：** `main.py` 中间件对 `/api/report/*` 无任何豁免：
+   ```python
+   allow = {
+       "/api/health", "/api/ready",
+       "/api/auth/status", "/api/auth/login",
+   }
+   allow_share = request.method == "GET" and path.startswith("/api/share/")
+   if path not in allow and not allow_share:
+       # 无 Bearer → 401（成员汇报端点全部命中）
+   ```
+3. **修改后：** 新增 `_REPORT_MEMBER_PATHS` 与 `_extract_report_token`，对 5 个成员汇报端点先提取 token（GET query / POST JSON body / multipart 原始字节）并校验 report token 有效性，有效即放行；生成令牌的 `/api/report/link` 仍留在登录保护内：
+   ```python
+   _REPORT_MEMBER_PATHS = {
+       "/api/report/state", "/api/report/update", "/api/report/voice",
+       "/api/report/photo", "/api/report/attachment",
+   }
+
+   async def _extract_report_token(request: Request) -> str:
+       if request.method == "GET":
+           return request.query_params.get("token", "")
+       content_type = request.headers.get("content-type", "")
+       raw = await request.body()
+       if "application/json" in content_type:
+           try:
+               data = json.loads(raw)
+               return str(data.get("token") or "") if isinstance(data, dict) else ""
+           except (json.JSONDecodeError, UnicodeDecodeError):
+               return ""
+       match = re.search(
+           rb'(?:^|\r\n)Content-Disposition:\s*form-data;\s*name="token"\r\n\r\n([^\r\n]*)',
+           raw)
+       return match.group(1).decode("utf-8", "replace") if match else ""
+   ```
+   中间件判断改为 `if path not in allow and not allow_share and not allow_report_member:`，其中 `allow_report_member = bool(report_token and get_report_token(report_token))`。
+4. **为什么这样改：** report 端点本身已用 token 做成员/任务级鉴权（`_authorize`），中间件只需确认"这是有效令牌"即可放行，不重复业务鉴权；multipart 从原始字节提取 token 而非整表单解析，避免大文件上传触发 multipart 分片大小限制；`link` 是创建令牌的写操作，必须保留登录保护。
+5. **收益：** ① 开启鉴权后成员汇报闭环恢复"免登录"承诺，公网演示第 4 步可用；② 生成链接仍受登录保护；③ 无效/过期令牌仍返回 401，权限边界不变。
+
+#### B. [P1] 汇报页负责人标完成绕过"已确认但从未上报志愿者"校验（一致性）
+
+1. **问题：** 主页面 `/api/task-status` 用 `_unfinished_member_list`（含"已确认但从未上报"的志愿者）拦截完成，汇报页 `_apply_update` 只查"有上报记录且未完成"的成员——从未上报的志愿者不在 `latest` 里直接放行，负责人可从自己汇报页把任务标完成，志愿者行仍挂"待开始"，违反"任务完成 ⟺ 全员完成"不变量。
+2. **修改前：** `report.py` `_apply_update` 只遍历已有上报活动的成员：
+   ```python
+   latest = {}
+   for act in get_report_activities(filename, task_id):
+       if act["member"]:
+           latest[act["member"]] = act
+   unfinished = sorted({
+       name for name, act in latest.items()
+       if name != member
+       and act.get("status") in ("pending", "in_progress", "blocked")
+   })
+   ```
+3. **修改后：** 改用与主页面同一口径的 `_unfinished_member_list`（含已确认但从未上报的志愿者），排除本人后仍有未完成成员即返回 400 并列出姓名：
+   ```python
+   unfinished = sorted({
+       item["name"]
+       for item in _unfinished_member_list(plan, filename, task)
+       if item["name"] != member
+   })
+   if unfinished:
+       raise HTTPException(status_code=400, detail=(
+           "还有成员未完成（" + "、".join(unfinished)
+           + "），请先确认其完成再标记任务完成"))
+   ```
+4. **为什么这样改：** 两条完成路径必须共享同一条"全员完成"定义，否则同一不变量在主页面拦截、在汇报页漏放；负责人可通过汇报页已有的"确认完成/标记完成"按钮先补录志愿者再标完成。
+5. **收益：** ① 主页面与汇报页完成校验行为一致；② 消除"任务已完成+志愿者待开始"矛盾组合；③ 错误信息直接列出待确认成员，操作路径清晰。
+
+#### C. [P1] 汇报页"回退警告"成员姓名未转义（安全加固）
+
+1. **问题：** `app.js` `renderReportTasks` 的 `revertWarn` 用 `revertedNames.join('、')` 直接拼进 `innerHTML`，成员姓名是用户可控输入，含 HTML 时会被当作标签执行；同一函数内其余成员姓名字段都走 `esc()`，此处漏转义。
+2. **修改前：**
+   ```js
+   revertWarn='<div class="report-revert-warning">⚠ 任务尚未完成，'+revertedNames.join('、')+' 报告了阻塞或改回未完成（任务已回退），请处理后重新确认</div>'
+   ```
+3. **修改后：**
+   ```js
+   revertWarn='<div class="report-revert-warning">⚠ 任务尚未完成，'+esc(revertedNames.join('、'))+' 报告了阻塞或改回未完成（任务已回退），请处理后重新确认</div>'
+   ```
+4. **为什么这样改：** 插入 `innerHTML` 的用户数据必须统一转义；`esc()` 与同函数内其余字段一致，改动最小。
+5. **收益：** ① 消除低危存储型 XSS 注入点；② 与全项目转义纪律保持一致。
+
+**同步修改：** `index.html` 中 `app.js?v=` 缓存哈希已按新内容 sha1 前 8 位更新（`2cd0dce5` → `91ca1b65`）；`tests/test_report.py` 新增"汇报页负责人完成拦截未上报志愿者"回归测试，新增 `tests/test_report_auth.py` 覆盖"鉴权开启 + 汇报令牌免登录"组合场景；全量测试 399 → 401 passed。
+
 ### 同步修改：状态双端同步 + 版本策略回退——负责人行跟随、阻塞传播、撤回回退、主页面改状态落盘、版本仅保存时生成（2026-08-27 追加）
 
 **定位：** 打通主页面（任务计划）与成员汇报页的状态双向一致：成员上报推动任务状态（含阻塞传播、撤回回退），主页面改任务状态后自动落盘、汇报页负责人行跟随；同时回退"状态变更自动生成版本"的过度设计——版本树只保留"保存方案"检查点，不再被每次状态微调刷屏。

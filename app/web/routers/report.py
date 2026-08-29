@@ -476,15 +476,14 @@ def _apply_update(
         if is_owner:
             if status == "completed":
                 # 不变量：任务完成 ⟺ 所有成员自己的部分均完成
-                latest: dict[str, dict] = {}
-                for act in get_report_activities(filename, task_id):
-                    if act["member"]:
-                        latest[act["member"]] = act
+                # 与主页面 /api/task-status 同一口径：有未完成上报的成员，
+                # 以及已确认但从未上报的志愿者，都必须先确认/完成才能标完成
+                #（旧实现只查"有上报记录且未完成"的成员，会漏掉从未上报的
+                # 已确认志愿者，导致"任务已完成 + 志愿者待开始"的矛盾组合）。
                 unfinished = sorted({
-                    name for name, act in latest.items()
-                    if name != member
-                    and act.get("status") in (
-                        "pending", "in_progress", "blocked")
+                    item["name"]
+                    for item in _unfinished_member_list(plan, filename, task)
+                    if item["name"] != member
                 })
                 if unfinished:
                     raise HTTPException(
