@@ -13,7 +13,11 @@ import logging
 import math
 import re
 
-from app.config import ASCEND_OMNI_WS_URL
+from app.config import (
+    ASCEND_OMNI_WS_URL,
+    LOCAL_AUDIO_CHUNK_SECONDS,
+    LOCAL_AUDIO_MAX_SECONDS,
+)
 from app.services.realtime_client import (
     RealtimeChatResult,
     RealtimeClient,
@@ -51,13 +55,14 @@ _ECHO_TAILS = (
     "好的，那我",
 )
 
-_AUDIO_CHUNK_SECONDS = 12
-_CHUNK_PCM_BYTES = _AUDIO_CHUNK_SECONDS * 16000 * 4
-
+# 默认 12 秒 / 600 秒（910C 实测稳定值），可用环境变量
+# APP_LOCAL_AUDIO_CHUNK_SECONDS / APP_LOCAL_AUDIO_MAX_SECONDS 放宽。
 # 本地 A3 一次 whisper 编码上限约 30 秒；应用层按"静音断句 + ≤12 秒"
 # 分片后逐片独立会话处理、过滤劣化分片、再分层合并，实测 3.4 分钟会议可稳定整理。
 # 上限设 10 分钟，避免异常输入无限处理。
-_LOCAL_AUDIO_MAX_SECONDS = 600
+_AUDIO_CHUNK_SECONDS = LOCAL_AUDIO_CHUNK_SECONDS
+_CHUNK_PCM_BYTES = _AUDIO_CHUNK_SECONDS * 16000 * 4
+_LOCAL_AUDIO_MAX_SECONDS = LOCAL_AUDIO_MAX_SECONDS
 
 # 本地 A3 把"转写/整理指令"当成对话时常见的客套/自介回复，命中即判为不可靠。
 _CANNED_REPLY_PATTERNS = (

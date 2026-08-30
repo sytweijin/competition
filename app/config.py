@@ -63,6 +63,16 @@ MAP_REALTIME_TIMEOUT = int(os.getenv("MAP_REALTIME_TIMEOUT", "60"))
 ASCEND_OMNI_WS_URL = os.getenv("ASCEND_OMNI_WS_URL", "")
 ASCEND_OMNI_TIMEOUT = int(os.getenv("ASCEND_OMNI_TIMEOUT", "300"))
 
+# 本地昇腾音频适配参数：默认值与 910C 实测稳定值一致（12 秒分片、10 分钟上限）；
+# 若自托管/评审环境使用性能更优的本地后端，可通过环境变量放宽，无需改代码。
+LOCAL_AUDIO_CHUNK_SECONDS = max(3, min(120, int(os.getenv(
+    "APP_LOCAL_AUDIO_CHUNK_SECONDS", "12"))))
+LOCAL_AUDIO_MAX_SECONDS = max(30, min(3600, int(os.getenv(
+    "APP_LOCAL_AUDIO_MAX_SECONDS", "600"))))
+# 本地 TTS：910C 上游算子已知会挂起单会话服务，默认关闭；本地后端 TTS 可用时置 1 开启。
+APP_LOCAL_TTS_ENABLED = os.getenv(
+    "APP_LOCAL_TTS_ENABLED", "").lower() in ("1", "true", "yes")
+
 # App
 APP_HOST = os.getenv("APP_HOST", "127.0.0.1")
 APP_PORT = int(os.getenv("APP_PORT", "8000"))

@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.config import (
+    APP_LOCAL_TTS_ENABLED,
     ASCEND_OMNI_WS_URL,
     MAP_REALTIME_API_KEY,
     MAP_REALTIME_MAX_TOKENS,
@@ -420,20 +421,22 @@ async def realtime_tts(req: RealtimeTTSRequest):
     """把指定文本转为语音（朗读），返回可播放 WAV；TTS 失败返回 502。
 
     用于答辩模拟等场景的 AI 回复播报；本地昇腾 910C TTS 已知不可用，
-    前端仅在云端后端启用播报。
+    默认仅在云端后端启用播报；本地后端 TTS 可用时可配置
+    APP_LOCAL_TTS_ENABLED=1 后启用。
     """
     if not (MAP_REALTIME_API_KEY or ASCEND_OMNI_WS_URL):
         raise HTTPException(
             status_code=503,
             detail="MAP_REALTIME_API_KEY 或 ASCEND_OMNI_WS_URL 未配置",
         )
-    if ASCEND_OMNI_WS_URL:
+    if ASCEND_OMNI_WS_URL and not APP_LOCAL_TTS_ENABLED:
         # 910C 的 TTS 算子已知会挂起单会话服务；朗读接口在本地后端直接拒绝，
-        # 避免误调用把 A3 拖挂，前端播报开关也只在云端启用。
+        # 避免误调用把 A3 拖挂；本地 TTS 可用时置 APP_LOCAL_TTS_ENABLED=1 开启。
         raise HTTPException(
             status_code=501,
             detail="本地昇腾 910C TTS 暂不可用，请切换到云端后端"
-            "（临时注释 .env 中 ASCEND_OMNI_WS_URL）",
+            "（临时注释 .env 中 ASCEND_OMNI_WS_URL，"
+            "或本地后端支持 TTS 时设置 APP_LOCAL_TTS_ENABLED=1）",
         )
     text = req.text.strip()
     if not text:
@@ -1047,6 +1050,7 @@ def realtime_status():
         "model": "llama.cpp-omni" if ASCEND_OMNI_WS_URL else MAP_REALTIME_MODEL,
         "mode": "chat",
         "backend": backend,
+        "tts_available": bool(not ASCEND_OMNI_WS_URL or APP_LOCAL_TTS_ENABLED),
     }
 
 

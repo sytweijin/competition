@@ -1579,6 +1579,69 @@ token 预算耗尽）时，`_looks_like_garbage` 只查问号，`_looks_like_can
 **涉及文件：** `app/web/routers/realtime.py`、`app/llm/prompts.py`、
 `tests/test_realtime_client.py`、`CHANGELOG.md`。
 
+### 同步修改：重写提交主文档《项目说明书》（2026-08-30 追加）
+
+**定位：** 把分散在 docs 下的项目说明、使用说明书、演示脚本、复现文档、功能验证清单等材料整合重写为提交主文档《项目说明书》，按三轮评审意见迭代至定稿：一页摘要、十章结构、功能一览表、交付物清单、公网 Demo 地址与登录凭据、多智能体架构专章；最终压缩至 1.6 万字以内，删除开发语境与内部黑话。旧《项目说明》转为入口指引，README 文档索引同步更新。本次为文档调整，不涉及代码，不新增版本号。
+
+1. **问题：** 原《项目说明.md》内容零散且缺少观点与证据组织；重写稿补齐框架后仍存在三类问题：其一，登录凭据写成"随材料另附"、创新点"昇腾本地跑通五条链路"与边界章节自相矛盾、创新点验证承诺超出模型可重复性边界、内部交接文档进入提交索引；其二，产品作为多智能体系统的架构深度不足；其三，按评委阅读场景衡量，全文约 2.1 万字偏长，存在开发语境（打桩、提示词、Pydantic、SSE）、"评审重点"等不应由选手陈述的表述，以及音频守卫、完成不变量等机制的重复展开。
+2. **修改前：** `docs/项目说明书.md` 约 2.1 万字；摘要包含与正文重复的产品定义；3.5 版本管理有两段；音频守卫机制在 3.3.2、6.1、6.4、7.3、9.1 多处展开；完成不变量在 4.7 与 6.2 重复；附录索引含演示脚本、单 Agent 调试指南、内部交接手册；交付物清单写"评审期提供访问方式"。
+3. **修改后：** 总字数压缩至约 1.6 万；摘要只保留一句话定位、公网地址与账号密码、三条硬证据，"线上云端、现场 A3"只出现一次；3.5 版本管理合并为一段，实现细节压缩为一句；音频守卫只在 3.3.2（能力）与 6.1（难点）展开，其余章节只留一句引用；完成不变量只在 4.7 保留，6.2 改为交叉引用；3.2.3–3.2.7 各节压缩至三至四行；"本地不稳可切云端"只保留在 8.5；摘要首句改为面向用户的产品定位，多智能体、数据契约等术语移入第三章并给出通俗解释；"打桩"改为"以模拟实现替代真实模型调用"，"客套回复"改为"客套应答"，删除提示词、Pydantic、SSE 等内部表述；第七章开头改为"本章列出本项目区别于现有方案的三个核心差异"；附录索引收敛为六份文档，删除演示脚本、单 Agent 调试指南与内部交接手册；交付物清单改为"源码随材料提交（README 含启动与复现说明）"。
+4. **为什么这样改：** 提交主文档是给评委直接阅读的材料，每一句承诺都要经得起当场核验，可核验范围只覆盖确定性算法；同一机制只展开一次、其余交叉引用，避免注水；术语以评委可理解的方式表述，保留多智能体架构这一工程深度亮点。
+5. **收益：** ① 字数从约 2.1 万压缩到 1.6 万以内，通读成本降低；② 凭据、边界、实测口径前后一致，无自相矛盾；③ 全文无表情图标、无"不是……而是……"句式、无开发语境与内部黑话；④ 三个创新点与 PPT 表述保持一致。
+
+**涉及文件：** `docs/项目说明书.md`（新增）、`docs/项目说明.md`（改为入口指引）、`README.md`、`CHANGELOG.md`。
+
+### 同步修改：本地昇腾限制参数环境变量化，消除自托管评审环境的"枷锁"（2026-08-30 追加）
+
+**定位：** 将本地昇腾后端的三处硬编码限制（12 秒音频分片、10 分钟时长上限、本地 TTS 禁用）改为环境变量可配，默认值与 910C 实测稳定值完全一致，不改变现有行为，同时让性能更优的自托管本地后端可按需放宽。本次为配置调整，不新增测试（全量测试保持 401 passed），不新增版本号。
+
+1. **问题：** `_AUDIO_CHUNK_SECONDS=12`、`_LOCAL_AUDIO_MAX_SECONDS=600` 与本地 TTS 禁用均为硬编码；若官方评审/自托管环境使用性能完好的本地后端（如 TTS 算子已修复或推理速度更快），这些限制仍会无条件生效——长音频被强制分片、超 10 分钟直接拒绝、语音合成无法开启，反而成为"枷锁"。
+2. **修改前：**
+   ```python
+   # app/services/omni_chat.py
+   _AUDIO_CHUNK_SECONDS = 12
+   _LOCAL_AUDIO_MAX_SECONDS = 600
+   ```
+   ```python
+   # app/web/routers/realtime.py（TTS 路由：本地后端一律拒绝）
+   if ASCEND_OMNI_WS_URL:
+       raise HTTPException(status_code=501, detail="本地昇腾 910C TTS 暂不可用…")
+   ```
+   ```js
+   // app/web/static/app.js（updateVoiceToggle：本地后端一律禁用语音回复）
+   var ok=rt.enabled&&!state.realtimeFallback&&rt.backend==='map';
+   ```
+3. **修改后：**
+   ```python
+   # app/config.py：新增三个环境变量，默认值不变
+   LOCAL_AUDIO_CHUNK_SECONDS = max(3, min(120, int(os.getenv(
+       "APP_LOCAL_AUDIO_CHUNK_SECONDS", "12"))))
+   LOCAL_AUDIO_MAX_SECONDS = max(30, min(3600, int(os.getenv(
+       "APP_LOCAL_AUDIO_MAX_SECONDS", "600"))))
+   APP_LOCAL_TTS_ENABLED = os.getenv(
+       "APP_LOCAL_TTS_ENABLED", "").lower() in ("1", "true", "yes")
+   ```
+   ```python
+   # app/services/omni_chat.py：常量改为引用 config，默认值不变
+   _AUDIO_CHUNK_SECONDS = LOCAL_AUDIO_CHUNK_SECONDS
+   _LOCAL_AUDIO_MAX_SECONDS = LOCAL_AUDIO_MAX_SECONDS
+   ```
+   ```python
+   # app/web/routers/realtime.py：仅当本地 TTS 未启用时才拒绝；
+   # /api/realtime/status 新增 tts_available 字段
+   if ASCEND_OMNI_WS_URL and not APP_LOCAL_TTS_ENABLED:
+       ...
+   "tts_available": bool(not ASCEND_OMNI_WS_URL or APP_LOCAL_TTS_ENABLED),
+   ```
+   ```js
+   // app/web/static/app.js：本地后端按 status.tts_available 决定语音回复开关
+   var ok=rt.enabled&&!state.realtimeFallback&&(rt.backend==='map'||rt.tts_available===true);
+   ```
+4. **为什么这样改：** 这些限制是"针对 910C 实测能力边界"的保护（whisper 编码约 30 秒、TTS 算子挂起），对同一硬件应默认生效；但对性能更优的本地后端，限制应可配置。把常量收敛到 config 并以环境变量覆盖，既保留默认安全行为，又给自托管评审环境留出放开口子；云端后端本就不受这些限制，无需任何配置。
+5. **收益：** ① 默认行为零变化，全量测试保持 401 passed；② 自托管/官方评审环境可通过三个环境变量放宽限制，无需改代码；③ `/api/realtime/status` 暴露 `tts_available`，前端语音回复开关与后端实际能力保持一致。
+
+**涉及文件：** `app/config.py`、`app/services/omni_chat.py`、`app/web/routers/realtime.py`、`app/web/static/app.js`、`app/web/templates/index.html`（`app.js?v=` 哈希更新）、`.env.example`、`README.md`、`CHANGELOG.md`。
+
 ---
 ## v7.0 —— 视频理解：会议录像边看边听 + 多模态演示闭环（2026-08-22）
 

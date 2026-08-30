@@ -80,7 +80,7 @@
 | 鉴权与审计 | 多用户 ACL、会话登录、操作审计与版本回滚 |
 | 监控与预检 | `/api/metrics`、`/api/health`、演示前一键预检脚本 |
 
-完整操作说明见 [使用说明书](docs/使用说明书.md)，提交用说明见 [项目说明](docs/项目说明.md)。
+完整操作说明见 [使用说明书](docs/使用说明书.md)，提交主文档见 [项目说明书](docs/项目说明书.md)。
 
 ### 合规性
 
@@ -181,6 +181,7 @@ python scripts/preflight_demo.py
 | `MAP_REALTIME_API_KEY` | 是 | ModelBest 云端 Realtime Key |
 | `APP_ADMIN_TOKEN` | 建议 | 管理端登录口令（评委凭此登录体验） |
 | `ASCEND_OMNI_WS_URL` | 否 | 公网留空；自托管昇腾评审环境可填 A3 地址 |
+| `APP_LOCAL_AUDIO_CHUNK_SECONDS` / `APP_LOCAL_AUDIO_MAX_SECONDS` / `APP_LOCAL_TTS_ENABLED` | 否 | 本地昇腾音频分片/时长上限与本地 TTS 开关（默认 12s / 600s / 关闭，可放宽） |
 | `STORAGE_BACKEND` | 否 | 默认 `local`；重启不丢数据可配 `s3` |
 
 部署后访问 `https://<实例>.onrender.com`，检查 `/api/health` 与 `/api/realtime/status`。免费实例闲置会休眠，正式展示前请先访问一次预热。
@@ -222,7 +223,8 @@ scripts/                     # 演示预检、A3 冒烟、模型下载
 
 | 文档 | 用途 |
 |---|---|
-| [项目说明](docs/项目说明.md) | 提交材料：架构、能力、接口、测试结果 |
+| [项目说明书](docs/项目说明书.md) | 提交主文档：定位、架构、功能、验证、复现、使用、边界与展望 |
+| [项目说明](docs/项目说明.md) | 入口说明（已并入项目说明书） |
 | [复现文档](docs/复现文档.md) | 提交材料：昇腾环境版本、模型、启动命令、验证结果 |
 | [使用说明书](docs/使用说明书.md) | 面向使用者的操作手册 |
 | [华为昇腾创新应用赛道接入说明](docs/华为昇腾创新应用赛道接入说明.md) | API 与双后端接入协议 |
