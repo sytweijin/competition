@@ -63,6 +63,33 @@ def test_interview_chat_sends_user_answer_and_history():
     )
 
 
+def test_interview_chat_answer_mode_instructs_comment_on_answer():
+    """文字答辩：用户回答必须以"点评我的回答"的显式指令发送，
+    避免 8B 模型把回答当成提问而另起无关问题。"""
+    agent = InterviewSimAgent()
+    calls = []
+
+    class FakeLLM:
+        def chat_messages(self, system_prompt, messages, temperature,
+                          max_tokens=None):
+            calls.append(messages)
+            return "点评：回答到位。下一个问题：预算如何控制？"
+
+    agent.llm = FakeLLM()
+    plan, qa = _plan_and_qa()
+    reply = agent.chat_turn(
+        plan=plan, qa_matrix=qa,
+        user_answer="我们的目标是在两周内完成调研。",
+        history=[{"role": "assistant", "content": "第一个问题：项目目标是什么？"}],
+    )
+    assert "预算" in reply
+    assert calls
+    last = calls[0][-1]["content"]
+    assert "我刚刚的回答" in last
+    assert "两周内完成调研" in last
+    assert "点评" in last
+
+
 def test_interview_chat_merges_consecutive_user_messages():
     """评委生成失败残留的连续 user 消息应合并，防止模型误判为新会话重问第一题。"""
     agent = InterviewSimAgent()

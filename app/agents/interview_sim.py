@@ -183,7 +183,10 @@ class InterviewSimAgent(BaseAgent):
                 + feedback
             )
         elif user_answer.strip():
-            final_user = user_answer
+            final_user = (
+                "请针对我刚刚的回答给出点评，再提出下一个问题。"
+                "我刚刚的回答：\n" + user_answer.strip()
+            )
         else:
             final_user = "请提第一个评审问题。"
         turn_messages = normalized_history + [
