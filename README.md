@@ -1,6 +1,6 @@
 # 协作分工智能体 · 昇腾全模态版
 
-**版本：v7.1（华为昇腾创新应用赛道）** | 最后更新：2026-08-30
+**版本：v7.1（华为昇腾创新应用赛道）** | 最后更新：2026-08-31
 
 > 别人给你一张**静态分工表**；我们给你一张**可编辑的活协作图**——拍照立项、说话排期、确认分工、语音/照片汇报、群通知，全链路由 MiniCPM-o 4.5 全模态能力驱动。
 
@@ -156,7 +156,7 @@ A3 部署与复现见 [复现文档](docs/复现文档.md)。
 ## 验证与测试
 
 ```bash
-# 全量自动化测试（401 passed）
+# 全量自动化测试（402 passed）
 python -m pytest tests/ -q
 
 # 演示前一键预检（应用 / 后端 / A3 health / MiniCPM-o 暖机）
@@ -190,7 +190,7 @@ app/
 ├── services/                # project_service / realtime_client / omni_chat / media_analysis / report
 ├── llm/                     # LLM 客户端（合规模式仅 MiniCPM-o）+ 提示词
 └── web/                     # FastAPI 路由 + 原生前端（index.html / app.js）
-tests/                       # 401 项自动化测试
+tests/                       # 402 项自动化测试
 docs/                        # 项目说明书、复现文档、验证清单与回退清单
 scripts/                     # 演示预检、A3 冒烟、模型下载
 ```
