@@ -64,8 +64,9 @@ ASCEND_OMNI_WS_URL = os.getenv("ASCEND_OMNI_WS_URL", "")
 ASCEND_OMNI_TIMEOUT = int(os.getenv("ASCEND_OMNI_TIMEOUT", "300"))
 
 # 本地昇腾音频适配参数：默认值与 910C 实测稳定值一致（12 秒分片、10 分钟上限）；
-# 若自托管/评审环境使用性能更优的本地后端，可通过环境变量放宽，无需改代码。
-LOCAL_AUDIO_CHUNK_SECONDS = max(3, min(120, int(os.getenv(
+# 若自托管/评审环境使用性能更优的本地后端，可通过环境变量放宽，无需改代码；
+# APP_LOCAL_AUDIO_CHUNK_SECONDS=0 表示完全关闭分片（健康后端音频直通）。
+LOCAL_AUDIO_CHUNK_SECONDS = max(0, min(120, int(os.getenv(
     "APP_LOCAL_AUDIO_CHUNK_SECONDS", "12"))))
 LOCAL_AUDIO_MAX_SECONDS = max(30, min(3600, int(os.getenv(
     "APP_LOCAL_AUDIO_MAX_SECONDS", "600"))))

@@ -56,7 +56,8 @@ _ECHO_TAILS = (
 )
 
 # 默认 12 秒 / 600 秒（910C 实测稳定值），可用环境变量
-# APP_LOCAL_AUDIO_CHUNK_SECONDS / APP_LOCAL_AUDIO_MAX_SECONDS 放宽。
+# APP_LOCAL_AUDIO_CHUNK_SECONDS / APP_LOCAL_AUDIO_MAX_SECONDS 放宽；
+# 分片值设为 0 表示关闭分片（性能完好的本地后端可直通长音频）。
 # 本地 A3 一次 whisper 编码上限约 30 秒；应用层按"静音断句 + ≤12 秒"
 # 分片后逐片独立会话处理、过滤劣化分片、再分层合并，实测 3.4 分钟会议可稳定整理。
 # 上限设 10 分钟，避免异常输入无限处理。
@@ -520,7 +521,9 @@ async def transcribe_audio(audio_b64: str, timeout: float = 120) -> str:
     if ASCEND_OMNI_WS_URL:
         _ensure_local_audio_within_limit(audio_b64)
     chunks = (
-        _split_pcm_b64(audio_b64) if ASCEND_OMNI_WS_URL else [audio_b64])
+        _split_pcm_b64(audio_b64)
+        if (ASCEND_OMNI_WS_URL and _AUDIO_CHUNK_SECONDS > 0)
+        else [audio_b64])
     last_raw = ""
     for _attempt in range(3):
         parts: list[str] = []
@@ -633,7 +636,9 @@ async def understand_audio(
     history = list(history or [])
     if ASCEND_OMNI_WS_URL:
         _ensure_local_audio_within_limit(audio_b64)
-        chunks = _split_pcm_b64(audio_b64)
+        chunks = (
+            _split_pcm_b64(audio_b64) if _AUDIO_CHUNK_SECONDS > 0
+            else [audio_b64])
         history_text = _flatten_history(history)
         for _attempt in range(3):
             try:

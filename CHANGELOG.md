@@ -1642,6 +1642,29 @@ token 预算耗尽）时，`_looks_like_garbage` 只查问号，`_looks_like_can
 
 **涉及文件：** `app/config.py`、`app/services/omni_chat.py`、`app/web/routers/realtime.py`、`app/web/static/app.js`、`app/web/templates/index.html`（`app.js?v=` 哈希更新）、`.env.example`、`README.md`、`CHANGELOG.md`。
 
+### 同步修改：音频分片支持完全关闭（APP_LOCAL_AUDIO_CHUNK_SECONDS=0）（2026-08-30 追加二）
+
+**定位：** 在上一项环境变量化的基础上，允许健康本地后端完全关闭音频分片，消除"性能完好的本地模型仍被强制分片"的最后一道枷锁。默认值不变，不新增测试（全量测试保持 401 passed），不新增版本号。
+
+1. **问题：** 上一项将分片上限放宽到 120 秒，但长音频仍会被分片处理；若官方/自托管评审环境的本地后端性能完好（可整段处理长音频），强制分片会徒增延迟、增加跨分片合并的上下文损失，成为"磕磕绊绊"的来源。
+2. **修改前：** `LOCAL_AUDIO_CHUNK_SECONDS` 下限为 3 秒，三处调用点（`omni_chat.transcribe_audio`、`omni_chat.understand_audio`、`media_analysis` 转写路径）只要本地后端就无条件分片：
+   ```python
+   chunks = (_split_pcm_b64(audio_b64) if ASCEND_OMNI_WS_URL else [audio_b64])
+   ```
+3. **修改后：** 配置下限改为 0（`0` 表示关闭分片），三处调用点仅在 `ASCEND_OMNI_WS_URL` 且分片值大于 0 时执行分片，否则整段直通：
+   ```python
+   LOCAL_AUDIO_CHUNK_SECONDS = max(0, min(120, int(os.getenv(
+       "APP_LOCAL_AUDIO_CHUNK_SECONDS", "12"))))
+   chunks = (
+       _split_pcm_b64(audio_b64)
+       if (ASCEND_OMNI_WS_URL and _AUDIO_CHUNK_SECONDS > 0)
+       else [audio_b64])
+   ```
+4. **为什么这样改：** 分片与合并是为绕开 910C whisper 编码边界而设计的应用层规避，对性能完好的后端是纯负担；把"关闭分片"作为显式可选项，让部署者按后端实际能力选择，默认值保持 12 秒不改变现有环境行为。
+5. **收益：** ① 默认行为零变化，全量测试保持 401 passed；② 健康本地后端设 `APP_LOCAL_AUDIO_CHUNK_SECONDS=0` 后长音频整段直通，无分片延迟与合并损耗；③ 与云端行为完全对齐，官方评审不会因应用层分片感到"磕绊"。
+
+**涉及文件：** `app/config.py`、`app/services/omni_chat.py`、`app/services/media_analysis.py`、`.env.example`、`README.md`、`CHANGELOG.md`。
+
 ---
 ## v7.0 —— 视频理解：会议录像边看边听 + 多模态演示闭环（2026-08-22）
 

@@ -181,7 +181,7 @@ python scripts/preflight_demo.py
 | `MAP_REALTIME_API_KEY` | 是 | ModelBest 云端 Realtime Key |
 | `APP_ADMIN_TOKEN` | 建议 | 管理端登录口令（评委凭此登录体验） |
 | `ASCEND_OMNI_WS_URL` | 否 | 公网留空；自托管昇腾评审环境可填 A3 地址 |
-| `APP_LOCAL_AUDIO_CHUNK_SECONDS` / `APP_LOCAL_AUDIO_MAX_SECONDS` / `APP_LOCAL_TTS_ENABLED` | 否 | 本地昇腾音频分片/时长上限与本地 TTS 开关（默认 12s / 600s / 关闭，可放宽） |
+| `APP_LOCAL_AUDIO_CHUNK_SECONDS` / `APP_LOCAL_AUDIO_MAX_SECONDS` / `APP_LOCAL_TTS_ENABLED` | 否 | 本地昇腾音频分片/时长上限与本地 TTS 开关（默认 12s / 600s / 关闭；分片设 0 关闭，健康后端可放宽） |
 | `STORAGE_BACKEND` | 否 | 默认 `local`；重启不丢数据可配 `s3` |
 
 部署后访问 `https://<实例>.onrender.com`，检查 `/api/health` 与 `/api/realtime/status`。免费实例闲置会休眠，正式展示前请先访问一次预热。

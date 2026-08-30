@@ -238,7 +238,9 @@ def _realtime_audio_transcribe_text(filename: str, content: bytes) -> str:
             f"请分段（每段 ≤{_AUDIO_CHUNK_SECONDS} 秒）上传，或改用云端后端")
     parts_out: list[str] = []
     chunks = (
-        _split_pcm_b64(b64) if ASCEND_OMNI_WS_URL else [b64])
+        _split_pcm_b64(b64)
+        if (ASCEND_OMNI_WS_URL and _AUDIO_CHUNK_SECONDS > 0)
+        else [b64])
     for chunk in chunks:
         content_parts = [
             {"type": "text", "text": (
