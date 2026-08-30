@@ -20,16 +20,26 @@ def test_requirements_are_exact_pins():
 def test_env_example_covers_deployment_variables():
     env = (ROOT / ".env.example").read_text(encoding="utf-8")
     for key in (
-        "LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL",
-        "APP_VISION_MODEL", "APP_ASR_MODEL",
-        "APP_VISION_API_KEY", "APP_VISION_BASE_URL",
-        "APP_ASR_API_KEY", "APP_ASR_BASE_URL",
-        "APP_ASR_TRANSCRIPTION_MODE",
         "MAP_REALTIME_API_KEY", "MAP_REALTIME_MODEL",
         "MAP_REALTIME_BASE_URL",
+        "ASCEND_OMNI_WS_URL", "ASCEND_OMNI_TIMEOUT",
+        "APP_LOCAL_AUDIO_CHUNK_SECONDS",
+        "APP_LOCAL_AUDIO_MAX_SECONDS",
+        "APP_LOCAL_TTS_ENABLED",
+        "APP_MODEL_MODE", "APP_ALLOW_EXTERNAL_MODELS",
+        "APP_ADMIN_TOKEN", "APP_NOTIFY_WEBHOOK",
         "STORAGE_BACKEND", "S3_BUCKET", "S3_PREFIX",
     ):
         assert key in env
+    # 合规模式不得再出现外部模型配置
+    for key in (
+        "LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL",
+        "APP_VISION_MODEL", "APP_ASR_MODEL",
+        "APP_VISION_API_KEY", "APP_ASR_API_KEY",
+        "APP_ASR_TRANSCRIPTION_MODE",
+        "LLM_PREFER_PLAIN", "LLM_DISABLE_THINKING",
+    ):
+        assert key not in env
 
 
 def test_render_config_is_compliant_minicpm_template():

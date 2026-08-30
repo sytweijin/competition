@@ -121,13 +121,13 @@ def test_demo_main_flow_and_three_exports():
 
 def test_golden_demo_and_three_runbooks_exist():
     root = Path(__file__).resolve().parents[1]
-    golden = (root / "docs" / "比赛Demo演示流程.md").read_text(
-        encoding="utf-8")
-    assert "读文件" in golden
-    assert "做决策" in golden
-    assert "发现风险" in golden
-    assert "应对变化" in golden
-    assert "交付成果" in golden
-    for name in ("网页端", "移动端", "故障兜底"):
-        path = root / "docs" / f"演示流程-{name}.md"
-        assert path.exists()
+    golden = (root / "docs" / "项目说明书.md").read_text(encoding="utf-8")
+    assert "拍照立项" in golden
+    assert "语音或照片汇报" in golden
+    assert "群通知" in golden
+    for name in (
+        "复现文档.md",
+        "功能验证清单.md",
+        "部署与回退清单.md",
+    ):
+        assert (root / "docs" / name).exists()
